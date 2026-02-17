@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Olopa — AI-First Security</title>
-  <meta name="description" content="Describe your policy in words. We scope your assets across network and devices, generate policies to mitigate threats, and score risk in real time." />
+  <title>Olopa — Adaptive Security</title>
+  <meta name="description" content="Olopa — AI-first adaptive security. Policy you can speak. Protection that adapts." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
@@ -28,7 +28,6 @@
       min-height: 100vh;
     }
 
-    /* Police stripes: double yellow lines under nav */
     .police-stripes {
       display: flex;
       height: 8px;
@@ -127,77 +126,53 @@
       font-size: 1rem;
       margin: 8px auto 0;
       max-width: 290px;
-      text-align: justify;
-      text-justify: inter-word;
+      text-align: center;
     }
 
     .hero {
       padding: 18px 0 36px;
-      /* no text-align here, use following rules for children */
     }
     .hero h1 {
       font-size: 2rem;
       font-weight: 700;
-      margin-bottom: 14px;
+      margin-bottom: 8px;
       color: var(--police-dark-blue);
-      line-height: 1.18;
-      letter-spacing: -0.02em;
-      text-align: justify;
-      text-justify: inter-word;
-      hyphens: auto;
+      line-height: 1.1;
+      letter-spacing: -0.01em;
+      text-align: center;
     }
     .hero .subhead {
-      font-size: 1rem;
+      font-size: 1.07rem;
       color: #283156;
       margin-bottom: 19px;
       max-width: 560px;
-      font-weight: 400;
-      text-align: justify;
-      text-justify: inter-word;
-      hyphens: auto;
+      font-weight: 500;
+      text-align: center;
     }
     .proof {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
-      margin-bottom: 16px;
-      justify-content: flex-start;
+      gap: 9px;
+      margin-bottom: 10px;
+      justify-content: center;
     }
     .proof span {
       background: var(--very-light-blue);
       color: var(--police-blue-accent);
       padding: 7px 17px;
       border-radius: 16px;
-      font-size: 0.93rem;
-      font-weight: 500;
-      transition: background .2s, color .2s;
+      font-size: 0.96rem;
+      font-weight: 600;
       border: 1px solid #d3d8f4;
-      position: relative;
       display: inline-block;
-      text-align: center;
       min-width: 110px;
-      word-break: break-word;
-    }
-    .proof span:after {
-      content: '';
-      display: block;
-      height: 3px;
-      width: 40%;
-      background: linear-gradient(90deg, var(--police-yellow), var(--police-yellow2));
-      border-radius: 2px;
-      margin: 3px auto -14px;
-    }
-    .proof span:hover {
-      background: #e1e7fa;
-      color: var(--police-yellow);
+      text-align: center;
     }
     .join-count {
       font-size: 1.02rem;
       color: var(--police-blue2);
       margin-bottom: 12px;
-      text-align: justify;
-      text-justify: inter-word;
-      hyphens: auto;
+      text-align: center;
     }
     .join-count strong {
       color: var(--police-yellow);
@@ -209,13 +184,13 @@
       background: #fff;
       box-shadow: 0 2px 18px 0 rgba(22,32,81,0.04);
       border-radius: 10px;
-      padding: 28px 22px 22px 22px;
-      margin: 0 auto 22px;
+      padding: 24px 18px 20px 18px;
+      margin: 0 auto 18px;
       max-width: 400px;
       border: 1px solid #ced3e6;
     }
     .waitlist-box h2 {
-      font-size: 1.15rem;
+      font-size: 1.10rem;
       font-weight: 500;
       color: var(--police-blue-accent);
       margin-bottom: 13px;
@@ -226,7 +201,7 @@
     }
     .waitlist-btn {
       font-family: inherit;
-      font-size: 1.05rem;
+      font-size: 1.03rem;
       font-weight: 500;
       padding: 12px 0;
       border: none;
@@ -234,14 +209,14 @@
       width: 100%;
       background: linear-gradient(90deg, var(--police-yellow) 20%, var(--police-dark-blue) 100%);
       color: #fff;
-      margin-top: 10px;
+      margin-top: 8px;
       cursor: pointer;
       display: inline-block;
       text-align: center;
-      transition: background .18s, color .18s;
       text-decoration: none;
       box-shadow: 0 0 7px #ffd50010;
       border-bottom: 3.5px solid var(--police-yellow);
+      transition: background .18s, color .18s;
     }
     .waitlist-btn:hover,
     .waitlist-btn:focus {
@@ -250,43 +225,103 @@
       text-decoration: none;
     }
     .form-note {
-      margin-top: 10px;
+      margin-top: 9px;
       font-size: 0.89rem;
       color: #8898aa;
-      line-height: 1.45;
-      text-align: justify;
-      text-justify: inter-word;
-      hyphens: auto;
+      line-height: 1.38;
+      text-align: center;
     }
 
     section {
-      padding: 36px 0 8px;
+      padding: 33px 0 2px;
       border-top: 1px solid #e9ecf3;
       background: none;
     }
     section h2 {
-      font-size: 1.25rem;
+      font-size: 1.18rem;
       color: var(--police-blue-accent);
       font-weight: 600;
-      margin-bottom: 11px;
+      margin-bottom: 10px;
       font-family: inherit;
       text-align: left;
-      text-justify: auto;
       letter-spacing: 0.01em;
     }
     section p {
       color: var(--police-blue2);
-      font-size: 1.04rem;
-      margin-bottom: 13px;
+      font-size: 1.01rem;
+      margin-bottom: 11px;
       text-align: justify;
-      text-justify: inter-word;
       hyphens: auto;
+    }
+
+    .pillars {
+      list-style: none;
+      padding-left: 0;
+      margin-top: 15px;
+      margin-bottom: 5px;
+    }
+    .pillars li {
+      margin-bottom: 13px;
+      padding: 13px 18px 10px 30px;
+      position: relative;
+      background: #fffdfa;
+      border-left: 6px double var(--police-yellow);
+      border-radius: 0 6px 6px 0;
+      box-shadow: 0 2px 7px #16205122;
+      color: var(--police-dark-blue);
+      font-size: 1.01rem;
+      text-align: left;
+      hyphens: auto;
+    }
+    .pillars li strong {
+      color: var(--police-blue-accent);
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+    .pillars li:before {
+      content: '';
+      display: inline-block;
+      position: absolute;
+      left: 11px; top: 18px;
+      width: 10px; height: 10px;
+      background: var(--police-yellow);
+      border-radius: 50%;
+      border: 2px solid var(--police-blue2);
+      box-shadow: 0 0 2px #16205155;
+    }
+
+    .pillars-caption {
+      display: block;
+      color: #7a8832;
+      font-size: 0.97rem;
+      font-weight: 700;
+      text-align: left;
+      margin-top: 10px;
+      margin-bottom: 0;
+      letter-spacing: 0.01em;
+    }
+
+    .aace-caption {
+      margin: 30px 0 8px 0;
+      text-align: center;
+      font-weight: 500;
+      color: #353a7b;
+      font-size: 1.09rem;
+      letter-spacing: 0.03em;
+    }
+
+    .aace-desc {
+      margin: 0 auto 19px;
+      max-width: 610px;
+      color: #648;
+      font-size: 0.99rem;
+      text-align: center;
     }
 
     .comparison {
       width: 100%;
       border-collapse: collapse;
-      margin-top: 1.25rem;
+      margin-top: 1.18rem;
       background: #fff;
       border-radius: 9px;
       overflow: hidden;
@@ -295,7 +330,7 @@
       box-shadow: 0 1px 4px #16205111;
     }
     .comparison th, .comparison td {
-      padding: 12px 15px;
+      padding: 11px 12px;
       text-align: left;
       background: #fff;
       border-bottom: 1px solid #f3f5fa;
@@ -312,11 +347,10 @@
       letter-spacing: 0.05em;
       background: #e5eaf7;
       text-align: center;
-      text-justify: auto;
     }
-    .comparison td:first-child { color: var(--police-blue2);}
-    .comparison td:nth-child(2) { color: #d31947;  }
-    .comparison td:nth-child(3) { color: var(--police-dark-blue); font-weight: bold; letter-spacing: 0.01em;}
+    .comparison td:first-child { color: var(--police-blue2); text-align: right; width: 33%; font-weight: 500;}
+    .comparison td:nth-child(2) { color: #d31947; font-size: 0.98rem; }
+    .comparison td:nth-child(3) { color: var(--police-dark-blue); font-weight: bold; letter-spacing: 0.01em; }
     .comparison td:nth-child(3)::after {
       content: "";
       display: block;
@@ -327,50 +361,14 @@
       border-radius: 2px;
     }
 
-    .pillars {
-      list-style: none;
-      padding-left: 0;
-      margin-top: 18px;
-    }
-    .pillars li {
-      margin-bottom: 16px;
-      padding: 18px 20px 14px 34px;
-      position: relative;
-      background: #fffdfa;
-      border-left: 6px double var(--police-yellow);
-      border-radius: 0 6px 6px 0;
-      box-shadow: 0 2px 7px #16205122;
-      color: var(--police-dark-blue);
-      font-size: 1.02rem;
-      text-align: justify;
-      text-justify: inter-word;
-      hyphens: auto;
-    }
-    .pillars li strong {
-      color: var(--police-blue-accent);
-      font-weight: 700;
-      letter-spacing: 0.01em;
-    }
-    .pillars li:before {
-      content: '';
-      display: inline-block;
-      position: absolute;
-      left: 11px; top: 22px;
-      width: 10px; height: 10px;
-      background: var(--police-yellow);
-      border-radius: 50%;
-      border: 2px solid var(--police-blue2);
-      box-shadow: 0 0 2px #16205155;
-    }
-
     footer {
-      padding: 24px 0 38px;
+      padding: 22px 0 32px;
       border-top: 1px solid #d3e2ea;
       text-align: center;
       font-size: 0.97rem;
       color: var(--police-blue2);
       background: #f8faff;
-      margin-top: 36px;
+      margin-top: 30px;
       position: relative;
     }
     footer:before, footer:after {
@@ -388,10 +386,22 @@
       text-decoration: none;
       font-weight: 500;
       transition: color 0.14s;
+      margin: 0 10px;
     }
     footer a:hover {
       text-decoration: underline;
       color: var(--police-blue-accent);
+    }
+    .footer-note {
+      margin-top: 7px;
+      color: #8990a3;
+      font-size: 0.90rem;
+    }
+    @media (max-width: 600px) {
+      .container { padding: 0 4px; }
+      .comparison td, .comparison th { padding: 7px 6px; font-size: 0.97rem;}
+      .pillars li { padding: 11px 8px 7px 22px; }
+      .mascot-wrap { width: 110px; height: 110px; }
     }
   </style>
 </head>
@@ -411,150 +421,132 @@
       <img src="assets/mascot.png" alt="Olopa mascot" onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling?.classList.remove('mascot-placeholder-hidden');" />
       <div class="mascot-placeholder mascot-placeholder-hidden" id="mascot-placeholder"></div>
     </div>
-    <div class="mascot-caption">Your security, described in your words.</div>
+    <div class="mascot-caption">Olopa mascot</div>
   </section>
 
   <div class="container">
     <header class="hero">
-      <h1 style="text-align:center;">
-        Describe your policy. We scope your assets,
-        generate the rules, and score risk in real time.
-      </h1>
-      <p class="subhead" style="text-align:center;">
-        AI-first security across network and devices. No YAML, no Rego—just say what you want. We map your resources, create policies to mitigate threats, and monitor with real-time behavioral risk scores.
-      </p>
-      <div class="proof" style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; text-align: center;">
-        <div style="flex: 1 1 160px; min-width: 140px; max-width: 200px;">
-          <span>Verbal policy</span>
+      <div style="display: flex; flex-direction: column; align-items: center; text-align: center;">
+        <h1 style="text-align: center;">Olopa</h1>
+        <p class="subhead" style="text-align: center;">AI-first security, powered by <b>AACE</b>.</p>
+        <div class="proof" style="justify-content: center;">
+          <span>Conversational policy</span>
+          <span>Asset discovery</span>
+          <span>Dynamic enforcement</span>
+          <span>Behavioral monitoring</span>
+          <span>Real-time trust score</span>
         </div>
-        <div style="flex: 1 1 160px; min-width: 140px; max-width: 200px;">
-          <span>Asset scoping</span>
-        </div>
-        <div style="flex: 1 1 160px; min-width: 140px; max-width: 200px;">
-          <span>Threat mitigation</span>
-        </div>
-        <div style="flex: 1 1 160px; min-width: 140px; max-width: 200px;">
-          <span>Optimal monitoring</span>
-        </div>
-        <div style="flex: 1 1 160px; min-width: 140px; max-width: 200px;">
-          <span>Real-time risk score</span>
-        </div>
-      </div>
-
-      
-      <p class="join-count" id="join-count" style="margin-top: 34px; padding-top: 10px;">
-        Join <strong id="waitlist-count">—</strong> security teams on the waitlist.
-      </p>
-      <div class="waitlist-box" id="waitlist-form">
-        <h2>Get early access</h2>
-        <a
-          class="waitlist-btn"
-          href="https://docs.google.com/forms/d/e/1FAIpQLSfNHs_ShodsQVZwbnlkXge_o6rP939LQS6ZJPSHE9aG2oSgmQ/viewform?usp=dialog"
-          target="_blank"
-          rel="noopener noreferrer"
-        >Join the waitlist</a>
-        <div class="form-note">
-          You will be redirected to a secure Google Form. We’ll only use your email for Olopa launch and early access. Unsubscribe anytime.
+        <p class="subhead" style="font-size:1.03rem; margin-top:12px; font-weight:500; text-align: center;">
+          Policy you can <b>speak</b>. Protection that adapts.
+        </p>
+        <p class="join-count" id="join-count" style="margin-top: 26px; padding-top: 2px; text-align: center;">
+          Join <strong id="waitlist-count">—</strong> security teams on the waitlist.
+        </p>
+        <div class="waitlist-box" id="waitlist-form" style="margin-left:auto; margin-right:auto;">
+          <h2 style="text-align: center;">Get early access (Beta)</h2>
+          <a
+            class="waitlist-btn"
+            href="https://docs.google.com/forms/d/e/1FAIpQLSfNHs_ShodsQVZwbnlkXge_o6rP939LQS6ZJPSHE9aG2oSgmQ/viewform?usp=dialog"
+            target="_blank"
+            rel="noopener noreferrer"
+          >Join the waitlist</a>
+          <div class="form-note" style="text-align: center;">
+            You’ll be redirected to a secure form. We only use your email for launch and early access. No spam.
+          </div>
         </div>
       </div>
     </header>
 
+    <div class="aace-caption">Adaptive Security. Just describe your intent.</div>
+    <div class="aace-desc">
+      Olopa isn’t just another tool. It’s an AI-native agent that secures your assets and environments with policy in plain language—powered by our proprietary Adaptive Access Control Engine (AACE).
+    </div>
+
     <section>
-      <h2>AI-first: how it works</h2>
+      <h2>How Olopa + AACE Work</h2>
       <p>
-        Anyone can describe security in plain language. Olopa turns that into scoped assets, enforceable policies,
-        optimal monitoring, and live risk scores.
+        You state your intent in words. Olopa maps your infrastructure, generates controls, and—through AACE—adapts permissions and risk in real time based on live behavior.<br>
+        No YAML. No static rules. Just protections that adjust as your team and environment change.
       </p>
       <ul class="pillars">
         <li>
-          <strong>Verbal policy</strong> — Describe what you want (“No dev can read customer data from prod”;
-          “Block uploads to personal cloud”). No YAML, no Rego by hand.
+          <strong>Conversational intent → Policy</strong> — Say what you want (“No dev can read prod data”, “Alert on sensitive exfil”). Olopa turns it into adaptive policy.
         </li>
         <li>
-          <strong>Scope resources & assets</strong> —
-          We discover and map your resources and assets across network and devices so policies are grounded in what you actually have.
+          <strong>Live asset discovery</strong> — Olopa builds a security map: users, devices, data, networks, for precise controls.
         </li>
         <li>
-          <strong>Generate policies to mitigate threats</strong> —
-          From your intent and asset scope, we generate enforceable policies that mitigate the threats you care about.
+          <strong>Policy + asset graph → Adaptive enforcement</strong> — Each policy is enforced at the right point—identity, kernel, cloud—moment by moment.
         </li>
         <li>
-          <strong>Optimal monitoring</strong> —
-          We recommend what to monitor and where—not “collect everything”—so you get signal without noise or cost.
+          <strong>Behavioral monitoring: AACE in action</strong> — AACE learns live behavior for each identity/device, adjusting permissions continuously.
         </li>
         <li>
-          <strong>User behavioral analytics → real-time risk score</strong> —
-          Behavior across users and endpoints feeds a live risk score so you see who and what is risky, in real time.
+          <strong>Real-time trust & risk scoring</strong> — Every user and device gets a dynamic trust score. Security responds instantly.
         </li>
       </ul>
+      <span class="pillars-caption">
+        AACE isn’t just “behavior analytics”. It’s a novel, always-on control loop—like adaptive autopilot for your security.
+      </span>
     </section>
 
+    <div class="aace-caption" style="margin-top: 38px;">
+      Powered by AACE: Adaptive Access Control Engine
+    </div>
+    <div class="aace-desc" style="max-width:670px;">
+      AACE is Olopa’s core: a real-time, behavioral decision system that adjusts risk and access not just at login, but every moment. Inspired by new research on behavior-driven security and formal control systems.
+    </div>
+
     <section>
-      <h2>Why Olopa</h2>
+      <h2>How Olopa is Different</h2>
       <p>
-        Security tools are either noisy, slow, or require experts to write rules.
-        We combine AI-first policy (describe in words) with kernel-level visibility and enforcement—one agent, observe first, enforce when ready.
+        Most tools are slow, noisy, and ask you to write rules.<br>
+        Olopa fuses AI-native policy and real-time runtime enforcement by AACE—understand intent, adapt protection, always.
       </p>
       <table class="comparison">
         <thead>
           <tr>
             <th></th>
             <th>Traditional tool</th>
-            <th>Olopa</th>
+            <th>Olopa + AACE</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td>Policy authoring</td>
-            <td>
-              YAML, Rego,<br>
-              or tickets
-            </td>
-            <td>
-              Describe in words →<br>
-              we generate
-            </td>
+            <td>YAML, Rego,<br>tickets</td>
+            <td>Natural language intent<br>&rarr; adaptive controls</td>
           </tr>
           <tr>
             <td>Monitoring</td>
-            <td>
-              Collect everything<br>
-              or guess
-            </td>
-            <td>
-              Optimal approach<br>
-              per assets &amp; risk
-            </td>
+            <td>Log everything,<br>static dashboards</td>
+            <td>Behavior-driven<br>and intent-based</td>
           </tr>
           <tr>
             <td>Risk visibility</td>
-            <td>
-              Batch reports<br>
-              or dashboards
-            </td>
-            <td>
-              Real-time behavioral<br>
-              risk score
-            </td>
+            <td>Reports or SIEM</td>
+            <td>Continuous trust score</td>
           </tr>
           <tr>
-            <td>DLP / network</td>
-            <td>
-              Heavy agents,<br>
-              proxies
-            </td>
-            <td>
-              Zero-lag kernel,<br>
-              no proxy
-            </td>
+            <td>Runtime enforcement</td>
+            <td>Static access lists</td>
+            <td>Adaptive,<br>moment-to-moment</td>
           </tr>
         </tbody>
       </table>
+      <div style="text-align:center;color:#6b7219;font-size:1.01rem;font-weight:700;margin-top:12px;">
+        AACE: Security as a live control system.<br/>
+        Not just a rule-checker—adapt and enforce, always.
+      </div>
     </section>
 
     <footer>
-      <p>© Olopa. We’ll only email you about launch and early access.</p>
-      <p><a href="#waitlist-form">Join waitlist</a></p>
+      <p>© Olopa. Only launch or early access updates—no spam.</p>
+      <p>
+        <a href="#waitlist-form">Join waitlist</a> | 
+        <span style="color:#b1a000;font-weight:500;">Powered by the Adaptive Access Control Engine (AACE)</span>
+      </p>
+      <div class="footer-note"></div>
     </footer>
   </div>
 
@@ -570,8 +562,7 @@
     })();
   </script>
   <script>
-    // You may optionally remove the waitlist count if you wish.
-    // We'll keep it fetching for continuity.
+    // Waitlist count fetching
     const API_BASE = (typeof window.OLOPA_API_BASE !== 'undefined')
       ? window.OLOPA_API_BASE
       : '';
