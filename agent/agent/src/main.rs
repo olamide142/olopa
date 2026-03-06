@@ -17,10 +17,14 @@ use anyhow::Result;
 use cli::Args;
 #[cfg(target_os = "linux")]
 use clap::Parser;
+#[cfg(target_os = "linux")]
+use env_logger::Env;
 
 #[cfg(target_os = "linux")]
 #[tokio::main]
 async fn main() -> Result<()> {
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+
     let args = Args::parse();
     let ebpf_path = pathing::resolve_path(&args.ebpf);
     let cgroup_path = pathing::resolve_path(&args.cgroup);

@@ -26,9 +26,12 @@ static ALLOW_TGIDS: HashMap<u32, u8> = HashMap::with_max_entries(2048, 0);
 #[map(name = "VIOLATION_COUNTS")]
 static VIOLATION_COUNTS: HashMap<u32, u64> = HashMap::with_max_entries(8192, 0);
 
+const SYS_ENTER_ARGS_OFFSET: usize = 16;
+const SYS_ARG_SIZE: usize = 8;
+
 macro_rules! simple_tracepoint {
-    ($section:ident, $program:ident, $message:literal) => {
-        #[tracepoint(name = stringify!($program))]
+    ($section:ident, $program:ident, $message:literal, $emit_log:expr) => {
+        #[tracepoint]
         pub fn $program(ctx: TracePointContext) -> u32 {
             match unsafe { $section(ctx) } {
                 Ok(ret) => ret,
@@ -37,33 +40,95 @@ macro_rules! simple_tracepoint {
         }
 
         unsafe fn $section(ctx: TracePointContext) -> Result<u32, ()> {
-            info!(&ctx, $message);
+            if $emit_log {
+                info!(&ctx, $message);
+            }
             Ok(0)
         }
     };
 }
 
-simple_tracepoint!(on_exec, trace_exec, "execve observed");
-simple_tracepoint!(on_openat2, trace_openat2, "openat2 observed");
-simple_tracepoint!(on_openat, trace_openat, "openat observed");
-simple_tracepoint!(on_read, trace_read, "read observed");
-simple_tracepoint!(on_write, trace_write, "write observed");
-simple_tracepoint!(on_close, trace_close, "close observed");
-simple_tracepoint!(on_unlinkat, trace_unlinkat, "unlinkat observed");
-simple_tracepoint!(on_renameat2, trace_renameat2, "renameat2 observed");
-simple_tracepoint!(on_socket, trace_socket, "socket observed");
-simple_tracepoint!(on_bind, trace_bind, "bind observed");
-simple_tracepoint!(on_listen, trace_listen, "listen observed");
-simple_tracepoint!(on_accept4, trace_accept4, "accept4 observed");
-simple_tracepoint!(on_connect, trace_connect, "connect observed");
-simple_tracepoint!(on_sendto, trace_sendto, "sendto observed");
-simple_tracepoint!(on_recvfrom, trace_recvfrom, "recvfrom observed");
-simple_tracepoint!(on_sendmsg, trace_sendmsg, "sendmsg observed");
-simple_tracepoint!(on_recvmsg, trace_recvmsg, "recvmsg observed");
-simple_tracepoint!(on_shutdown, trace_shutdown, "shutdown observed");
-simple_tracepoint!(on_setsockopt, trace_setsockopt, "setsockopt observed");
+simple_tracepoint!(on_exec, trace_exec, "execve observed", false);
+simple_tracepoint!(on_read, trace_read, "read observed", false);
+simple_tracepoint!(on_write, trace_write, "write observed", false);
+simple_tracepoint!(on_close, trace_close, "close observed", false);
+simple_tracepoint!(on_socket, trace_socket, "socket observed", false);
+simple_tracepoint!(on_bind, trace_bind, "bind observed", false);
+simple_tracepoint!(on_listen, trace_listen, "listen observed", false);
+simple_tracepoint!(on_accept4, trace_accept4, "accept4 observed", false);
+simple_tracepoint!(on_connect, trace_connect, "connect observed", false);
+simple_tracepoint!(on_sendto, trace_sendto, "sendto observed", false);
+simple_tracepoint!(on_recvfrom, trace_recvfrom, "recvfrom observed", false);
+simple_tracepoint!(on_sendmsg, trace_sendmsg, "sendmsg observed", false);
+simple_tracepoint!(on_recvmsg, trace_recvmsg, "recvmsg observed", false);
+simple_tracepoint!(on_shutdown, trace_shutdown, "shutdown observed", false);
+simple_tracepoint!(on_setsockopt, trace_setsockopt, "setsockopt observed", false);
+simple_tracepoint!(on_renameat2, trace_renameat2, "renameat2 observed", true);
 
-#[cgroup_sock_addr(connect4, name = "enforce_connect4")]
+#[tracepoint]
+pub fn trace_openat(ctx: TracePointContext) -> u32 {
+    match unsafe { try_trace_openat(ctx) } {
+        Ok(ret) => ret,
+        Err(_) => 1,
+    }
+}
+
+#[tracepoint]
+pub fn trace_openat2(ctx: TracePointContext) -> u32 {
+    match unsafe { try_trace_openat2(ctx) } {
+        Ok(ret) => ret,
+        Err(_) => 1,
+    }
+}
+
+#[tracepoint]
+pub fn trace_unlinkat(ctx: TracePointContext) -> u32 {
+    match unsafe { try_trace_unlinkat(ctx) } {
+        Ok(ret) => ret,
+        Err(_) => 1,
+    }
+}
+
+unsafe fn try_trace_openat(ctx: TracePointContext) -> Result<u32, ()> {
+    let filename_ptr = read_syscall_arg_ptr(&ctx, 1)?;
+    log_file_event(&ctx, "openat", filename_ptr);
+    Ok(0)
+}
+
+unsafe fn try_trace_openat2(ctx: TracePointContext) -> Result<u32, ()> {
+    let filename_ptr = read_syscall_arg_ptr(&ctx, 1)?;
+    log_file_event(&ctx, "openat2", filename_ptr);
+    Ok(0)
+}
+
+unsafe fn try_trace_unlinkat(ctx: TracePointContext) -> Result<u32, ()> {
+    let pathname_ptr = read_syscall_arg_ptr(&ctx, 1)?;
+    log_file_event(&ctx, "unlinkat", pathname_ptr);
+    Ok(0)
+}
+
+unsafe fn read_syscall_arg_ptr(ctx: &TracePointContext, arg_idx: usize) -> Result<*const u8, ()> {
+    let offset = SYS_ENTER_ARGS_OFFSET + (arg_idx * SYS_ARG_SIZE);
+    let value: u64 = ctx.read_at(offset).map_err(|_| ())?;
+    Ok(value as *const u8)
+}
+
+unsafe fn log_file_event(ctx: &TracePointContext, op: &'static str, path_ptr: *const u8) {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let tgid = (pid_tgid >> 32) as u32;
+    let pid = pid_tgid as u32;
+
+    info!(
+        ctx,
+        "file op={} tgid={} pid={} filename_ptr=0x{:x}",
+        op,
+        tgid,
+        pid,
+        path_ptr as usize
+    );
+}
+
+#[cgroup_sock_addr(connect4)]
 pub fn enforce_connect4(ctx: SockAddrContext) -> i32 {
     match unsafe { try_enforce_connect4(ctx) } {
         Ok(v) => v,
@@ -92,7 +157,7 @@ unsafe fn try_enforce_connect4(ctx: SockAddrContext) -> Result<i32, ()> {
     Ok(1)
 }
 
-#[cgroup_sock_addr(connect6, name = "enforce_connect6")]
+#[cgroup_sock_addr(connect6)]
 pub fn enforce_connect6(ctx: SockAddrContext) -> i32 {
     match unsafe { try_enforce_connect6(ctx) } {
         Ok(v) => v,
@@ -150,6 +215,3 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
         core::hint::spin_loop();
     }
 }
-
-aya_ebpf::macros::license!("GPL");
-
