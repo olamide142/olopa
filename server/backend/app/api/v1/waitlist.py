@@ -19,6 +19,7 @@ COUNT_CACHE_TTL = 300  # 5 minutes
 
 
 def _client_ip(request: Request) -> str:
+    """Extract caller IP with simple proxy-awareness (`x-forwarded-for`)."""
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
@@ -31,6 +32,7 @@ async def join_waitlist(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> WaitlistResponse:
+    """Register an email in the waitlist with per-IP rate limiting."""
     settings = get_settings()
     ip = _client_ip(request)
     if not check_rate_limit(ip, settings.waitlist_rate_limit_per_hour, 3600):
@@ -54,9 +56,9 @@ async def join_waitlist(
 
 @router.get("/count", response_model=WaitlistCountResponse)
 async def waitlist_count(
-    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> WaitlistCountResponse:
+    """Return cached waitlist size; cache is invalidated on signup."""
     global _count_cache, _count_cache_ts
     now = time.time()
     if _count_cache is not None and (now - _count_cache_ts) < COUNT_CACHE_TTL:

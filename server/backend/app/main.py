@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import get_settings
 from app.core.db import init_db
 from app.api.v1.router import api_router
+from app.services.telemetry import init_runtime, shutdown_runtime
 
 # Directory containing index.html (parent of backend/)
 WEB_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -16,21 +17,29 @@ WEB_ROOT = Path(__file__).resolve().parent.parent.parent
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Initialize shared resources on startup and shutdown."""
     await init_db()
+    await init_runtime()
     yield
+    await shutdown_runtime()
+
+
+def _parse_cors_origins(raw: str) -> list[str]:
+    return [origin.strip() for origin in raw.split(",")] if "," in raw else [raw]
 
 
 def create_app() -> FastAPI:
+    """Create and configure FastAPI application instance."""
     settings = get_settings()
     app = FastAPI(
         title="Olopa API",
-        description="Machine control plane — waitlist & platform",
+        description="Machine control plane - waitlist and telemetry platform",
         version="0.1.0",
         lifespan=lifespan,
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins.split(",") if "," in settings.cors_origins else [settings.cors_origins],
+        allow_origins=_parse_cors_origins(settings.cors_origins),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -55,3 +64,5 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+

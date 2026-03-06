@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Olopa — Adaptive Security</title>
-  <meta name="description" content="Olopa — AI-first adaptive security. Policy you can speak. Protection that adapts." />
+  <title>Olopa — Verified Security Decisions</title>
+  <meta name="description" content="Olopa continuously proves better security decisions than your current controls—before enforcing anything. No disruption. No black box. You decide when to enable protection." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
@@ -18,7 +18,6 @@
       --grey-bg: #f4f4f4;
       --very-light-blue: #eef1fa;
     }
-
     body {
       font-family: 'Roboto', Arial, sans-serif;
       background: var(--grey-bg);
@@ -27,7 +26,6 @@
       padding: 0;
       min-height: 100vh;
     }
-
     .police-stripes {
       display: flex;
       height: 8px;
@@ -56,7 +54,6 @@
       width: 100%;
       box-shadow: 0 0 4px #f5c70055;
     }
-
     nav {
       background: var(--police-dark-blue);
       padding: 16px 20px 14px 20px;
@@ -83,13 +80,11 @@
       letter-spacing: 0.01em;
       text-shadow: 0 1px 2px #17204122;
     }
-
     .container {
       max-width: 740px;
       margin: 0 auto;
       padding: 0 18px;
     }
-
     .mascot-section {
       text-align: center;
       padding: 32px 0 10px;
@@ -128,7 +123,6 @@
       max-width: 290px;
       text-align: center;
     }
-
     .hero {
       padding: 18px 0 36px;
     }
@@ -142,9 +136,9 @@
       text-align: center;
     }
     .hero .subhead {
-      font-size: 1.07rem;
+      font-size: 1.05rem;
       color: #283156;
-      margin-bottom: 19px;
+      margin-bottom: 17px;
       max-width: 560px;
       font-weight: 500;
       text-align: center;
@@ -179,7 +173,6 @@
       font-weight: bold;
       text-shadow: 0 1px 2px #17204122;
     }
-
     .waitlist-box {
       background: #fff;
       box-shadow: 0 2px 18px 0 rgba(22,32,81,0.04);
@@ -201,13 +194,13 @@
     }
     .waitlist-btn {
       font-family: inherit;
-      font-size: 1.03rem;
+      font-size: 1.04rem;
       font-weight: 500;
-      padding: 12px 0;
+      padding: 13px 0;
       border: none;
       border-radius: 7px;
       width: 100%;
-      background: linear-gradient(90deg, var(--police-yellow) 20%, var(--police-dark-blue) 100%);
+      background: linear-gradient(90deg, var(--police-yellow) 10%, var(--police-dark-blue) 100%);
       color: #fff;
       margin-top: 8px;
       cursor: pointer;
@@ -225,15 +218,14 @@
       text-decoration: none;
     }
     .form-note {
-      margin-top: 9px;
+      margin-top: 10px;
       font-size: 0.89rem;
       color: #8898aa;
       line-height: 1.38;
       text-align: center;
     }
-
     section {
-      padding: 33px 0 2px;
+      padding: 35px 0 2px;
       border-top: 1px solid #e9ecf3;
       background: none;
     }
@@ -249,19 +241,20 @@
     section p {
       color: var(--police-blue2);
       font-size: 1.01rem;
-      margin-bottom: 11px;
-      text-align: justify;
+      margin-bottom: 12px;
+      text-align: left;
       hyphens: auto;
     }
-
-    .pillars {
+    .pillars,
+    .how-list {
       list-style: none;
       padding-left: 0;
-      margin-top: 15px;
-      margin-bottom: 5px;
+      margin-top: 16px;
+      margin-bottom: 6px;
     }
-    .pillars li {
-      margin-bottom: 13px;
+    .pillars li,
+    .how-list li {
+      margin-bottom: 17px;
       padding: 13px 18px 10px 30px;
       position: relative;
       background: #fffdfa;
@@ -269,16 +262,19 @@
       border-radius: 0 6px 6px 0;
       box-shadow: 0 2px 7px #16205122;
       color: var(--police-dark-blue);
-      font-size: 1.01rem;
+      font-size: 1.02rem;
       text-align: left;
       hyphens: auto;
+      font-weight: 500;
     }
-    .pillars li strong {
+    .pillars li strong,
+    .how-list li strong {
       color: var(--police-blue-accent);
       font-weight: 700;
       letter-spacing: 0.01em;
     }
-    .pillars li:before {
+    .pillars li:before,
+    .how-list li:before {
       content: '';
       display: inline-block;
       position: absolute;
@@ -289,35 +285,34 @@
       border: 2px solid var(--police-blue2);
       box-shadow: 0 0 2px #16205155;
     }
-
+    .how-list li:last-child {
+      margin-bottom: 0;
+    }
     .pillars-caption {
       display: block;
       color: #7a8832;
       font-size: 0.97rem;
       font-weight: 700;
       text-align: left;
-      margin-top: 10px;
+      margin-top: 12px;
       margin-bottom: 0;
       letter-spacing: 0.01em;
     }
-
     .aace-caption {
-      margin: 30px 0 8px 0;
+      margin: 32px 0 9px 0;
       text-align: center;
       font-weight: 500;
       color: #353a7b;
-      font-size: 1.09rem;
+      font-size: 1.10rem;
       letter-spacing: 0.03em;
     }
-
     .aace-desc {
       margin: 0 auto 19px;
-      max-width: 610px;
+      max-width: 620px;
       color: #648;
       font-size: 0.99rem;
       text-align: center;
     }
-
     .comparison {
       width: 100%;
       border-collapse: collapse;
@@ -360,15 +355,14 @@
       background: linear-gradient(90deg, var(--police-yellow) 50%, transparent 100%);
       border-radius: 2px;
     }
-
     footer {
-      padding: 22px 0 32px;
+      padding: 23px 0 34px;
       border-top: 1px solid #d3e2ea;
       text-align: center;
       font-size: 0.97rem;
       color: var(--police-blue2);
       background: #f8faff;
-      margin-top: 30px;
+      margin-top: 33px;
       position: relative;
     }
     footer:before, footer:after {
@@ -400,7 +394,7 @@
     @media (max-width: 600px) {
       .container { padding: 0 4px; }
       .comparison td, .comparison th { padding: 7px 6px; font-size: 0.97rem;}
-      .pillars li { padding: 11px 8px 7px 22px; }
+      .pillars li, .how-list li { padding: 11px 8px 7px 22px; }
       .mascot-wrap { width: 110px; height: 110px; }
     }
   </style>
@@ -427,124 +421,155 @@
   <div class="container">
     <header class="hero">
       <div style="display: flex; flex-direction: column; align-items: center; text-align: center;">
-        <h1 style="text-align: center;">Olopa</h1>
-        <p class="subhead" style="text-align: center;">AI-first security, powered by <b>AACE</b>.</p>
-        <div class="proof" style="justify-content: center;">
-          <span>Conversational policy</span>
-          <span>Asset discovery</span>
-          <span>Dynamic enforcement</span>
-          <span>Behavioral monitoring</span>
-          <span>Real-time trust score</span>
-        </div>
-        <p class="subhead" style="font-size:1.03rem; margin-top:12px; font-weight:500; text-align: center;">
-          Policy you can <b>speak</b>. Protection that adapts.
+        <h1 style="text-align: center;">Know what your security should have done—before enforcing anything.</h1>
+        <p class="subhead" style="text-align: center; margin-bottom: 11px;">
+          Olopa continuously evaluates live activity and shows the verified decisions your existing controls <b>would have made</b>, in real time.<br>
+          <span style="color:#4b561a;font-size:1.01rem;display:block; margin-top: 11px;">No disruption. No enforcement. Just demonstrated reasoning you can review before enabling anything.</span>
         </p>
-        <p class="join-count" id="join-count" style="margin-top: 26px; padding-top: 2px; text-align: center;">
-          Join <strong id="waitlist-count">—</strong> security teams on the waitlist.
+        <p class="subhead" style="margin-bottom: 24px; font-size: 1.01rem;">
+          A behavioral decision engine for modern infrastructure.<br>
+          <span style="font-weight:400;font-size:0.97rem;">Start in observation mode. Enforce only when you trust it.</span>
+        </p>
+        <div class="proof" style="justify-content: center;">
+          <span>Real-time decision preview</span>
+          <span>Verified reasoning</span>
+          <span>Behavioral analysis</span>
+          <span>Predicted risk restrictions</span>
+          <span>Observation-first rollout</span>
+          <!-- New proof points for static rule compatibility -->
+          <span>Supports static rules</span>
+          <span>Hybrid: Static & Behavioral policies</span>
+        </div>
+        <p class="join-count" id="join-count" style="margin-top: 22px; padding-top: 2px; text-align: center;">
+          Join <strong id="waitlist-count">—</strong> security teams in mirror mode.
         </p>
         <div class="waitlist-box" id="waitlist-form" style="margin-left:auto; margin-right:auto;">
-          <h2 style="text-align: center;">Get early access (Beta)</h2>
+          <h2 style="text-align: center;">See decisions in mirror mode →</h2>
           <a
             class="waitlist-btn"
             href="https://docs.google.com/forms/d/e/1FAIpQLSfNHs_ShodsQVZwbnlkXge_o6rP939LQS6ZJPSHE9aG2oSgmQ/viewform?usp=dialog"
             target="_blank"
             rel="noopener noreferrer"
-          >Join the waitlist</a>
-          <div class="form-note" style="text-align: center;">
-            You’ll be redirected to a secure form. We only use your email for launch and early access. No spam.
+          >Request mirror access</a>
+          <div class="form-note" style="text-align:center;">
+            No commitment. You’ll review actual decisions in your environment before enabling enforcement.
           </div>
         </div>
       </div>
     </header>
 
-    <div class="aace-caption">Adaptive Security. Just describe your intent.</div>
+    <div class="aace-caption">What Olopa actually does</div>
     <div class="aace-desc">
-      Olopa isn’t just another tool. It’s an AI-native agent that secures your assets and environments with policy in plain language—powered by our proprietary Adaptive Access Control Engine (AACE).
+      Most tools tell you what happened. Olopa demonstrates what <b>should have happened</b>. <br><br>
+      By observing identities, services, and data activity, it continuously answers:
+      <ul style="margin:14px auto;max-width:420px;text-align:left;list-style:square;color:#284;">
+        <li>Was this normal?</li>
+        <li>Was it risky?</li>
+        <li>What restriction would have prevented it?</li>
+      </ul>
+      <span style="display:block">All before any enforcement occurs.</span>
+      <div style="margin-top:10px;font-size:0.99rem;color:#446;">
+        <b>Prefer static rules?</b> Olopa can enforce classic static policies or combine them with modern behavioral analysis. You get best-of-both.
+      </div>
     </div>
 
     <section>
-      <h2>How Olopa + AACE Work</h2>
-      <p>
-        You state your intent in words. Olopa maps your infrastructure, generates controls, and—through AACE—adapts permissions and risk in real time based on live behavior.<br>
-        No YAML. No static rules. Just protections that adjust as your team and environment change.
-      </p>
-      <ul class="pillars">
+      <h2>How Olopa Proves Its Decisions</h2>
+      <ul class="how-list">
         <li>
-          <strong>Conversational intent → Policy</strong> — Say what you want (“No dev can read prod data”, “Alert on sensitive exfil”). Olopa turns it into adaptive policy.
+          <strong>1) Describe intent (<span style="color:#d2a600;">static or behavioral</span>)</strong><br>
+          <span>
+            Write policy in plain language—
+            <span style="color:#777;font-style:italic;">“Developers shouldn’t access production customer data”</span>,
+            or classic rules like <span style="color:#666;font-weight:500;">"Block SSH from Internet"</span>.<br>
+            We translate it into evaluatable conditions and support static patterns directly.
+          </span>
         </li>
         <li>
-          <strong>Live asset discovery</strong> — Olopa builds a security map: users, devices, data, networks, for precise controls.
+          <strong>2) Observe behavior (Mirror Mode)</strong><br>
+          Olopa analyzes real activity and produces decisions without blocking anything.<br>
+          You see: <b>predicted restrictions, reasoning, affected workflows</b>.
         </li>
         <li>
-          <strong>Policy + asset graph → Adaptive enforcement</strong> — Each policy is enforced at the right point—identity, kernel, cloud—moment by moment.
+          <strong>3) Verify accuracy</strong><br>
+          Track how often each decision—<span style="color:#7d2;">static or behavioral</span>—would have been correct.<br>
+          Build confidence before control.
         </li>
         <li>
-          <strong>Behavioral monitoring: AACE in action</strong> — AACE learns live behavior for each identity/device, adjusting permissions continuously.
-        </li>
-        <li>
-          <strong>Real-time trust & risk scoring</strong> — Every user and device gets a dynamic trust score. Security responds instantly.
+          <strong>4) Gradual enforcement</strong><br>
+          Enable automation only where you choose—step-up authentication, session limits, containment.<br>
+          <span style="color:#356c38">You control when protection becomes active.</span>
         </li>
       </ul>
       <span class="pillars-caption">
-        AACE isn’t just “behavior analytics”. It’s a novel, always-on control loop—like adaptive autopilot for your security.
+        Olopa never replaces existing security—it's a continuous, verifiable decision engine that demonstrates better outcomes first.
+        <br>
+        <span style="color:#444;font-weight:400;display:block;margin-top:6px;font-size:0.97em;">Classic static controls are welcome; Olopa is hybrid by design.</span>
       </span>
     </section>
 
-    <div class="aace-caption" style="margin-top: 38px;">
-      Powered by AACE: Adaptive Access Control Engine
+    <div class="aace-caption" style="margin-top: 39px;">
+      What is AACE?
     </div>
     <div class="aace-desc" style="max-width:670px;">
-      AACE is Olopa’s core: a real-time, behavioral decision system that adjusts risk and access not just at login, but every moment. Inspired by new research on behavior-driven security and formal control systems.
+      AACE is Olopa’s core: a <b>continuous security decision model</b>.<br>
+      It evaluates trust and access moment-by-moment, demonstrating likely outcomes before acting.<br>
+      No black box. No surprise enforcement. Confidence first, automation only when proven.<br><br>
+      <span style="color:#576;">Can still enforce traditional static rules where required.</span>
     </div>
 
     <section>
-      <h2>How Olopa is Different</h2>
+      <h2>Why Olopa is Different</h2>
       <p>
-        Most tools are slow, noisy, and ask you to write rules.<br>
-        Olopa fuses AI-native policy and real-time runtime enforcement by AACE—understand intent, adapt protection, always.
+        Traditional tools alert after events and require instant commitment.<br>
+        Olopa validates behavior and builds evidence before you enable enforcement.
       </p>
       <table class="comparison">
         <thead>
           <tr>
             <th></th>
-            <th>Traditional tool</th>
-            <th>Olopa + AACE</th>
+            <th>Traditional tools</th>
+            <th>Olopa</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td>Policy authoring</td>
-            <td>YAML, Rego,<br>tickets</td>
-            <td>Natural language intent<br>&rarr; adaptive controls</td>
+            <td>Policy process</td>
+            <td>Write rules</td>
+            <td>Validate behavior <br><span style="color:#858;">(or use static rules too)</span></td>
           </tr>
           <tr>
-            <td>Monitoring</td>
-            <td>Log everything,<br>static dashboards</td>
-            <td>Behavior-driven<br>and intent-based</td>
+            <td>Response</td>
+            <td>Alert after events</td>
+            <td>Predict decisions continuously<br><span style="color:#858;">(static and dynamic)</span></td>
           </tr>
           <tr>
-            <td>Risk visibility</td>
-            <td>Reports or SIEM</td>
-            <td>Continuous trust score</td>
+            <td>Enforcement</td>
+            <td>Enable blocking immediately</td>
+            <td>Prove correctness first<br><span style="color:#858;">(but can enforce static instantly if required)</span></td>
           </tr>
           <tr>
-            <td>Runtime enforcement</td>
-            <td>Static access lists</td>
-            <td>Adaptive,<br>moment-to-moment</td>
+            <td>Controls</td>
+            <td>Static policies</td>
+            <td>Confidence-based &amp; static enforcement</td>
           </tr>
         </tbody>
       </table>
       <div style="text-align:center;color:#6b7219;font-size:1.01rem;font-weight:700;margin-top:12px;">
-        AACE: Security as a live control system.<br/>
-        Not just a rule-checker—adapt and enforce, always.
+        Security adopts evidence, not black boxes.<br/>
+        Olopa lets you see every decision first—classic rules or continuous behavior.
       </div>
     </section>
 
     <footer>
-      <p>© Olopa. Only launch or early access updates—no spam.</p>
       <p>
-        <a href="#waitlist-form">Join waitlist</a> | 
-        <span style="color:#b1a000;font-weight:500;">Powered by the Adaptive Access Control Engine (AACE)</span>
+        Security teams don’t adopt black boxes. <br>
+        Olopa lets you <b>watch every decision before enabling it</b> — so protection is based on evidence, not assumptions.<br>
+        <span style="color:#75802a;font-weight:500;">You can still use static rule enforcement anywhere you want.</span>
+      </p>
+      <p>
+        <a href="#waitlist-form">Watch your environment for a week → decide later</a> | 
+        <span style="color:#b1a000;font-weight:500;">Powered by the AACE Decision Model</span>
       </p>
       <div class="footer-note"></div>
     </footer>

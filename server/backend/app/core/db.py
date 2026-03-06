@@ -5,6 +5,7 @@ from app.models.waitlist import Base
 
 
 def get_engine():
+    """Create async SQLAlchemy engine from configured database URL."""
     settings = get_settings()
     return create_async_engine(
         settings.database_url,
@@ -23,6 +24,7 @@ async_session_factory = async_sessionmaker(
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """Yield transaction-scoped session and handle commit/rollback lifecycle."""
     async with async_session_factory() as session:
         try:
             yield session
@@ -35,5 +37,6 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
+    """Create schema for relational models if it does not exist."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
