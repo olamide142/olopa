@@ -31,6 +31,7 @@ async fn main() -> Result<()> {
     let policy_path = pathing::resolve_path(&args.policy);
 
     let mut bpf = ebpf_runtime::load_ebpf(&ebpf_path)?;
+    ebpf_runtime::start_file_event_logger(&mut bpf)?;
     ebpf_runtime::attach_all_tracepoints(&mut bpf)?;
     ebpf_runtime::attach_cgroup_enforcement(&mut bpf, &cgroup_path)?;
     policy::load_policy(&mut bpf, &policy_path)?;

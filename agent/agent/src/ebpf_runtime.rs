@@ -1,10 +1,27 @@
 use std::fs::File;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+use aya::maps::perf::AsyncPerfEventArray;
 use aya::programs::{CgroupAttachMode, CgroupSockAddr, TracePoint};
+use aya::util::online_cpus;
 use aya::Ebpf;
 use aya_log::EbpfLogger;
+use bytes::BytesMut;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FileEvent {
+    op: u8,
+    _pad: [u8; 3],
+    tgid: u32,
+    pid: u32,
+    comm: [u8; 16],
+    path: [u8; 128],
+}
+
+unsafe impl aya::Pod for FileEvent {}
 
 pub const REQUIRED_TRACEPOINTS: &[(&str, &str, &str)] = &[
     ("trace_exec", "syscalls", "sys_enter_execve"),
@@ -38,6 +55,97 @@ pub fn load_ebpf(path: &Path) -> Result<Ebpf> {
         eprintln!("logger init skipped: {err}");
     }
     Ok(bpf)
+}
+
+pub fn start_file_event_logger(bpf: &mut Ebpf) -> Result<()> {
+    let map = bpf
+        .take_map("FILE_EVENTS")
+        .context("missing FILE_EVENTS map")?;
+    let mut events = AsyncPerfEventArray::try_from(map).context("FILE_EVENTS map type mismatch")?;
+    let cmd_cache: Arc<Mutex<std::collections::HashMap<u32, String>>> =
+        Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+    let cpus = online_cpus()
+        .map_err(|(_, e)| e)
+        .context("failed to list online CPUs")?;
+    for cpu in cpus {
+        let mut buf = events
+            .open(cpu, None)
+            .with_context(|| format!("failed to open FILE_EVENTS buffer for cpu {cpu}"))?;
+        let cache = Arc::clone(&cmd_cache);
+        tokio::spawn(async move {
+            let mut buffers = vec![BytesMut::with_capacity(1024); 64];
+            loop {
+                let Ok(read) = buf.read_events(&mut buffers).await else {
+                    continue;
+                };
+                for raw in buffers.iter().take(read.read) {
+                    if raw.len() < core::mem::size_of::<FileEvent>() {
+                        continue;
+                    }
+
+                    let evt = unsafe { core::ptr::read_unaligned(raw.as_ptr() as *const FileEvent) };
+                    let op = match evt.op {
+                        1 => "openat",
+                        2 => "openat2",
+                        3 => "unlinkat",
+                        _ => "unknown",
+                    };
+                    let path = cstr_bytes(&evt.path);
+                    let path_str = core::str::from_utf8(path).unwrap_or("<non-utf8>");
+                    let cmd = resolve_cmdline(evt.tgid, &evt.comm, &cache);
+
+                    println!(
+                        "file op={} tgid={} pid={} cmd=\"{}\" path=\"{}\"",
+                        op, evt.tgid, evt.pid, cmd, path_str
+                    );
+                }
+            }
+        });
+    }
+
+    Ok(())
+}
+
+fn cstr_bytes(buf: &[u8]) -> &[u8] {
+    match buf.iter().position(|b| *b == 0) {
+        Some(i) => &buf[..i],
+        None => buf,
+    }
+}
+
+fn resolve_cmdline(
+    tgid: u32,
+    fallback_comm: &[u8; 16],
+    cache: &Arc<Mutex<std::collections::HashMap<u32, String>>>,
+) -> String {
+    if let Ok(guard) = cache.lock() {
+        if let Some(cmd) = guard.get(&tgid) {
+            return cmd.clone();
+        }
+    }
+
+    let cmd = std::fs::read(format!("/proc/{tgid}/cmdline"))
+        .ok()
+        .and_then(|bytes| {
+            if bytes.is_empty() {
+                None
+            } else {
+                let s = String::from_utf8_lossy(&bytes).replace('\0', " ");
+                Some(s.trim().to_string())
+            }
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            core::str::from_utf8(cstr_bytes(fallback_comm))
+                .unwrap_or("unknown")
+                .to_string()
+        });
+
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(tgid, cmd.clone());
+    }
+    cmd
 }
 
 pub fn attach_all_tracepoints(bpf: &mut Ebpf) -> Result<()> {
@@ -103,4 +211,3 @@ fn attach_optional_tracepoint(bpf: &mut Ebpf, program_name: &str, category: &str
         eprintln!("optional tracepoint skipped {category}:{event} ({program_name}): {err}");
     }
 }
-
