@@ -3,28 +3,49 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Olopa — Verified Security Decisions</title>
-  <meta name="description" content="Olopa continuously proves better security decisions than your current controls—before enforcing anything. No disruption. No black box. You decide when to enable protection." />
+  <title>Olopa — Kernel-Native Security for AI Agents</title>
+  <meta name="description" content="Olopa gives security teams one clear view across runtime, network, and AI agent actions so they can validate decisions before broad enforcement." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --police-dark-blue: #162051;
-      --police-blue2: #1b285a;
-      --police-blue-accent: #073285;
-      --police-yellow: #ffd500;
-      --police-yellow2: #ffeb72;
-      --grey-bg: #f4f4f4;
-      --very-light-blue: #eef1fa;
+      --ink-950: #070f27;
+      --ink-900: #0d1d4a;
+      --ink-800: #173170;
+      --sky-100: #e7efff;
+      --sky-50: #f3f7ff;
+      --mint-200: #d8fff5;
+      --amber-400: #f3c300;
+      --amber-300: #ffe172;
+      --surface: #ffffff;
+      --text: #14213f;
+      --muted: #455c91;
+      --ring: #ccd9f8;
+      --police-grid: #ffffff1f;
     }
     body {
-      font-family: 'Roboto', Arial, sans-serif;
-      background: var(--grey-bg);
-      color: #23272f;
+      font-family: 'Source Sans 3', Arial, sans-serif;
+      background:
+        radial-gradient(1200px 460px at 10% -5%, #ffffff10, transparent 65%),
+        radial-gradient(980px 440px at 90% 0%, #ffffff0c, transparent 70%),
+        linear-gradient(180deg, #3f454f 0%, #343a43 52%, #2e343d 100%);
+      color: var(--text);
       margin: 0;
       padding: 0;
       min-height: 100vh;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.45;
+      background-image:
+        linear-gradient(var(--police-grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--police-grid) 1px, transparent 1px);
+      background-size: 28px 28px;
+      z-index: -1;
     }
     .police-stripes {
       display: flex;
@@ -37,7 +58,7 @@
       padding: 0;
       position: relative;
       z-index: 1;
-      box-shadow: 0 1.5px 0 #e0e8f0;
+      box-shadow: 0 1.5px 0 #ceddff;
     }
     .double-stripe {
       width: 90vw;
@@ -50,12 +71,18 @@
     .stripe {
       height: 3px;
       border-radius: 2px;
-      background: var(--police-yellow);
+      background: repeating-linear-gradient(
+        90deg,
+        var(--amber-400) 0 18px,
+        #10265f 18px 26px
+      );
       width: 100%;
-      box-shadow: 0 0 4px #f5c70055;
+      box-shadow: 0 0 10px #f3c30052;
     }
     nav {
-      background: var(--police-dark-blue);
+      background:
+        linear-gradient(100deg, var(--ink-900), var(--ink-800)),
+        repeating-linear-gradient(135deg, #ffffff10 0 10px, transparent 10px 20px);
       padding: 16px 20px 14px 20px;
       color: #fff;
       display: flex;
@@ -64,40 +91,57 @@
       font-size: 1.2rem;
       font-weight: bold;
       letter-spacing: 0.02em;
-      box-shadow: 0 2px 8px 0 rgba(32,32,38,0.06);
+      box-shadow: 0 10px 30px #0d1d4a47;
       border-bottom: none;
-      position: relative;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      backdrop-filter: blur(4px);
     }
     .logo {
       color: #fff;
       text-decoration: none;
-      font-family: inherit;
+      font-family: 'Space Grotesk', sans-serif;
       letter-spacing: 0.02em;
     }
     .logo span {
-      color: var(--police-yellow);
+      color: var(--amber-300);
       font-weight: 700;
       letter-spacing: 0.01em;
-      text-shadow: 0 1px 2px #17204122;
+      text-shadow: 0 1px 2px #17204133;
     }
     .container {
-      max-width: 740px;
+      max-width: 840px;
       margin: 0 auto;
-      padding: 0 18px;
+      padding: 0 18px 24px;
     }
     .mascot-section {
       text-align: center;
-      padding: 32px 0 10px;
+      padding: 40px 0 14px;
     }
     .mascot-wrap {
       width: 140px; height: 140px; margin: 0 auto 10px;
-      background: #e5e5e5;
-      border-radius: 16px;
+      background:
+        linear-gradient(180deg, #e7eefc 0%, #cfdbf5 100%),
+        linear-gradient(var(--police-grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--police-grid) 1px, transparent 1px);
+      background-size: auto, 16px 16px, 16px 16px;
+      border-radius: 22px;
       overflow: hidden;
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 8px 24px -2px #16205122;
+      box-shadow: 0 14px 34px -12px #0d1d4a54;
+      border: 1px solid var(--ring);
+      animation: floatIn 600ms ease-out;
+      position: relative;
+    }
+    .mascot-wrap::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, #ffffff1f, transparent 35%, #f3c30014);
+      pointer-events: none;
     }
     .mascot-wrap img {
       width: 80%;
@@ -109,138 +153,169 @@
       color: #889;
       font-size: 14px;
       font-weight: 500;
-      font-family: 'Roboto', Arial, sans-serif;
+      font-family: 'Source Sans 3', Arial, sans-serif;
       display: flex;
       align-items: center;
       justify-content: center;
     }
     .mascot-placeholder-hidden { display: none !important; }
     .mascot-caption {
-      color: #666;
-      font-weight: 400;
-      font-size: 1rem;
+      color: #dfe6f8;
+      font-weight: 500;
+      font-size: 0.98rem;
       margin: 8px auto 0;
       max-width: 290px;
       text-align: center;
     }
     .hero {
-      padding: 18px 0 36px;
+      padding: 18px 0 40px;
     }
     .hero h1 {
-      font-size: 2rem;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: clamp(2rem, 3.2vw, 2.8rem);
       font-weight: 700;
-      margin-bottom: 8px;
-      color: var(--police-dark-blue);
-      line-height: 1.1;
+      margin-bottom: 12px;
+      color: #f5f8ff;
+      line-height: 1.05;
       letter-spacing: -0.01em;
       text-align: center;
+      text-wrap: balance;
     }
     .hero .subhead {
-      font-size: 1.05rem;
-      color: #283156;
-      margin-bottom: 17px;
-      max-width: 560px;
+      font-size: 1.13rem;
+      color: #d7e0f6;
+      margin-bottom: 18px;
+      max-width: 680px;
       font-weight: 500;
       text-align: center;
+      text-wrap: pretty;
     }
     .proof {
       display: flex;
       flex-wrap: wrap;
-      gap: 9px;
-      margin-bottom: 10px;
+      gap: 10px;
+      margin: 2px 0 12px;
       justify-content: center;
     }
     .proof span {
-      background: var(--very-light-blue);
-      color: var(--police-blue-accent);
-      padding: 7px 17px;
-      border-radius: 16px;
-      font-size: 0.96rem;
+      background: linear-gradient(180deg, #ffffff 0%, #edf3ff 100%);
+      color: var(--ink-800);
+      padding: 8px 16px;
+      border-radius: 999px;
+      font-size: 0.94rem;
       font-weight: 600;
-      border: 1px solid #d3d8f4;
+      border: 1px solid var(--ring);
       display: inline-block;
       min-width: 110px;
       text-align: center;
+      box-shadow: 0 5px 18px -10px #0d1d4a4d;
+      transition: transform 150ms ease, box-shadow 150ms ease;
+    }
+    .proof span:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 20px -10px #22428d55;
     }
     .join-count {
-      font-size: 1.02rem;
-      color: var(--police-blue2);
+      font-size: 1.08rem;
+      color: #dfe7fa;
       margin-bottom: 12px;
       text-align: center;
     }
     .join-count strong {
-      color: var(--police-yellow);
+      color: #c38a00;
       font-weight: bold;
-      text-shadow: 0 1px 2px #17204122;
+      text-shadow: 0 1px 2px #8a620033;
     }
     .waitlist-box {
-      background: #fff;
-      box-shadow: 0 2px 18px 0 rgba(22,32,81,0.04);
-      border-radius: 10px;
-      padding: 24px 18px 20px 18px;
+      background:
+        linear-gradient(180deg, #ffffff 0%, #f7faff 100%) padding-box,
+        linear-gradient(130deg, #c9d7fb, #f2de9b, #9db4ef) border-box;
+      box-shadow: 0 14px 44px -22px #0d1d4a66;
+      border-radius: 16px;
+      padding: 26px 20px 20px;
       margin: 0 auto 18px;
-      max-width: 400px;
-      border: 1px solid #ced3e6;
+      max-width: 460px;
+      border: 1px solid transparent;
     }
     .waitlist-box h2 {
-      font-size: 1.10rem;
-      font-weight: 500;
-      color: var(--police-blue-accent);
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--ink-800);
       margin-bottom: 13px;
-      font-family: inherit;
       text-align: center;
       text-justify: auto;
       letter-spacing: 0.01em;
     }
     .waitlist-btn {
       font-family: inherit;
-      font-size: 1.04rem;
-      font-weight: 500;
+      font-size: 1.05rem;
+      font-weight: 700;
       padding: 13px 0;
       border: none;
-      border-radius: 7px;
+      border-radius: 10px;
       width: 100%;
-      background: linear-gradient(90deg, var(--police-yellow) 10%, var(--police-dark-blue) 100%);
+      background: linear-gradient(115deg, var(--ink-900) 0%, #224aa7 55%, #102e73 100%);
       color: #fff;
       margin-top: 8px;
       cursor: pointer;
       display: inline-block;
       text-align: center;
       text-decoration: none;
-      box-shadow: 0 0 7px #ffd50010;
-      border-bottom: 3.5px solid var(--police-yellow);
-      transition: background .18s, color .18s;
+      box-shadow: 0 10px 24px -12px #1b2f6b99;
+      border-bottom: 3px solid #f3c300;
+      transition: transform .18s, filter .18s;
     }
     .waitlist-btn:hover,
     .waitlist-btn:focus {
-      background: linear-gradient(90deg, var(--police-yellow), var(--police-yellow2), var(--police-blue2));
-      color: var(--police-dark-blue);
+      transform: translateY(-1px);
+      filter: brightness(1.08);
       text-decoration: none;
     }
     .form-note {
       margin-top: 10px;
-      font-size: 0.89rem;
-      color: #8898aa;
+      font-size: 0.92rem;
+      color: var(--muted);
       line-height: 1.38;
       text-align: center;
     }
     section {
-      padding: 35px 0 2px;
-      border-top: 1px solid #e9ecf3;
-      background: none;
+      padding: 28px 26px 20px;
+      margin: 24px 0;
+      border: 1px solid var(--ring);
+      border-radius: 18px;
+      background:
+        linear-gradient(180deg, #ffffff 0%, #f8fbff 100%),
+        linear-gradient(90deg, #f3c3000f, transparent 40%);
+      box-shadow: 0 14px 38px -26px #0f245a66;
+      position: relative;
+      overflow: hidden;
+    }
+    section::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 4px;
+      background: repeating-linear-gradient(
+        90deg,
+        #f3c300 0 18px,
+        #10265f 18px 26px
+      );
     }
     section h2 {
-      font-size: 1.18rem;
-      color: var(--police-blue-accent);
-      font-weight: 600;
-      margin-bottom: 10px;
-      font-family: inherit;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 1.36rem;
+      color: var(--ink-900);
+      font-weight: 700;
+      margin: 0 0 12px;
       text-align: left;
       letter-spacing: 0.01em;
     }
     section p {
-      color: var(--police-blue2);
-      font-size: 1.01rem;
+      color: var(--muted);
+      font-size: 1.05rem;
       margin-bottom: 12px;
       text-align: left;
       hyphens: auto;
@@ -255,13 +330,13 @@
     .pillars li,
     .how-list li {
       margin-bottom: 17px;
-      padding: 13px 18px 10px 30px;
+      padding: 14px 16px 12px 32px;
       position: relative;
-      background: #fffdfa;
-      border-left: 6px double var(--police-yellow);
-      border-radius: 0 6px 6px 0;
-      box-shadow: 0 2px 7px #16205122;
-      color: var(--police-dark-blue);
+      background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+      border-left: 4px solid #f3c300;
+      border-radius: 10px;
+      box-shadow: 0 12px 26px -24px #111f4e80;
+      color: var(--text);
       font-size: 1.02rem;
       text-align: left;
       hyphens: auto;
@@ -269,28 +344,20 @@
     }
     .pillars li strong,
     .how-list li strong {
-      color: var(--police-blue-accent);
+      color: var(--ink-900);
       font-weight: 700;
       letter-spacing: 0.01em;
     }
     .pillars li:before,
     .how-list li:before {
-      content: '';
-      display: inline-block;
-      position: absolute;
-      left: 11px; top: 18px;
-      width: 10px; height: 10px;
-      background: var(--police-yellow);
-      border-radius: 50%;
-      border: 2px solid var(--police-blue2);
-      box-shadow: 0 0 2px #16205155;
+      content: none;
     }
     .how-list li:last-child {
       margin-bottom: 0;
     }
     .pillars-caption {
       display: block;
-      color: #7a8832;
+      color: #1d3b8c;
       font-size: 0.97rem;
       font-weight: 700;
       text-align: left;
@@ -299,103 +366,130 @@
       letter-spacing: 0.01em;
     }
     .aace-caption {
-      margin: 32px 0 9px 0;
+      margin: 34px 0 10px;
       text-align: center;
-      font-weight: 500;
-      color: #353a7b;
-      font-size: 1.10rem;
-      letter-spacing: 0.03em;
+      font-family: 'Space Grotesk', sans-serif;
+      font-weight: 700;
+      color: #ecf2ff;
+      font-size: 1.35rem;
+      letter-spacing: 0.01em;
     }
     .aace-desc {
-      margin: 0 auto 19px;
-      max-width: 620px;
-      color: #648;
-      font-size: 0.99rem;
+      margin: 0 auto 22px;
+      max-width: 720px;
+      color: #d4def4;
+      font-size: 1.08rem;
       text-align: center;
+      line-height: 1.5;
     }
     .comparison {
       width: 100%;
       border-collapse: collapse;
       margin-top: 1.18rem;
       background: #fff;
-      border-radius: 9px;
+      border-radius: 14px;
       overflow: hidden;
-      border: 1px solid #e8e8ed;
+      border: 1px solid var(--ring);
       font-size: 1rem;
-      box-shadow: 0 1px 4px #16205111;
+      box-shadow: 0 12px 26px -20px #152a6170;
     }
     .comparison th, .comparison td {
-      padding: 11px 12px;
+      padding: 12px 13px;
       text-align: left;
       background: #fff;
-      border-bottom: 1px solid #f3f5fa;
+      border-bottom: 1px solid #eef2fb;
       vertical-align: top;
       word-break: break-word;
       hyphens: auto;
     }
     .comparison tr:last-child td { border-bottom: none; }
     .comparison th {
-      color: #7c8baf;
+      color: #6070a0;
       text-transform: uppercase;
       font-weight: 600;
       font-size: .95rem;
       letter-spacing: 0.05em;
-      background: #e5eaf7;
+      background: #e8efff;
       text-align: center;
     }
-    .comparison td:first-child { color: var(--police-blue2); text-align: right; width: 33%; font-weight: 500;}
+    .comparison td:first-child { color: var(--ink-800); text-align: right; width: 33%; font-weight: 600;}
     .comparison td:nth-child(2) { color: #d31947; font-size: 0.98rem; }
-    .comparison td:nth-child(3) { color: var(--police-dark-blue); font-weight: bold; letter-spacing: 0.01em; }
+    .comparison td:nth-child(3) { color: var(--ink-900); font-weight: bold; letter-spacing: 0.01em; }
     .comparison td:nth-child(3)::after {
       content: "";
       display: block;
       height: 2px;
       width: 40%;
       margin: 2px 0 0 0;
-      background: linear-gradient(90deg, var(--police-yellow) 50%, transparent 100%);
+      background: linear-gradient(90deg, var(--amber-400) 50%, transparent 100%);
       border-radius: 2px;
     }
     footer {
-      padding: 23px 0 34px;
+      padding: 28px 22px 36px;
       border-top: 1px solid #d3e2ea;
+      border-radius: 18px;
       text-align: center;
-      font-size: 0.97rem;
-      color: var(--police-blue2);
-      background: #f8faff;
-      margin-top: 33px;
+      font-size: 1rem;
+      color: var(--ink-800);
+      background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+      margin-top: 28px;
       position: relative;
+      box-shadow: 0 14px 36px -26px #0d1d4a8a;
     }
     footer:before, footer:after {
       content: "";
       display: block;
       height: 4px;
-      background: var(--police-yellow);
+      background: repeating-linear-gradient(
+        90deg,
+        var(--amber-400) 0 18px,
+        #10265f 18px 26px
+      );
       width: 45%;
       margin: 0.5em auto;
       border-radius: 2px;
       opacity: 0.35;
     }
     footer a {
-      color: var(--police-yellow);
+      color: #1c3f96;
       text-decoration: none;
-      font-weight: 500;
+      font-weight: 700;
       transition: color 0.14s;
       margin: 0 10px;
     }
     footer a:hover {
       text-decoration: underline;
-      color: var(--police-blue-accent);
+      color: var(--ink-900);
     }
     .footer-note {
       margin-top: 7px;
-      color: #8990a3;
+      color: #7e8aac;
       font-size: 0.90rem;
     }
+    @keyframes floatIn {
+      from {
+        opacity: 0;
+        transform: translateY(8px) scale(0.98);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        animation: none !important;
+        transition: none !important;
+      }
+    }
     @media (max-width: 600px) {
-      .container { padding: 0 4px; }
+      .container { padding: 0 10px 20px; }
+      .hero { padding-bottom: 24px; }
+      .hero .subhead { font-size: 1.03rem; }
       .comparison td, .comparison th { padding: 7px 6px; font-size: 0.97rem;}
       .pillars li, .how-list li { padding: 11px 8px 7px 22px; }
       .mascot-wrap { width: 110px; height: 110px; }
+      section { padding: 20px 14px 12px; }
     }
   </style>
 </head>
@@ -403,12 +497,7 @@
   <nav>
     <a href="#" class="logo">Olo<span>pa</span></a>
   </nav>
-  <div class="police-stripes">
-    <div class="double-stripe">
-      <div class="stripe"></div>
-      <div class="stripe"></div>
-    </div>
-  </div>
+
 
   <section class="mascot-section" aria-label="Mascot">
     <div class="mascot-wrap">
@@ -421,108 +510,96 @@
   <div class="container">
     <header class="hero">
       <div style="display: flex; flex-direction: column; align-items: center; text-align: center;">
-        <h1 style="text-align: center;">Know what your security should have done—before enforcing anything.</h1>
+        <h1 style="text-align: center;">One security control plane across runtime, network, and AI agent actions.</h1>
         <p class="subhead" style="text-align: center; margin-bottom: 11px;">
-          Olopa continuously evaluates live activity and shows the verified decisions your existing controls <b>would have made</b>, in real time.<br>
-          <span style="color:#4b561a;font-size:1.01rem;display:block; margin-top: 11px;">No disruption. No enforcement. Just demonstrated reasoning you can review before enabling anything.</span>
+          Olopa is a kernel-native security platform built for modern Linux environments and AI-driven systems.<br>
+          <span style="color:#9fc0ff;font-size:1.01rem;display:block; margin-top: 11px;">Get high-confidence decisions first, then choose where enforcement should be active.</span>
         </p>
         <p class="subhead" style="margin-bottom: 24px; font-size: 1.01rem;">
-          A behavioral decision engine for modern infrastructure.<br>
-          <span style="font-weight:400;font-size:0.97rem;">Start in observation mode. Enforce only when you trust it.</span>
+          Unified signal. Clear risk context. Operator-controlled rollout.<br>
+          <span style="font-weight:400;font-size:0.97rem;">No black box behavior and no forced all-or-nothing switch.</span>
         </p>
         <div class="proof" style="justify-content: center;">
-          <span>Real-time decision preview</span>
-          <span>Verified reasoning</span>
-          <span>Behavioral analysis</span>
-          <span>Predicted risk restrictions</span>
+          <span>Kernel-native visibility</span>
+          <span>AI tool-call oversight</span>
+          <span>Cross-layer correlation</span>
+          <span>Privacy-preserving telemetry</span>
+          <span>Policy-driven controls</span>
           <span>Observation-first rollout</span>
-          <!-- New proof points for static rule compatibility -->
           <span>Supports static rules</span>
-          <span>Hybrid: Static & Behavioral policies</span>
         </div>
-        <p class="join-count" id="join-count" style="margin-top: 22px; padding-top: 2px; text-align: center;">
-          Join <strong id="waitlist-count">—</strong> security teams in mirror mode.
-        </p>
+        <p class="join-count" id="join-count" style="margin-top: 22px; padding-top: 2px; text-align: center;"> <strong id="waitlist-count">—</strong> </p>
         <div class="waitlist-box" id="waitlist-form" style="margin-left:auto; margin-right:auto;">
-          <h2 style="text-align: center;">See decisions in mirror mode →</h2>
+          <h2 style="text-align: center;">Opt in for a live beta →</h2>
           <a
             class="waitlist-btn"
             href="https://docs.google.com/forms/d/e/1FAIpQLSfNHs_ShodsQVZwbnlkXge_o6rP939LQS6ZJPSHE9aG2oSgmQ/viewform?usp=dialog"
             target="_blank"
             rel="noopener noreferrer"
-          >Request mirror access</a>
+          >Request beta access</a>
           <div class="form-note" style="text-align:center;">
-            No commitment. You’ll review actual decisions in your environment before enabling enforcement.
+            Optional and low-lift. We walk through your use case and show how staged enforcement can work.
           </div>
         </div>
       </div>
     </header>
 
-    <div class="aace-caption">What Olopa actually does</div>
+    <div class="aace-caption">What Olopa does</div>
     <div class="aace-desc">
-      Most tools tell you what happened. Olopa demonstrates what <b>should have happened</b>. <br><br>
-      By observing identities, services, and data activity, it continuously answers:
-      <ul style="margin:14px auto;max-width:420px;text-align:left;list-style:square;color:#284;">
-        <li>Was this normal?</li>
-        <li>Was it risky?</li>
-        <li>What restriction would have prevented it?</li>
+      Olopa connects multiple security layers that are usually disconnected, so risk can be evaluated as a full chain instead of isolated events.<br><br>
+      That means your team can answer:
+      <ul style="margin:14px auto;max-width:420px;text-align:left;list-style:square;color:#b9ceff;">
+        <li>What happened?</li>
+        <li>Why was it risky?</li>
+        <li>What action should policy take next?</li>
       </ul>
-      <span style="display:block">All before any enforcement occurs.</span>
-      <div style="margin-top:10px;font-size:0.99rem;color:#446;">
-        <b>Prefer static rules?</b> Olopa can enforce classic static policies or combine them with modern behavioral analysis. You get best-of-both.
+      <span style="display:block">All with operator review and control over when stricter enforcement is enabled.</span>
+      <div style="margin-top:10px;font-size:0.99rem;color:#c9d8ff;">
+        <b>Need static controls too?</b> Olopa supports traditional static policy enforcement alongside adaptive decisioning.
       </div>
     </div>
 
     <section>
-      <h2>How Olopa Proves Its Decisions</h2>
+      <h2>How Teams Roll Out Olopa</h2>
       <ul class="how-list">
         <li>
-          <strong>1) Describe intent (<span style="color:#d2a600;">static or behavioral</span>)</strong><br>
-          <span>
-            Write policy in plain language—
-            <span style="color:#777;font-style:italic;">“Developers shouldn’t access production customer data”</span>,
-            or classic rules like <span style="color:#666;font-weight:500;">"Block SSH from Internet"</span>.<br>
-            We translate it into evaluatable conditions and support static patterns directly.
-          </span>
+          <strong>Define policy intent</strong><br>
+          Capture the outcomes you care about in clear policy terms, from classic controls to AI-agent specific guardrails.
         </li>
         <li>
-          <strong>2) Observe behavior (Mirror Mode)</strong><br>
-          Olopa analyzes real activity and produces decisions without blocking anything.<br>
-          You see: <b>predicted restrictions, reasoning, affected workflows</b>.
+          <strong>Observe and evaluate</strong><br>
+          Olopa continuously evaluates live activity and maps it to policy decisions without forcing broad disruption.
         </li>
         <li>
-          <strong>3) Verify accuracy</strong><br>
-          Track how often each decision—<span style="color:#7d2;">static or behavioral</span>—would have been correct.<br>
-          Build confidence before control.
+          <strong>Review confidence</strong><br>
+          Security teams review outcomes, tune posture, and verify decisions before scaling enforcement.
         </li>
         <li>
-          <strong>4) Gradual enforcement</strong><br>
-          Enable automation only where you choose—step-up authentication, session limits, containment.<br>
-          <span style="color:#356c38">You control when protection becomes active.</span>
+          <strong>Enforce in stages</strong><br>
+          Turn on stronger controls where trust is highest, while keeping sensitive or uncertain paths under review.
         </li>
       </ul>
       <span class="pillars-caption">
-        Olopa never replaces existing security—it's a continuous, verifiable decision engine that demonstrates better outcomes first.
+        Olopa is designed to complement your existing stack, not replace it.
         <br>
-        <span style="color:#444;font-weight:400;display:block;margin-top:6px;font-size:0.97em;">Classic static controls are welcome; Olopa is hybrid by design.</span>
+        <span style="color:#3f4d70;font-weight:400;display:block;margin-top:6px;font-size:0.97em;">Use it as a unified layer for visibility, policy decisions, and controlled enforcement.</span>
       </span>
     </section>
 
     <div class="aace-caption" style="margin-top: 39px;">
-      What is AACE?
+      Why the Olopa approach is different
     </div>
     <div class="aace-desc" style="max-width:670px;">
-      AACE is Olopa’s core: a <b>continuous security decision model</b>.<br>
-      It evaluates trust and access moment-by-moment, demonstrating likely outcomes before acting.<br>
-      No black box. No surprise enforcement. Confidence first, automation only when proven.<br><br>
-      <span style="color:#576;">Can still enforce traditional static rules where required.</span>
+      Most platforms focus on one layer at a time. Olopa is built to correlate runtime behavior, network context, and AI tool activity in one place.<br>
+      This helps teams catch risky sequences earlier, reduce blind spots, and respond with clearer justification.<br><br>
+      <span style="color:#c8d6f5;">Security decisions stay explainable, operator-controlled, and aligned with your policy model.</span>
     </div>
 
     <section>
-      <h2>Why Olopa is Different</h2>
+      <h2>Traditional Stack vs Olopa</h2>
       <p>
-        Traditional tools alert after events and require instant commitment.<br>
-        Olopa validates behavior and builds evidence before you enable enforcement.
+        Siloed controls create fragmented visibility and slower response.
+        Olopa brings correlated context and policy-driven decisions into one workflow.
       </p>
       <table class="comparison">
         <thead>
@@ -534,42 +611,40 @@
         </thead>
         <tbody>
           <tr>
-            <td>Policy process</td>
-            <td>Write rules</td>
-            <td>Validate behavior <br><span style="color:#858;">(or use static rules too)</span></td>
+            <td>Coverage</td>
+            <td>Single-layer controls</td>
+            <td>Runtime, network, and AI-action context</td>
           </tr>
           <tr>
-            <td>Response</td>
-            <td>Alert after events</td>
-            <td>Predict decisions continuously<br><span style="color:#858;">(static and dynamic)</span></td>
+            <td>Risk view</td>
+            <td>Event-by-event alerts</td>
+            <td>Sequence-aware risk evaluation</td>
           </tr>
           <tr>
-            <td>Enforcement</td>
-            <td>Enable blocking immediately</td>
-            <td>Prove correctness first<br><span style="color:#858;">(but can enforce static instantly if required)</span></td>
+            <td>Policy flow</td>
+            <td>Static rules only</td>
+            <td>Static + adaptive policy decisions</td>
           </tr>
           <tr>
-            <td>Controls</td>
-            <td>Static policies</td>
-            <td>Confidence-based &amp; static enforcement</td>
+            <td>Rollout</td>
+            <td>Immediate hard enforcement</td>
+            <td>Observation-first, staged enforcement</td>
           </tr>
         </tbody>
       </table>
-      <div style="text-align:center;color:#6b7219;font-size:1.01rem;font-weight:700;margin-top:12px;">
-        Security adopts evidence, not black boxes.<br/>
-        Olopa lets you see every decision first—classic rules or continuous behavior.
+      <div style="text-align:center;color:#1f3f95;font-size:1.01rem;font-weight:700;margin-top:12px;">
+        Evidence first. Enforcement when you are ready.
       </div>
     </section>
 
     <footer>
       <p>
-        Security teams don’t adopt black boxes. <br>
-        Olopa lets you <b>watch every decision before enabling it</b> — so protection is based on evidence, not assumptions.<br>
-        <span style="color:#75802a;font-weight:500;">You can still use static rule enforcement anywhere you want.</span>
+        Olopa gives teams a practical path to secure AI-era systems without sacrificing control.<br>
+        Start with visibility, validate decisions, then enforce where confidence is high.
       </p>
       <p>
-        <a href="#waitlist-form">Watch your environment for a week → decide later</a> | 
-        <span style="color:#b1a000;font-weight:500;">Powered by the AACE Decision Model</span>
+        <a href="#waitlist-form">Request a demo and see Olopa in your context</a> |
+        <span style="color:#c28c00;font-weight:600;">Kernel-native, policy-driven, and operator controlled</span>
       </p>
       <div class="footer-note"></div>
     </footer>
