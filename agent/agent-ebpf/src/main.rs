@@ -1,10 +1,24 @@
 #![no_std]
 #![no_main]
 
-use aya_ebpf::helpers::{bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_probe_read_user_str_bytes};
-use aya_ebpf::macros::{cgroup_sock_addr, map, tracepoint};
-use aya_ebpf::maps::{HashMap, PerfEventArray};
-use aya_ebpf::programs::{SockAddrContext, TracePointContext};
+use aya_ebpf::helpers::{
+    bpf_get_current_comm, 
+    bpf_get_current_pid_tgid, 
+    bpf_probe_read_user_str_bytes
+};
+use aya_ebpf::macros::{
+    map, 
+    cgroup_sock_addr, 
+    tracepoint
+};
+use aya_ebpf::maps::{
+    HashMap, 
+    PerfEventArray
+};
+use aya_ebpf::programs::{
+    SockAddrContext, 
+    TracePointContext
+};
 use aya_log_ebpf::info;
 
 // Policy maps (filled by userspace):

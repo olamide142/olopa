@@ -1,88 +1,75 @@
-# Aya Runtime Security Agent
+Based on the full architecture documentation, here are the core features that **must exist** in the Olopa agent, organised by layer:
 
-This directory contains a Rust + Aya runtime security agent:
+---
 
-- `agent-ebpf`: kernel eBPF tracepoint program.
-- `agent`: userspace loader, policy manager, and response loop.
+## 🔵 1. eBPF / XDP Kernel Sensor Layer
+The ground truth layer — cannot be bypassed by user-space, containers, or application code.
 
-## Project structure
+- **XDP Fast-Path Threat Filter** — runs at the NIC before the kernel TCP/IP stack; performs 5-tuple parsing, blacklist lookups, per-source rate limiting, and connection steering (DROP / REDIRECT to honeypot / PASS)
+- **Kernel Tracepoint Probes** — eBPF programs attached to: `execve`, `openat`, `write`, `connect`, `accept`, and `fork` syscalls
+- **Ring Buffer Architecture** — lock-free kernel-to-userspace event delivery using the Linux BPF ring buffer (kernel ≥ 5.8); drop counters when full
 
-`agent/` (userspace)
-- `src/main.rs`: process lifecycle and polling loop
-- `src/cli.rs`: CLI definition
-- `src/pathing.rs`: path resolution for packaged deployments
-- `src/ebpf_runtime.rs`: load/attach helpers for tracepoints + cgroup programs
-- `src/policy.rs`: JSON policy parsing and map population
-- `src/response.rs`: violation processing and optional kill response
+---
 
-`agent-ebpf/` (kernel side)
-- `src/main.rs`: policy maps, telemetry tracepoints, connect4/connect6 enforcement hooks
+## 🟡 2. Rust Agent Daemon (Tokio)
+The user-space brain — reads, scores, schedules, compresses, and transmits events.
 
-## What it does
+- **Probe Manager** — loads and attaches eBPF programs; detects kernel features; handles graceful detach
+- **Event Normaliser** — adds host/tenant IDs, converts timestamps to wall-clock
+- **Relevance Scorer** — multi-factor scoring: severity, delta (change from baseline), recency, and context
+- **OR Scheduler (MDKP)** — every 500ms solves a Multi-Dimensional Knapsack Problem to maximise security signal value under 5 simultaneous resource budgets (CPU, memory, I/O, network packets, bandwidth)
+- **Budget Tracker with PI Controller** — real-time resource measurement with adaptive feedback
+- **zstd Compressor** — dictionary-trained compression with adaptive level selection
+- **Batcher** — bounded queue flushed by size, time, or count
+- **Token-Bucket Rate Limiter** — bandwidth shaping
+- **gRPC/mTLS Sender** — streaming telemetry with device-certificate mutual TLS and backpressure handling
+- **Disk Spool Fallback** — persists events when the backend is unreachable
 
-The eBPF programs provide:
+---
 
-1. Telemetry tracepoints for process, file I/O, and socket I/O syscalls:
-`execve`, `openat`, `openat2`, `read`, `write`, `close`, `unlinkat`, `renameat2`, `socket`, `bind`, `listen`, `accept4`, `connect`, `sendto`, `recvfrom`, `sendmsg`, `recvmsg`, `shutdown`, `setsockopt`.
-2. Network enforcement hooks via `cgroup_sock_addr`:
-`connect4`, `connect6`.
-3. Policy maps:
-- `BLOCKED_IPV4`
-- `BLOCKED_PORTS`
-- `BLOCKED_TGIDS`
-- `ALLOW_TGIDS`
-4. Violation counter map:
-- `VIOLATION_COUNTS` (per TGID)
+## 🟠 3. Agentic Firewall
+Intercepts every AI agent tool call in real time before execution.
 
-When a connect event violates policy, eBPF denies it and increments `VIOLATION_COUNTS`.
-Userspace can optionally kill offending processes once a threshold is reached.
+- **MCP Tool Call Interceptor** — STDIO/SSE proxy for Model Context Protocol tools
+- **HTTP Transparent Proxy Adapter** — captures REST-based tool calls
+- **Risk Scoring Engine** — 6-dimension risk model applied to every tool call
+- **Policy DSL → OPA Rego Compiler** — human-readable policy rules compiled to Open Policy Agent
+- **Sequence-Aware Action Graph** — tracks chains of actions across a session (e.g. read → classify → exfiltrate → egress) rather than judging individual events
+- **Semantic DLP** — detects PII, credentials, and regulated data in tool call payloads
+- **Dual-Key Approval Workflow** — high-risk actions require both policy gate approval and a human approval gate
 
-## Prerequisites (Linux)
+---
 
-- Rust toolchain
-- Nightly Rust toolchain (for `-Z build-std=core` eBPF build)
-- `rust-src` component (`rustup component add rust-src --toolchain nightly`)
-- `bpf-linker` (`cargo install bpf-linker`)
-- root privileges to load eBPF programs
-- `clang`/`llvm` tooling often required by your distro eBPF stack
+## 🟢 4. Backend Platform
 
-## Build
+- **Python Ingest Gateway** — mTLS-authenticated, schema-validated, rate-limited async gateway with backpressure queue management
+- **OPA Policy Engine** — evaluates tool-call sequences against cross-layer rules; supports allow/deny verdicts and approval gates
+- **AI Risk Scorer** — adaptive trust scoring using LLM event history, threat intelligence, and anomaly models
+- **ClickHouse Event Warehouse** — time-partitioned analytics store holding: `exec`, `file`, `net_events`, `tool_calls`, `policy_decisions`, `agent_heartbeats`, and cross-layer detection results
 
-From this `agent/` directory:
+---
 
-```bash
-rustup toolchain install nightly
-rustup component add rust-src --toolchain nightly
-cargo +nightly build -Z build-std=core -p agent-ebpf --release --target bpfel-unknown-none
-cargo build -p agent --release
-```
+## 🔴 5. Detection Plane
 
-## Run
+- **Cross-Layer Detection Queries** — scheduled and streaming SQL over ClickHouse covering 7 initial attack chain detections
+- **OWASP LLM Top 10 Full Coverage** — detection rules addressing all 10 LLM-specific threat categories
+- **Adaptive Trust Scoring** — continuously updated per-agent/entity trust scores fed back into the policy engine
+- **Alert Routing → Auto-Tightening** — detections feed back into the policy engine to automatically raise enforcement thresholds
 
-```bash
-sudo ./target/release/agent \
-  --ebpf ./target/bpfel-unknown-none/release/agent-ebpf \
-  --cgroup /sys/fs/cgroup \
-  --policy ./policy.json \
-  --violation-threshold 20
-```
+---
 
-Press `Ctrl+C` to stop.
+## ⚪ 6. Security Model Requirements (non-negotiable hardening)
 
-## Policy file
+- Signed binaries with watchdog process
+- Minimal Linux capabilities: `CAP_BPF + CAP_PERFMON + CAP_NET_RAW` only — no `CAP_SYS_ADMIN`
+- `NoNewPrivileges=true` via systemd
+- Signed policy packages with hash verification on load
+- Memory ceiling of 150MB; CPU cgroup weight of 10/10,000
 
-Create `policy.json` (example provided at `policy.example.json`):
+---
 
-```json
-{
-  "blocked_ipv4": ["1.1.1.1", "8.8.8.8"],
-  "blocked_ports": [22, 23, 445],
-  "blocked_tgids": [1234],
-  "allow_tgids": [1]
-}
-```
+## 📊 7. Observability (must be present)
 
-Notes:
-- `blocked_ports` are matched using kernel socket port representation.
-- `allow_tgids` overrides block lists.
-- To enable active response: add `--kill-on-violation`.
+- **Prometheus metrics endpoint** covering: eBPF event/drop counts, scheduler selection/drop rates, budget utilisation, compression ratio, firewall decision counts, backend queue depth, and heartbeat age per host
+- **OpenTelemetry tracing** — end-to-end latency from kernel event to ClickHouse commit
+- **Grafana dashboard** — telemetry health + security posture
