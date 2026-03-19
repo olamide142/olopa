@@ -1,3 +1,5 @@
 [target.bpfel-unknown-none]
 linker = "bpf-linker"
-
+rustflags = [
+  "-C", "link-arg=-nostartfiles",
+]

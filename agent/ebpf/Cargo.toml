@@ -1,0 +1,14 @@
+[package]
+name    = "olopa-ebpf"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name              = "olopa-ebpf-bin"
+path              = "src/main.rs"
+# eBPF programs have no std entry point
+
+[dependencies]
+aya-ebpf     = "0.1"
+aya-log-ebpf = "0.1"
+olopa-common = { path = "../common" }

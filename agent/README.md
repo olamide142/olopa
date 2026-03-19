@@ -2,6 +2,9 @@ Based on the full architecture documentation, here are the core features that **
 
 ---
 
+
+`cargo +nightly install bpf-linker --force`
+
 ## 🔵 1. eBPF / XDP Kernel Sensor Layer
 The ground truth layer — cannot be bypassed by user-space, containers, or application code.
 
@@ -73,3 +76,33 @@ Intercepts every AI agent tool call in real time before execution.
 - **Prometheus metrics endpoint** covering: eBPF event/drop counts, scheduler selection/drop rates, budget utilisation, compression ratio, firewall decision counts, backend queue depth, and heartbeat age per host
 - **OpenTelemetry tracing** — end-to-end latency from kernel event to ClickHouse commit
 - **Grafana dashboard** — telemetry health + security posture
+
+---
+
+## Build and Run
+
+Run these commands from `olopa/agent`.
+
+### Integrated build system
+
+- `olopa-agent` now uses `agent/build.rs` to build `ebpf` automatically and embed it at compile-time.
+- Default runtime path is embedded bytes via `include_bytes_aligned!`; no manual `OLOPA_EBPF_OBJECT` is required.
+- `OLOPA_EBPF_OBJECT=/abs/path/to/olopa-ebpf` can still be used to override the embedded artifact at runtime.
+
+### Compile individual crates
+
+- Userspace agent:
+  - `cargo check --manifest-path Cargo.toml -p olopa-agent`
+- Shared common crate:
+  - `cargo check --manifest-path Cargo.toml -p olopa-common`
+- eBPF crate (requires nightly + build-std for `core`):
+  - `cargo +nightly check --manifest-path ebpf/Cargo.toml -Z build-std=core --target bpfel-unknown-none`
+
+### Compile all (recommended)
+
+- `cargo check --manifest-path Cargo.toml -p olopa-agent`
+  - This compiles userspace and triggers eBPF compilation through `build.rs`.
+
+### Run sample userspace program
+
+- `RUST_LOG=info cargo run --manifest-path Cargo.toml -p olopa-agent -- --iface lo`
