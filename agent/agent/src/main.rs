@@ -6,6 +6,7 @@
 //! Attachment map:
 //!   xdp_filter  → XDP hook on <iface>        (NIC driver level, ~150ns)
 //!   tc_egress   → TC clsact egress on <iface> (after routing, has PID context)
+//!   on_sched_process_fork → tracepoint sched/sched_process_fork
 //!   on_execve   → tracepoint syscalls/sys_enter_execve
 //!   on_openat   → tracepoint syscalls/sys_enter_openat
 //!   on_connect  → tracepoint syscalls/sys_enter_connect
@@ -78,8 +79,9 @@ async fn main() -> Result<()> {
     // attach_tc(&mut bpf, &opt.iface)?;
 
     // ── Attach tracepoints ──────────────────────────────────────────────
-    attach_tracepoint(&mut bpf, "on_execve",  "syscalls", "sys_enter_execve")?;
-    attach_tracepoint(&mut bpf, "on_openat",  "syscalls", "sys_enter_openat")?;
+    // attach_tracepoint(&mut bpf, "on_sched_process_fork", "sched", "sched_process_fork")?;
+    // attach_tracepoint(&mut bpf, "on_execve",  "syscalls", "sys_enter_execve")?;
+    // attach_tracepoint(&mut bpf, "on_openat",  "syscalls", "sys_enter_openat")?;
     attach_tracepoint(&mut bpf, "on_connect", "syscalls", "sys_enter_connect")?;
 
     info!("all probes attached — reading events (Ctrl-C to stop)");
@@ -112,8 +114,8 @@ async fn main() -> Result<()> {
     // When bpf drops here, Aya automatically detaches all attached programs.
 }
 
-// ── Probe attachment helpers ──────────────────────────────────────────────────
 
+// ── Probe attachment helpers ──────────────────────────────────────────────────
 fn attach_xdp(bpf: &mut Ebpf, iface: &str) -> Result<()> {
     let prog: &mut Xdp = bpf
         .program_mut("xdp_filter")
@@ -145,6 +147,7 @@ fn attach_xdp(bpf: &mut Ebpf, iface: &str) -> Result<()> {
     Ok(())
 }
 
+
 fn attach_tc(bpf: &mut Ebpf, iface: &str) -> Result<()> {
     // TC requires a clsact qdisc on the interface.
     // Aya creates this automatically via netlink when we attach.
@@ -162,6 +165,7 @@ fn attach_tc(bpf: &mut Ebpf, iface: &str) -> Result<()> {
     info!("TC egress attached on {}", iface);
     Ok(())
 }
+
 
 fn attach_tracepoint(
     bpf:      &mut Ebpf,
@@ -213,6 +217,7 @@ fn drain_ring_buffer(ring: &mut RingBuf<&mut aya::maps::MapData>) {
         }
     }
 }
+
 
 fn handle_exec(e: &ExecEvent) {
     let comm     = cstr_to_str(&e.comm);

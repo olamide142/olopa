@@ -12,12 +12,43 @@ use aya_ebpf::{
         bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid,
         bpf_ktime_get_ns, bpf_probe_read_user_str_bytes,
     },
-    macros::tracepoint,
+    macros::{map, tracepoint},
+    maps::HashMap,
     programs::TracePointContext,
 };
 use olopa_common::ExecEvent;
 
 use crate::EVENTS;
+
+#[map]
+static PID_LINEAGE: HashMap<u32, u32> = HashMap::with_max_entries(32768, 0);
+
+#[tracepoint]
+pub fn on_sched_process_fork(ctx: TracePointContext) -> u32 {
+    unsafe { try_sched_process_fork(&ctx) }
+}
+
+unsafe fn try_sched_process_fork(ctx: &TracePointContext) -> u32 {
+    // tracepoint:sched:sched_process_fork
+    // parent_pid @ offset 24, child_pid @ offset 44
+    let parent_pid: i32 = match ctx.read_at(24) {
+        Ok(pid) => pid,
+        Err(_) => return 1,
+    };
+    let child_pid: i32 = match ctx.read_at(44) {
+        Ok(pid) => pid,
+        Err(_) => return 1,
+    };
+
+    if parent_pid <= 0 || child_pid <= 0 {
+        return 1;
+    }
+
+    let child_pid = child_pid as u32;
+    let parent_pid = parent_pid as u32;
+    let _ = PID_LINEAGE.insert(&child_pid, &parent_pid, 0);
+    0
+}
 
 #[tracepoint]
 pub fn on_execve(ctx: TracePointContext) -> u32 {
@@ -39,8 +70,12 @@ unsafe fn try_execve(ctx: &TracePointContext) -> u32 {
     (*event).ts_ns = bpf_ktime_get_ns();
 
     let pid_tgid  = bpf_get_current_pid_tgid();
-    (*event).pid  = (pid_tgid >> 32) as u32;
-    (*event).ppid = 0; // TODO: sched_process_fork kprobe for lineage
+    let pid = (pid_tgid >> 32) as u32;
+    (*event).pid  = pid;
+    (*event).ppid = match PID_LINEAGE.get(&pid) {
+        Some(ppid) => *ppid,
+        None => 0,
+    };
 
     let uid_gid  = bpf_get_current_uid_gid();
     (*event).uid = uid_gid as u32;
