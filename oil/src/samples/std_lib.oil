@@ -1,0 +1,19 @@
+set shells = ["sh", "bash", "zsh", "dash"]
+set temp_paths = ["/tmp", "/var/tmp", "/dev/shm"]
+
+predicate is_shell(p) =
+  p.name in shells
+
+predicate is_temp_path(path) =
+  path under temp_paths
+
+predicate is_interactive(p) =
+  p.tty == true or p.parent.name in shells
+
+predicate is_sensitive_credential(path) =
+  path matches [
+    "/etc/shadow",
+    "/root/.ssh/id_rsa",
+    "/home/*/.ssh/id_rsa",
+    "~/.aws/credentials"
+  ]

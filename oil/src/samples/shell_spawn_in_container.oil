@@ -1,0 +1,42 @@
+set shell_binaries = ["sh", "bash", "dash", "zsh", "fish"]
+
+predicate is_shell(p) = p.name in shell_binaries
+
+rule "interactive_shell_in_container" {
+  from endpoint.process, container.runtime
+
+  correlate
+    process.spawn as p
+    with container.context as c on c.container_id == p.container_id
+
+  where
+    is_shell(p)
+    and c.exists == true
+    and c.image.repo not in approved_debug_images
+
+  let
+    prod = c.tags contains "prod"
+    k8s = c.orchestrator == "kubernetes"
+    interactive = p.tty == true
+    suspicious_parent = p.parent.name not in ["pause", "tini", "entrypoint.sh"]
+
+  score
+    45
+    +20 if prod
+    +15 if interactive
+    +10 if suspicious_parent
+    +10 if k8s
+    +10 if p.user.name == "root"
+
+  emit
+    fact container.interactive_shell(c.container_id) expires 2h
+
+  respond
+    if score >= 75 {
+      alert critical
+      snapshot p, c
+      open case "Interactive shell in container"
+    } else {
+      alert medium
+    }
+}

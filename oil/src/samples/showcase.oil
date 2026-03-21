@@ -1,0 +1,47 @@
+use intel.malicious_domains
+use baseline.workload_profiles
+
+rule "container_shell_credential_access_and_egress" {
+  from endpoint.process, endpoint.file, network.flow, container.runtime, k8s.workload
+
+  correlate
+    process.spawn as p
+    with file.open as f on f.process_id == p.id
+    with network.connect as n on n.process_id == p.id
+    with container.context as c on c.container_id == p.container_id
+    with workload.info as w on w.pod_uid == c.pod_uid
+
+  where
+    p.name in ["bash", "sh", "zsh"]
+    and f.path matches ["/etc/shadow", "/root/.ssh/id_rsa", "~/.aws/credentials"]
+    and n.dest.domain in malicious_domains
+
+  within 15m
+
+  let
+    prod = w.namespace in ["prod", "payments", "identity"]
+    interactive = p.tty == true
+    rare_process = p.name not in workload_profiles[w.name].allowed_processes
+    unusual_dest = n.dest.domain not in host(p.host_id).baseline.domains
+
+  score
+    70
+    +10 if prod
+    +10 if interactive
+    +10 if rare_process
+    +10 if unusual_dest
+
+  emit
+    fact host.compromise_candidate(host.id) expires 24h
+
+  respond
+    if score >= 90 {
+      alert critical
+      isolate host
+      snapshot p, f, n, c, w
+      open case "Container credential access and egress chain"
+    } else {
+      alert high
+      snapshot p, f, n
+    }
+}

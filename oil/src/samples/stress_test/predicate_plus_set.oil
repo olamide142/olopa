@@ -1,0 +1,13 @@
+set shells = ["bash", "sh", "zsh"]
+
+predicate interactive_shell(p) =
+  p.name in shells and p.tty == true
+
+rule "shell_in_container" {
+  from endpoint.process, container.runtime
+  correlate
+    process.spawn as p
+    with container.context as c on c.container_id == p.container_id
+  where interactive_shell(p) and c.exists == true
+  respond alert high
+}

@@ -1,0 +1,45 @@
+set executable_dirs = [
+  "/bin",
+  "/sbin",
+  "/usr/bin",
+  "/usr/sbin",
+  "/usr/local/bin",
+  "/usr/local/sbin"
+]
+
+rule "binary_directory_modification" {
+  from endpoint.file, endpoint.process
+
+  correlate
+    file.write as f by process as p
+
+  where
+    f.path under executable_dirs
+
+  let
+    package_mgmt = p.name in ["apt", "apt-get", "dpkg", "yum", "dnf", "rpm"]
+    interactive = p.parent.name in ["bash", "sh", "zsh"]
+    suspicious_path = p.binary.path under ["/tmp", "/var/tmp", "/dev/shm"]
+
+  score
+    60
+    -30 if package_mgmt
+    +15 if interactive
+    +20 if suspicious_path
+    +10 if p.user.name != "root"
+
+  require
+    score >= 40
+
+  emit
+    fact host.binary_tamper(host.id) expires 24h
+
+  respond
+    if score >= 80 {
+      alert critical
+      snapshot p, f
+      open case "Executable directory modification"
+    } else {
+      alert medium
+    }
+}

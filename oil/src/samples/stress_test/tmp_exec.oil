@@ -1,0 +1,6 @@
+rule "tmp_exec" {
+  from endpoint.process
+  correlate process.exec as p
+  where p.binary.path under "/tmp"
+  respond alert high
+}

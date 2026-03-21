@@ -1,0 +1,18 @@
+rule "temp_exec_scored" {
+  from endpoint.process
+  correlate process.exec as p
+  where p.binary.path under "/tmp"
+  let
+    unsigned = p.binary.signed == false
+    shell_parent = p.parent.name in ["bash", "sh"]
+  score
+    40
+    +20 if unsigned
+    +10 if shell_parent
+  respond
+    if score >= 60 {
+      alert critical
+    } else {
+      alert medium
+    }
+}

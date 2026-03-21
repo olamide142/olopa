@@ -1,0 +1,60 @@
+set critical_config_paths = [
+  "/etc/passwd",
+  "/etc/shadow",
+  "/etc/sudoers",
+  "/etc/ssh",
+  "/etc/systemd/system"
+]
+
+set trusted_config_writers = [
+  "apt",
+  "apt-get",
+  "dpkg",
+  "yum",
+  "dnf",
+  "systemd",
+  "sudo",
+  "visudo"
+]
+
+predicate writes_critical_config(f) =
+  f.path in critical_config_paths
+  or f.path under "/etc/ssh"
+  or f.path under "/etc/systemd/system"
+
+rule "critical_config_tamper" {
+  from endpoint.file, endpoint.process
+
+  correlate
+    file.write as f by process as p
+
+  where
+    writes_critical_config(f)
+    and p.name not in trusted_config_writers
+    and p.parent.name not in trusted_config_writers
+
+  let
+    interactive = p.parent.name in ["bash", "sh", "zsh", "fish"]
+    unusual_user = p.user.name not in ["root", "ansible", "chef", "puppet"]
+    stealthy_path = f.path in ["/etc/shadow", "/etc/sudoers"]
+
+  score
+    50
+    +20 if interactive
+    +15 if unusual_user
+    +20 if stealthy_path
+    +10 if p.elevated
+
+  emit
+    fact host.config_tamper(host.id) expires 6h
+
+  respond
+    if score >= 80 {
+      alert critical
+      snapshot process_tree(p)
+      open case "Critical config tampering"
+    } else {
+      alert high
+      snapshot p, f
+    }
+}

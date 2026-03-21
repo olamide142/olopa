@@ -1,0 +1,9 @@
+rule "shell_then_egress" {
+  from endpoint.process, network.flow
+  correlate
+    process.spawn as p
+    with network.connect as n on n.process_id == p.id
+  where p.name in ["bash", "sh"] and n.direction == "outbound"
+  within 5m
+  respond alert critical
+}

@@ -1,0 +1,36 @@
+rule "unexpected_process_in_container" {
+  from endpoint.process, container.runtime, k8s.workload
+
+  correlate
+    process.exec as p
+    with container.context as c on c.container_id == p.container_id
+    with workload.info as w on w.pod_uid == c.pod_uid
+
+  where
+    c.exists == true
+
+  let
+    rare_for_image = p.name not in baseline.image(c.image.id).allowed_processes
+    rare_for_workload = p.name not in baseline.workload(w.namespace, w.name).allowed_processes
+    shell = p.name in ["bash", "sh", "zsh"]
+    admin_tool = p.name in ["curl", "wget", "nc", "nmap"]
+
+  score
+    35
+    +25 if rare_for_image
+    +20 if rare_for_workload
+    +10 if shell
+    +10 if admin_tool
+    +10 if p.tty == true
+
+  require
+    score >= 50
+
+  respond
+    if score >= 80 {
+      alert critical
+      snapshot p, c, w
+    } else {
+      alert high
+    }
+}

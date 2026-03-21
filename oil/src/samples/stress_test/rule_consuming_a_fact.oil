@@ -1,0 +1,6 @@
+rule "dns_anomaly_plus_egress" {
+  from network.flow
+  correlate network.connect as n by host
+  where host.dns_anomaly(host.id) and n.dest.reputation == "suspicious"
+  respond alert critical
+}

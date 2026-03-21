@@ -1,0 +1,9 @@
+rule "suspicious_dns_burst" {
+  from dns.query
+  correlate dns.query as q by host
+  where q.domain.entropy > 4.2
+  within 2m
+  require count(q) >= 50
+  emit fact host.dns_anomaly(host.id) expires 1h
+  respond alert high
+}

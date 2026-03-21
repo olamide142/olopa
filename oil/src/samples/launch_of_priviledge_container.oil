@@ -1,0 +1,36 @@
+rule "privileged_container_started" {
+  from container.runtime, k8s.admission, identity.session
+
+  correlate
+    container.start as c
+    with session.use as s on s.user_id == c.initiator.user_id
+
+  where
+    c.security.privileged == true
+
+  let
+    host_ns = c.namespaces.host_pid or c.namespaces.host_network or c.namespaces.host_ipc
+    dangerous_caps = count(c.capabilities.added) > 0
+    prod = c.labels.environment == "production"
+    initiator_new_geo = s.country not in user(s.user_id).baseline.countries
+
+  score
+    60
+    +15 if host_ns
+    +15 if dangerous_caps
+    +15 if prod
+    +10 if c.image.tag == "latest"
+    +10 if initiator_new_geo
+
+  emit
+    fact container.high_risk(c.container_id) expires 24h
+
+  respond
+    if score >= 85 {
+      alert critical
+      open case "Privileged container launched"
+      snapshot c, s
+    } else {
+      alert high
+    }
+}
