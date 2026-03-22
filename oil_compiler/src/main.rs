@@ -3,10 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-
-mod lexer;
-
-use lexer::Lexer;
+use oilc::{compile, CompilerConfig};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -22,7 +19,11 @@ struct OilCompilerArgs {
 
     #[arg(long, default_value_t = false)]
     dump_tokens: bool,
+
+    #[arg(long, default_value_t = false)]
+    dump_ast: bool,
 }
+
 
 fn main() -> Result<()> {
     let args = OilCompilerArgs::parse();
@@ -50,26 +51,45 @@ fn main() -> Result<()> {
             }
         };
 
-        let mut lexer = Lexer::new(&src);
-        match lexer.tokenize().map_err(|e| anyhow::anyhow!(e)) {
-            Ok(tokens) => {
+        let config = CompilerConfig; // TODO: what should this be?
+        match compile(&src, &config) {
+            Ok(output) => {
                 succeeded += 1;
                 println!(
                     "[oilc] tokenized {} tokens from {}",
-                    tokens.len(),
+                    output.tokens.len(),
                     file.display()
                 );
 
                 if args.dump_tokens {
                     println!("--- tokens: {} ---", file.display());
-                    for tok in &tokens {
+                    for tok in &output.tokens {
                         println!("{:?} @ {:?}", tok.kind, tok.span);
                     }
                 }
+
+                if args.dump_ast {
+                    println!("--- ast: {} ---", file.display());
+                    if let Some(program) = &output.program {
+                        println!("{:#?}", program);
+                    } else {
+                        println!("<no AST produced>");
+                    }
+                }
             }
-            Err(e) => {
+            Err(diags) => {
                 failed += 1;
-                eprintln!("[oilc] error in {}: {e}", file.display());
+                eprintln!("[oilc] error in {}:", file.display());
+                for d in diags {
+                    if let Some(span) = d.span {
+                        eprintln!(
+                            "  [{}] {} (span {}..{})",
+                            d.stage, d.message, span.start, span.end
+                        );
+                    } else {
+                        eprintln!("  [{}] {}", d.stage, d.message);
+                    }
+                }
             }
         }
     }

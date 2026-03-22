@@ -1,9 +1,13 @@
 // Pipeline entrypoint
 // Top-level compilation pipeline
 mod lexer;
+mod parser;
+pub mod ast;
 
 use lexer::Lexer;
 use std::ops::Range;
+
+pub use parser::{ParseError, Parser};
 
 #[derive(Debug, Clone, Default)]
 pub struct CompilerConfig;
@@ -18,6 +22,7 @@ pub struct Diagnostic {
 #[derive(Debug, Clone, Default)]
 pub struct CompileOutput {
     pub tokens: Vec<lexer::Token>,
+    pub program: Option<ast::Program>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -33,9 +38,22 @@ pub fn compile(source: &str, config: &CompilerConfig) -> Result<CompileOutput, V
         }]
     })?;
 
-    // Stage 2+: parser/type/mir/codegen are still under construction.
+    // Stage 2: Parse top-level program.
+    let mut parser = Parser::new(tokens.clone());
+    let program = parser.parse().map_err(|errs| {
+        errs.into_iter()
+            .map(|e| Diagnostic {
+                stage: "parse",
+                message: e.message,
+                span: Some(e.span),
+            })
+            .collect::<Vec<_>>()
+    })?;
+
+    // Stage 3+: type/mir/codegen are still under construction.
     Ok(CompileOutput {
         tokens,
+        program: Some(program),
         diagnostics: Vec::new(),
     })
 }

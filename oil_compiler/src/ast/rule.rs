@@ -1,141 +1,141 @@
-// A complete detection or correlation rule
+use super::actions::{LetBinding, RespondBlock, ScoreExpr};
+use super::expr::Expr;
+use super::{OilDuration, Spanned};
 
-#[derive(Debug, Clone)]
+/// Complete rule declaration.
+#[derive(Debug, Clone, PartialEq)]
 pub struct RuleDecl {
-    pub meta:     Option<MetaBlock>,
-    pub name:     Spanned<String>,
-    pub sources:  Vec<SourceSpec>,
-    pub body:     Spanned<RuleBody>,
-    pub where_:   Option<Spanned<Expr>>,
-    pub within:   Option<Spanned<Duration>>,
-    pub require:  Option<Spanned<RequireClause>>,
-    pub lets:     Vec<LetBinding>,
-    pub score:    Option<Spanned<ScoreExpr>>,
-    pub verify:   Option<VerifyClause>,
-    pub emit:     Vec<EmitStmt>,
-    pub respond:  Spanned<RespondBlock>,
+    pub meta: Option<MetaBlock>,
+    pub name: Spanned<String>,
+    pub sources: Vec<SourceSpec>,
+    pub body: Spanned<RuleBody>,
+    pub where_: Option<Spanned<Expr>>,
+    pub within: Option<Spanned<OilDuration>>,
+    pub require: Option<Spanned<RequireClause>>,
+    pub lets: Vec<LetBinding>,
+    pub score: Option<Spanned<ScoreExpr>>,
+    pub verify: Option<VerifyClause>,
+    pub emit: Vec<EmitStmt>,
+    pub respond: Spanned<RespondBlock>,
 }
 
-
-/// Meta information block
-#[derive(Debug, Clone)]
+/// Rule metadata block.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct MetaBlock {
-    pub severity:    Option<String>,
-    pub mitre:       Vec<String>,
-    pub tags:        Vec<String>,
+    pub severity: Option<String>,
+    pub mitre: Vec<String>,
+    pub tags: Vec<String>,
     pub description: Option<String>,
 }
 
-
-/// Event source reference
-#[derive(Debug, Clone)]
+/// Event source reference, e.g. `endpoint.process as p`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct SourceSpec {
-    pub domain: String,      // "endpoint"
-    pub event:  String,      // "process"
-    pub alias:  Option<Spanned<String>>,
+    pub domain: String,
+    pub event: String,
+    pub alias: Option<Spanned<String>>,
 }
 
-
-/// Rule body — one of four correlation modes
-#[derive(Debug, Clone)]
+/// Rule body variants.
+#[derive(Debug, Clone, PartialEq)]
 pub enum RuleBody {
-    /// Single stream: match event [then event ...]
     Match(MatchBlock),
-    /// Multi-stream: correlate A with B on join-key
     Correlate(CorrelateBlock),
-    /// Graph: structural path pattern
     Graph(GraphBlock),
-    /// Entity-anchored: gather events around an entity
     Around(AroundBlock),
 }
 
-
-/// Sequential event match
-#[derive(Debug, Clone)]
+/// Sequential event matching.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct MatchBlock {
-    pub steps:   Vec<MatchStep>,  // connected by "then"
+    pub steps: Vec<MatchStep>,
 }
 
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MatchStep {
-    pub event:   Spanned<EventPattern>,
-    pub alias:   Option<Spanned<String>>,
-    pub by:      Option<Spanned<String>>,  // bound variable (e.g. process p)
+    pub event: Spanned<EventPattern>,
+    pub alias: Option<Spanned<String>>,
+    pub by: Option<Spanned<String>>,
 }
 
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EventPattern {
     pub domain: String,
-    pub kind:   String,
+    pub kind: String,
 }
 
-
-/// Multi-stream correlation
-#[derive(Debug, Clone)]
+/// Multi-stream correlation.
+#[derive(Debug, Clone, PartialEq)]
 pub struct CorrelateBlock {
-    pub mode:  CorrelateMode,
-    pub arms:  Vec<CorrelateArm>,
+    pub mode: CorrelateMode,
+    pub arms: Vec<CorrelateArm>,
 }
 
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CorrelateMode {
-    All,   // all arms must match
-    Any,   // at least one arm must match
-    AtLeast(usize), // N or more arms must match
+    All,
+    Any,
+    AtLeast(usize),
 }
 
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CorrelateArm {
-    pub event:    Spanned<EventPattern>,
-    pub alias:    Spanned<String>,
-    pub join:     CorrelateJoin,
+    pub event: Spanned<EventPattern>,
+    pub alias: Spanned<String>,
+    pub join: CorrelateJoin,
 }
 
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CorrelateJoin {
-    /// Implicit join by shared entity variable: "by user"
     ByVariable(Spanned<String>),
-    /// Explicit join predicate: "on a.user_id == b.user_id"
     OnPredicate(Spanned<Expr>),
-    /// No explicit join — time window correlation only
     None,
 }
 
-
-/// Graph structural pattern
-#[derive(Debug, Clone)]
+/// Graph structural block.
+#[derive(Debug, Clone, PartialEq)]
 pub struct GraphBlock {
-    pub source:   SourceSpec,
+    pub source: SourceSpec,
     pub patterns: Vec<GraphPattern>,
 }
 
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GraphPattern {
     pub entity_type: String,
-    pub alias:       Spanned<String>,
-    pub edge_type:   Option<String>,  // if None, any edge
+    pub alias: Spanned<String>,
+    pub edge_type: Option<String>,
 }
 
-
-/// Entity-anchored gather block
-#[derive(Debug, Clone)]
+/// Entity-anchored gather block.
+#[derive(Debug, Clone, PartialEq)]
 pub struct AroundBlock {
-    pub entity:   Spanned<String>,
-    pub window:   Spanned<Duration>,
-    pub arms:     Vec<GatherArm>,
+    pub entity: Spanned<String>,
+    pub window: Spanned<OilDuration>,
+    pub arms: Vec<GatherArm>,
 }
 
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GatherArm {
     pub event: Spanned<EventPattern>,
     pub alias: Spanned<String>,
 }
 
+/// Require clause placeholder.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RequireClause {
+    pub expr: Spanned<Expr>,
+}
 
+/// Verify clause placeholder.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerifyClause {
+    pub expr: Spanned<Expr>,
+}
+
+/// Fact emission statement placeholder.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmitStmt {
+    pub fact_name: Spanned<String>,
+    pub args: Vec<Spanned<Expr>>,
+    pub expires: Option<Spanned<OilDuration>>,
+}
