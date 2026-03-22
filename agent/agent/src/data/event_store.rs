@@ -40,9 +40,9 @@ pub struct ColdEvent {
     pub uid:       u32,       // effective UID at exec time
     pub gid:       u32,       // effective GID at exec time
     pub comm_id:   u32,       // string→int assigned at eBPF layer
-    pub _pad:      [u8; 20],  // explicit padding to 128 bytes
+    pub _pad:      [u8; 16],  // explicit padding to 128 bytes
 }
-// 32+32+32 = 96 bytes of hashes + 16 bytes of integers + 20 pad = 128 bytes.
+// 32+32+32 = 96 bytes of hashes + 16 bytes of integers + 16 pad = 128 bytes.
 // Sensitive data (argv, paths, env) is hashed — never stored raw.
 // Preserves searchability: query by hash, not by string.
 
@@ -209,7 +209,7 @@ mod tests {
             path_hash: [0xBB; 32],
             env_hash:  [0xCC; 32],
             ppid: 1241, uid: 33, gid: 33, comm_id: 7,
-            _pad: [0; 20],
+            _pad: [0; 16],
         };
 
         let id = store.push(hot, cold).expect("push should succeed");
@@ -232,7 +232,7 @@ mod tests {
             let hot  = HotEvent { ts_ns: i as u64, pid: i, risk_score: risk };
             let cold = ColdEvent {
                 argv_hash: [0; 32], path_hash: [0; 32], env_hash: [0; 32],
-                ppid: 0, uid: 0, gid: 0, comm_id: 0, _pad: [0; 20],
+                ppid: 0, uid: 0, gid: 0, comm_id: 0, _pad: [0; 16],
             };
             store.push(hot, cold).unwrap();
         }

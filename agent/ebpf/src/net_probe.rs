@@ -4,10 +4,10 @@
 //! Combined with exec_probe, enables kill chain reconstruction:
 //!   nginx (1241) spawned bash (4821) → bash connected to 185.x.x.x:4444
 //!
-//! sys_enter_connect args:
-//!   offset  0: int fd
-//!   offset  8: struct sockaddr* addr
-//!   offset 16: int addrlen
+//! sys_enter_connect args (after tracepoint common header):
+//!   ctx.read_at(16): int fd
+//!   ctx.read_at(24): struct sockaddr* addr
+//!   ctx.read_at(32): int addrlen
 //!
 //! Strategy: do ALL validation before reserving the ring buffer slot.
 //! This avoids needing to discard on most early-exit paths.
@@ -38,9 +38,15 @@ pub fn on_connect(ctx: TracePointContext) -> u32 {
 }
 
 unsafe fn try_connect(ctx: &TracePointContext) -> u32 {
-    // All validation happens BEFORE reservation — clean early returns, no discard needed.
+    const AF_INET: u16 = 2;
 
-    let addr_ptr: u64 = match ctx.read_at(8) {
+    let fd_raw: i64 = match ctx.read_at(16) {
+        Ok(v) => v,
+        Err(_) => return 1,
+    };
+    let _fd = fd_raw as i32;
+
+    let addr_ptr: u64 = match ctx.read_at(24) {
         Ok(p) => p,
         Err(_) => return 1,
     };
@@ -48,24 +54,30 @@ unsafe fn try_connect(ctx: &TracePointContext) -> u32 {
         return 0;
     }
 
-    // Check address family — only IPv4 (AF_INET=2) for now
-    let _family: u16 = match bpf_probe_read_user(addr_ptr as *const u16) {
+    let addrlen_raw: i64 = match ctx.read_at(32) {
+        Ok(v) => v,
+        Err(_) => return 1,
+    };
+    let addrlen = addrlen_raw as i32;
+
+    if addrlen < core::mem::size_of::<SockAddrIn>() as i32 {
+        return 0;
+    }
+
+    let family: u16 = match bpf_probe_read_user(addr_ptr as *const u16) {
         Ok(f) => f,
         Err(_) => return 1,
     };
 
-    // Read full sockaddr_in
+    if family != AF_INET {
+        return 0;
+    }
+
     let addr: SockAddrIn = match bpf_probe_read_user(addr_ptr as *const SockAddrIn) {
         Ok(a) => a,
         Err(_) => return 1,
     };
 
-    // Skip loopback 127.x.x.x
-    if addr.sin_addr & 0xFF == 0x7F {
-        return 0;
-    }
-
-    // Validation done — now reserve. Only one exit path from here: submit.
     let mut entry = match EVENTS.reserve::<NetEvent>(0) {
         Some(e) => e,
         None => return 1,
@@ -73,19 +85,20 @@ unsafe fn try_connect(ctx: &TracePointContext) -> u32 {
 
     let event = entry.as_mut_ptr();
 
-    (*event).ts_ns    = bpf_ktime_get_ns();
-    (*event).dst_ip   = addr.sin_addr;
+    (*event).ts_ns = bpf_ktime_get_ns();
+    // Keep network-byte-order values in the event payload.
+    // Userspace is responsible for converting for display.
+    (*event).dst_ip = addr.sin_addr;
     (*event).dst_port = addr.sin_port;
-    (*event).proto    = 6; // TCP
-    (*event)._pad     = 0;
+    (*event).proto = 6;
+    (*event)._pad = 0;
 
     let pid_tgid = bpf_get_current_pid_tgid();
     (*event).pid = (pid_tgid >> 32) as u32;
 
-    let uid_gid  = bpf_get_current_uid_gid();
+    let uid_gid = bpf_get_current_uid_gid();
     (*event).uid = uid_gid as u32;
 
-    // bpf_get_current_comm() takes no args — returns Result<[u8; 16], i64>
     (*event).comm = match bpf_get_current_comm() {
         Ok(comm) => comm,
         Err(_) => {

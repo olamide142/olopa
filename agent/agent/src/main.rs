@@ -16,24 +16,34 @@
 //!   WiFi drivers (wlo1, wlan0) almost never do. The agent automatically
 //!   falls back to XDP SKB_MODE which works on all interfaces but is slower.
 //!   TC works on all interface types without a fallback needed.
+mod agent;
+mod budget_tracker;
+mod probe_manager;
+mod data;
 
-use anyhow::{Context, Result};
-use aya::{
-    include_bytes_aligned,
-    maps::RingBuf,
-    programs::{
-        tc::{SchedClassifier, TcAttachType},
-        TracePoint, Xdp, XdpFlags,
-    },
-    Ebpf,
-};
-use aya_log::EbpfLogger;
+use anyhow::Result;
+
 use clap::Parser;
-use log::{info, warn};
-use olopa_common::{ExecEvent, FileEvent, NetEvent};
-use tokio::signal;
+use log::info;
+use std::time::{
+    Duration, Instant
+};
 
-// ── CLI ──────────────────────────────────────────────────────────────────────
+use crate::agent::{
+    BatcherLike, BatcherPush, 
+    EventStoreLike, GraphLike, 
+    IngestEvent, MetricAggregatorLike, 
+    OlopaAgent, RelevanceScorerLike, 
+    RuleEngineLike, SchedulerLike,
+    SenderLike, SenderStats,
+};
+use crate::budget_tracker::{
+    BudgetSnapshot, BudgetTracker
+};
+use crate::probe_manager::ProbeManager;
+
+
+// ── CLI
 
 #[derive(Debug, Parser)]
 #[command(name = "olopa-agent", about = "Olopa kernel security agent")]
@@ -41,14 +51,15 @@ struct Opt {
     /// Network interface to attach XDP and TC programs to.
     /// Use `ip link show` to find your interface name.
     /// Examples: eth0, ens3, wlo1, wlan0
-    #[arg(short, long, default_value = "wl01")]
+    #[arg(short, long, default_value = "wlo1")]
     iface: String,
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
+// ── Entry point 
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Parse CLI args and initialize logger first so every later step is observable.
     let opt = Opt::parse();
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info"),
@@ -57,213 +68,262 @@ async fn main() -> Result<()> {
 
     info!("olopa-agent starting | iface={}", opt.iface);
 
-    // ── Load the eBPF object ─────────────────────────────────────────────
-    // The ELF was compiled by build.rs and embedded into this binary.
-    // include_bytes_aligned! ensures the bytes are aligned to 8 bytes
-    // as required by the eBPF loader.
-    info!("{:?}",env!("OUT_DIR"));
-    let mut bpf = Ebpf::load(include_bytes_aligned!(
-        concat!(env!("OUT_DIR"), "/olopa-ebpf-bin")
-    )).context("failed to load embedded eBPF object")?;
+    // 1) Load embedded eBPF object + maps into userspace handle.
+    let mut agent: OlopaAgent = OlopaAgent::new()?;
 
-    // eBPF-side logging (optional — may fail on older kernels, non-fatal)
-    if let Err(e) = EbpfLogger::init(&mut bpf) {
-        warn!("eBPF logger unavailable (kernel too old?): {e}");
-    }
+    // 2) Attach kernel probes (tracepoint/XDP/TC depending on ProbeManager policy).
+    let mut probe_manager = ProbeManager::new();
+    probe_manager.attach_defaults(agent.bpf_mut(), &opt.iface)?;
+    info!("olopa-agent initialized and probes attached");
 
-    // ── Attach XDP ──────────────────────────────────────────────────────
-    // XDP_FILTER is the function name in xdp.rs — must match exactly.
-    // attach_xdp(&mut bpf, &opt.iface)?;
+    // 3) Wire concrete runtime components.
+    // These `Simple*` implementations are intentionally lightweight bootstrap
+    // adapters so we can run the orchestrator loop end-to-end today.
+    let mut relevance_scorer = SimpleRelevanceScorer;
+    let mut event_store = SimpleEventStore::default();
+    let mut graph = SimpleGraph::default();
+    let mut metric_aggregator = SimpleMetricAggregator::default();
+    let mut rule_engine = SimpleRuleEngine;
+    let mut scheduler = SimpleScheduler::default();
+    let mut batcher = SimpleBatcher::default();
+    let mut sender = SimpleSender::default();
+    let mut budget_tracker = BudgetTracker::new();
 
-    // ── Attach TC egress ────────────────────────────────────────────────
-    // attach_tc(&mut bpf, &opt.iface)?;
-
-    // ── Attach tracepoints ──────────────────────────────────────────────
-    // attach_tracepoint(&mut bpf, "on_sched_process_fork", "sched", "sched_process_fork")?;
-    // attach_tracepoint(&mut bpf, "on_execve",  "syscalls", "sys_enter_execve")?;
-    // attach_tracepoint(&mut bpf, "on_openat",  "syscalls", "sys_enter_openat")?;
-    attach_tracepoint(&mut bpf, "on_connect", "syscalls", "sys_enter_connect")?;
-
-    info!("all probes attached — reading events (Ctrl-C to stop)");
-
-    // ── Ring buffer reader ───────────────────────────────────────────────
-    // Spawn a blocking task to drain the ring buffer continuously.
-    // We use spawn_blocking because the ring buffer poll is not async-native.
-    let ring_map = bpf
-        .map_mut("EVENTS")
-        .context("EVENTS ring buffer map not found")?;
-
-    let mut ring = RingBuf::try_from(ring_map)
-        .context("failed to open EVENTS as RingBuf")?;
-
-    // Run the event loop until Ctrl-C
-    loop {
-        tokio::select! {
-            _ = signal::ctrl_c() => {
-                info!("shutting down — detaching probes");
-                break;
-            }
-            // Poll the ring buffer for new events
-            _ = tokio::time::sleep(tokio::time::Duration::from_millis(10)) => {
-                drain_ring_buffer(&mut ring);
-            }
-        }
-    }
+    // 4) Hand control to the orchestrator. This call blocks until shutdown
+    // (Ctrl-C) and runs ingest/scheduler/housekeeping loops internally.
+    agent
+        .run(
+            &mut relevance_scorer,
+            &mut event_store,
+            &mut graph,
+            &mut metric_aggregator,
+            &mut rule_engine,
+            &mut scheduler,
+            &mut batcher,
+            &mut sender,
+            &mut budget_tracker,
+        )
+        .await?;
 
     Ok(())
     // When bpf drops here, Aya automatically detaches all attached programs.
 }
 
+// --- Simple bootstrap components ---
+// These keep main.rs runnable while the full production components are being
+// wired. They satisfy the trait contracts expected by `agent.run(...)`.
 
-// ── Probe attachment helpers ──────────────────────────────────────────────────
-fn attach_xdp(bpf: &mut Ebpf, iface: &str) -> Result<()> {
-    let prog: &mut Xdp = bpf
-        .program_mut("xdp_filter")
-        .context("xdp_filter program not found — check SEC name in xdp.rs")?
-        .try_into()?;
+// Minimal scorer: only clamps risk into [0,1].
+#[derive(Default)]
+struct SimpleRelevanceScorer;
+impl RelevanceScorerLike for SimpleRelevanceScorer {
+    fn score(&mut self, event: &mut IngestEvent) {
+        event.risk_score = event.risk_score.clamp(0.0, 1.0);
+    }
+}
 
-    prog.load().context("failed to load XDP program")?;
+// In-memory event buffer used by scheduler/batcher path in bootstrap mode.
+#[derive(Default)]
+struct SimpleEventStore {
+    // Append-only list of events; index serves as event_id.
+    events: Vec<IngestEvent>,
+}
+impl EventStoreLike for SimpleEventStore {
+    fn push(&mut self, event: IngestEvent) -> Option<usize> {
+        // Store event and return its index so scheduler can reference it later.
+        self.events.push(event);
+        Some(self.events.len() - 1)
+    }
 
-    // Try native mode first (requires driver support — works on most wired NICs)
-    match prog.attach(iface, XdpFlags::default()) {
-        Ok(_) => {
-            info!("XDP attached on {} (native mode)", iface);
+    fn serialize_event(&self, event_id: usize) -> Option<Vec<u8>> {
+        // Convert selected event into wire-ready bytes.
+        self.events.get(event_id).map(|e| {
+            format!(
+                "evt ts={} pid={} uid={} type={} risk={:.3} src={} dst={} comm={}",
+                e.ts_ns, e.pid, e.uid, e.event_type, e.risk_score, e.vertex_id, e.dst_vertex_id, e.comm_id
+            )
+            .into_bytes()
+        })
+    }
+
+    fn unscheduled_event_ids(&self, from: usize) -> Vec<usize> {
+        // Return all new event indices since the caller's cursor.
+        (from..self.events.len()).collect()
+    }
+
+    fn last_event_id(&self) -> usize {
+        // Defensive helper (currently unused in bootstrap path).
+        self.events.len().saturating_sub(1)
+    }
+}
+
+// Minimal graph sink: just counts pending writes until merge.
+#[derive(Default)]
+struct SimpleGraph {
+    pending_edges: usize,
+}
+impl GraphLike for SimpleGraph {
+    fn write_edge(&mut self, _event: &IngestEvent) {
+        // Production graph would persist src->dst with metadata here.
+        self.pending_edges += 1;
+    }
+
+    fn merge_deltas(&mut self) {
+        // Housekeeping fold: clear pending count.
+        self.pending_edges = 0;
+    }
+}
+
+// Minimal metrics collector: counts samples and emits one summary blob per flush.
+#[derive(Default)]
+struct SimpleMetricAggregator {
+    samples: u64,
+}
+impl MetricAggregatorLike for SimpleMetricAggregator {
+    fn record(&mut self, _event: &IngestEvent) {
+        // Production implementation would digest risk/latency distributions.
+        self.samples += 1;
+    }
+
+    fn flush(&mut self) -> Vec<Vec<u8>> {
+        // Emit a single compact summary payload if any samples were observed.
+        if self.samples == 0 {
+            return Vec::new();
         }
-        Err(e) => {
-            // Native failed — fall back to SKB mode (works on WiFi and VMs)
-            warn!("XDP native mode failed on {}: {} — trying SKB_MODE", iface, e);
-            prog.attach(iface, XdpFlags::SKB_MODE)
-                .with_context(|| {
-                    format!(
-                        "XDP attach failed on {} in both native and SKB mode. \
-                         Try: sudo ./olopa-agent --iface <correct-iface>\n\
-                         Available interfaces: run `ip link show`",
-                        iface
-                    )
-                })?;
-            info!("XDP attached on {} (SKB_MODE fallback)", iface);
+        let out = vec![format!("metric samples={}", self.samples).into_bytes()];
+        self.samples = 0;
+        out
+    }
+}
+
+// Minimal rule engine: fires only at very high risk.
+struct SimpleRuleEngine;
+impl RuleEngineLike for SimpleRuleEngine {
+    fn evaluate(&mut self, event: &IngestEvent) -> bool {
+        event.risk_score >= 0.95
+    }
+}
+
+// Minimal scheduler:
+// - queue event_ids during ingest
+// - on solve(), select everything queued (no optimization yet)
+struct SimpleScheduler {
+    pending: Vec<usize>,
+    // Kept to honor update_budget() contract.
+    _budget: BudgetSnapshot,
+}
+impl Default for SimpleScheduler {
+    fn default() -> Self {
+        Self {
+            pending: Vec::new(),
+            _budget: BudgetSnapshot::default_budgets(),
         }
     }
-    Ok(())
+}
+impl SchedulerLike for SimpleScheduler {
+    fn update_budget(&mut self, snapshot: BudgetSnapshot) {
+        // In production this influences solve decisions.
+        self._budget = snapshot;
+    }
+
+    fn enqueue(&mut self, event_id: usize) {
+        // Save candidate event_id for next 500ms scheduler solve.
+        self.pending.push(event_id);
+    }
+
+    fn solve(&mut self) -> Vec<usize> {
+        // Return all currently queued IDs and clear queue.
+        std::mem::take(&mut self.pending)
+    }
 }
 
-
-fn attach_tc(bpf: &mut Ebpf, iface: &str) -> Result<()> {
-    // TC requires a clsact qdisc on the interface.
-    // Aya creates this automatically via netlink when we attach.
-    let _ = aya::programs::tc::qdisc_add_clsact(iface); // ok if already exists
-
-    let prog: &mut SchedClassifier = bpf
-        .program_mut("tc_egress")
-        .context("tc_egress program not found — check SEC name in tc.rs")?
-        .try_into()?;
-
-    prog.load().context("failed to load TC program")?;
-    prog.attach(iface, TcAttachType::Egress)
-        .with_context(|| format!("failed to attach TC egress on {}", iface))?;
-
-    info!("TC egress attached on {}", iface);
-    Ok(())
+// Minimal batcher:
+// - buffers serialized events
+// - triggers flush by size (64 entries) or 500ms timer
+struct SimpleBatcher {
+    pending: Vec<Vec<u8>>,
+    last_flush: Instant,
 }
-
-
-fn attach_tracepoint(
-    bpf:      &mut Ebpf,
-    fn_name:  &str,
-    category: &str,
-    name:     &str,
-) -> Result<()> {
-    let prog: &mut TracePoint = bpf
-        .program_mut(fn_name)
-        .with_context(|| format!("tracepoint program '{}' not found", fn_name))?
-        .try_into()?;
-
-    prog.load()
-        .with_context(|| format!("failed to load tracepoint '{}'", fn_name))?;
-
-    prog.attach(category, name)
-        .with_context(|| format!("failed to attach {}/{}", category, name))?;
-
-    info!("tracepoint attached: {}/{}", category, name);
-    Ok(())
+impl Default for SimpleBatcher {
+    fn default() -> Self {
+        Self {
+            pending: Vec::new(),
+            last_flush: Instant::now(),
+        }
+    }
 }
-
-// ── Ring buffer event handler ─────────────────────────────────────────────────
-
-/// Drain all available events from the ring buffer and dispatch by type.
-/// Called every 10ms — in production this would be replaced with an
-/// io_uring or epoll-based wakeup for true zero-latency delivery.
-fn drain_ring_buffer(ring: &mut RingBuf<&mut aya::maps::MapData>) {
-    use core::mem::size_of;
-
-    while let Some(item) = ring.next() {
-        let data: &[u8] = &item;
-        let len = data.len();
-
-        // Dispatch by event size — each event type has a unique fixed size.
-        // In the next iteration this will use an explicit event_type field
-        // in a common header so we don't rely on size disambiguation.
-        if len == size_of::<ExecEvent>() {
-            let event = unsafe { &*(data.as_ptr() as *const ExecEvent) };
-            handle_exec(event);
-        } else if len == size_of::<FileEvent>() {
-            let event = unsafe { &*(data.as_ptr() as *const FileEvent) };
-            handle_file(event);
-        } else if len == size_of::<NetEvent>() {
-            let event = unsafe { &*(data.as_ptr() as *const NetEvent) };
-            handle_net(event);
+impl BatcherLike for SimpleBatcher {
+    fn push(&mut self, serialized_event: &[u8], _budget: &BudgetSnapshot) -> BatcherPush {
+        // Copy event bytes into pending queue.
+        self.pending.push(serialized_event.to_vec());
+        if self.pending.len() >= 64 {
+            BatcherPush::FlushNeeded
         } else {
-            warn!("unknown event size {} — skipping", len);
+            BatcherPush::Ok
+        }
+    }
+
+    fn flush(&mut self) -> Option<Vec<u8>> {
+        // Join all pending frames into one payload separated by newlines.
+        if self.pending.is_empty() {
+            return None;
+        }
+        let mut out = Vec::new();
+        for item in self.pending.drain(..) {
+            out.extend_from_slice(&item);
+            out.push(b'\n');
+        }
+        self.last_flush = Instant::now();
+        Some(out)
+    }
+
+    fn flush_if_time_triggered(&mut self) -> Option<Vec<u8>> {
+        // Independent periodic trigger used by scheduler tick.
+        if self.last_flush.elapsed() >= Duration::from_millis(500) {
+            self.flush()
+        } else {
+            None
         }
     }
 }
 
-
-fn handle_exec(e: &ExecEvent) {
-    let comm     = cstr_to_str(&e.comm);
-    let filename = cstr_to_str(&e.filename);
-    info!(
-        "[EXEC] pid={} uid={} comm={} file={}",
-        e.pid, e.uid, comm, filename
-    );
-    // TODO: forward to relevance scorer → OR scheduler → gRPC sender
+// Minimal sender:
+// - if spooling=false, counts "sent" payloads
+// - if spooling=true, stores payloads in memory spool
+#[derive(Default)]
+struct SimpleSender {
+    sent: u64,
+    spooled: Vec<Vec<u8>>,
+    spooling: bool,
 }
+impl SenderLike for SimpleSender {
+    fn send_or_spool(&mut self, payload: Vec<u8>) -> Result<()> {
+        // Fast path sends immediately unless backpressure mode is enabled.
+        if self.spooling {
+            self.spooled.push(payload);
+        } else {
+            self.sent += 1;
+            info!("sent payload #{}", self.sent);
+        }
+        Ok(())
+    }
 
-fn handle_file(e: &FileEvent) {
-    let comm     = cstr_to_str(&e.comm);
-    let filename = cstr_to_str(&e.filename);
-    let mode = if e.flags & 0x3 == 0 { "R" } else { "W" };
-    info!(
-        "[FILE] pid={} uid={} comm={} flags={} ({}) file={}",
-        e.pid, e.uid, comm, e.flags, mode, filename
-    );
-    // TODO: match against sensitive path list (Falco-compatible rules)
-}
+    fn stats(&self) -> SenderStats {
+        // Expose spool depth so housekeeping can decide replay behavior.
+        let pending: u64 = self.spooled.iter().map(|b| b.len() as u64).sum();
+        SenderStats {
+            spool_pending_bytes: pending,
+            spooling: self.spooling,
+        }
+    }
 
-fn handle_net(e: &NetEvent) {
-    let comm = cstr_to_str(&e.comm);
-    let ip   = format!(
-        "{}.{}.{}.{}",
-        (e.dst_ip)        & 0xFF,
-        (e.dst_ip >> 8)   & 0xFF,
-        (e.dst_ip >> 16)  & 0xFF,
-        (e.dst_ip >> 24)  & 0xFF,
-    );
-    // Port is big-endian from the kernel — swap bytes for display
-    let port = u16::from_be(e.dst_port);
-    info!(
-        "[NET]  pid={} uid={} comm={} → {}:{}",
-        e.pid, e.uid, comm, ip, port
-    );
-    // TODO: check dst_ip against threat intel map
-    //       check (pid, dst_ip) for unexpected outbound from known-benign proc
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Convert a NUL-terminated fixed-size byte array to a &str, safely.
-/// The eBPF probe writes process names as [u8; 16] or [u8; 64] with NUL termination.
-fn cstr_to_str(buf: &[u8]) -> &str {
-    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    core::str::from_utf8(&buf[..end]).unwrap_or("<invalid utf8>")
+    fn drain_spool(&mut self, deadline: Instant) -> Result<usize> {
+        // Best-effort replay until queue drained or deadline expires.
+        let mut drained = 0usize;
+        while !self.spooled.is_empty() && Instant::now() < deadline {
+            self.spooled.remove(0);
+            drained += 1;
+        }
+        Ok(drained)
+    }
 }
