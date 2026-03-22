@@ -1,0 +1,87 @@
+// Entity schemas are defined in the OIL standard library.
+// Field accesses are type-checked against these schemas at compile time.
+
+
+entity Process {
+    id:             Int,
+    pid:            Int,
+    ppid:           Int,
+    name:           Str,      // also: comm
+    filename:       Path,
+    argv_hash:      Str,
+    uid:            Int,
+    gid:            Int,
+    elevated:       Bool,     // uid == 0 or has privilege caps
+    signed:         Bool,
+    hash:           Str,      // binary hash
+    risk_score:     Float,
+    prevalence:     Prevalence,
+    parent:         Process,  // recursive — resolved lazily
+    host_id:        Str,
+    container_id:   Str?,     // nullable
+    command_line:   Str,
+}
+
+
+entity Prevalence {
+    global:         Float,    // fraction of fleet that has seen this binary
+    tenant:         Float,    // fraction within this tenant
+}
+
+
+entity User {
+    id:             Str,
+    uid:            Int,
+    name:           Str,
+    groups:         Set<Str>,
+    trust_score:    Float,
+    baseline:       UserBaseline,
+    last_known_device: Str,
+}
+
+
+entity UserBaseline {
+    countries:      Set<Str>,
+    hosts:          Set<Str>,
+    geos:           Set<Str>,
+    login_hours:    Set<Int>,
+}
+
+
+entity NetworkEndpoint {
+    ip:             IpAddr,
+    port:           Int,
+    proto:          Str,
+    is_internal:    Bool,
+    threat_score:   Float,
+    geo_country:    Str,
+    asn:            Str,
+    reputation:     Str,    // "clean" | "suspicious" | "malicious"
+    domain:         Str?,
+}
+
+
+entity File {
+    path:           Path,
+    sensitivity_label: Str,
+    inode:          Int,
+    last_modified:  Duration,
+}
+
+
+entity Secret {
+    type:           Str,    // "api_key" | "certificate" | "password" | "token"
+    source_path:    Path,
+    sensitivity:    Str,
+}
+
+
+entity Session {
+    id:             Str,
+    user_id:        Str,
+    device_id:      Str,
+    country:        Str,
+    mfa_present:    Bool,
+    age:            Duration,
+    token:          Token,
+}

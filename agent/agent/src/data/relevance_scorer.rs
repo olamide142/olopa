@@ -237,7 +237,7 @@ impl RelevanceScorer {
     pub fn score_hot(
         &mut self,
         event_id:    usize,
-        hot:         &crate::event_store::HotEvent,
+        hot:         &crate::data::event_store::HotEvent,
         vertex_id:   u32,
         chain_depth: u8,
     ) -> Option<ScoredEvent> {

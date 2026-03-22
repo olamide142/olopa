@@ -18,6 +18,7 @@ clap         = { version = "4", features = ["derive"] }
 log          = "0.4"
 env_logger   = "0.11"
 crossbeam-utils = { version = "0.8.21"}
+parking_lot = "0.12"
 
 [build-dependencies]
 # build.rs compiles the eBPF crate and embeds it into the agent binary

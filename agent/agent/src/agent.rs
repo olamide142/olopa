@@ -257,7 +257,7 @@ impl OlopaAgent {
         SN: SenderLike,
     {
         use core::mem::size_of;
-
+        
         // Drain all currently available ring items before returning.
         while let Some(item) = ring.next() {
             let bytes: &[u8] = &item;

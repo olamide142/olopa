@@ -28,6 +28,12 @@ pub enum ProbeKind {
     Tc,
     /// Tracepoint for connect syscall.
     NetTracepoint,
+    /// Tracepoint for process fork lineage map updates.
+    ForkTracepoint,
+    /// Tracepoint for exec syscall.
+    ExecTracepoint,
+    /// Tracepoint for openat syscall.
+    FileTracepoint,
 }
 
 /// Probe manager state.
@@ -48,8 +54,26 @@ impl ProbeManager {
 
     /// Attach default probes for current runtime profile.
     ///
-    /// Current baseline: only `syscalls/sys_enter_connect` tracepoint.
+    /// Current baseline:
+    /// - `sched/sched_process_fork` (build PID lineage)
+    /// - `syscalls/sys_enter_execve`
+    /// - `syscalls/sys_enter_openat`
+    /// - `syscalls/sys_enter_connect`
     pub fn attach_defaults(&mut self, bpf: &mut Ebpf, iface: &str) -> Result<()> {
+        self.attach_tracepoint(
+            bpf,
+            "on_sched_process_fork",
+            "sched",
+            "sched_process_fork",
+        )?;
+        self.record(ProbeKind::ForkTracepoint, "sched:sched_process_fork");
+
+        self.attach_tracepoint(bpf, "on_execve", "syscalls", "sys_enter_execve")?;
+        self.record(ProbeKind::ExecTracepoint, "syscalls:sys_enter_execve");
+
+        self.attach_tracepoint(bpf, "on_openat", "syscalls", "sys_enter_openat")?;
+        self.record(ProbeKind::FileTracepoint, "syscalls:sys_enter_openat");
+
         self.attach_tracepoint(bpf, "on_connect", "syscalls", "sys_enter_connect")?;
         self.record(ProbeKind::NetTracepoint, "syscalls:sys_enter_connect");
         info!("all default probes attached");

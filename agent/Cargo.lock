@@ -563,6 +563,7 @@ dependencies = [
  "env_logger",
  "log",
  "olopa-common",
+ "parking_lot",
  "tokio",
 ]
 
