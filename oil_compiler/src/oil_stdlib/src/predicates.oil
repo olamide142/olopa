@@ -1,0 +1,49 @@
+//  Globally available built-in predicates
+
+// Geographic / session predicates
+predicate unusual_country(user, country) =
+    country not_in user.baseline.countries
+
+predicate impossible_travel(user, country, ts) =
+    unusual_country(user, country)
+    and user.last_seen_country != country
+    and (ts - user.last_login_ts) < 2h
+
+predicate unusual_host(user, host_id) =
+    host_id not_in user.baseline.hosts
+
+predicate unusual_hour(user, ts) =
+    ts.hour not_in user.baseline.login_hours
+
+//  Process predicates
+predicate from_tmp(proc) =
+    proc.filename under tmp_dirs
+
+predicate unsigned_from_tmp(proc) =
+    from_tmp(proc) and proc.signed == false
+
+predicate privileged_shell(proc) =
+    proc.name in shells and proc.uid == 0
+
+predicate living_off_the_land(proc) =
+    proc.name in recon_tools
+    or proc.name in exfil_tools
+    or (proc.name in shells and proc.parent.name not_in web_servers)
+
+// Network predicates
+predicate external_c2(endpoint) =
+    endpoint.is_internal == false
+    and (endpoint.port in c2_ports or endpoint.reputation in malicious_reputation)
+
+predicate unexpected_external(proc, endpoint) =
+    endpoint.is_internal == false
+    and endpoint.domain not_in host(proc.host_id).baseline.domains
+
+// Secret / credential predicates 
+predicate sensitive_file(file) =
+    file.path in credential_paths
+    or file.sensitivity_label in ["crown_jewel", "critical", "sensitive"]
+
+predicate credential_access(proc, file) =
+    sensitive_file(file)
+    and proc.uid != file.expected_reader_uid

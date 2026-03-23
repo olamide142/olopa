@@ -1,0 +1,56 @@
+// Globally available, no import required
+// These sets are globally available — no "use" declaration needed.
+
+// ─── Process classification ──────────────────────────────────────────────
+set shells          = ["bash", "sh", "zsh", "fish", "dash", "tcsh",
+                       "python3", "python", "perl", "ruby", "node", "php",
+                       "powershell", "pwsh", "cmd.exe"]
+
+set web_servers     = ["nginx", "apache2", "httpd", "lighttpd", "gunicorn",
+                       "uvicorn", "caddy", "haproxy", "envoy", "traefik"]
+
+set db_servers      = ["postgres", "mysqld", "mongod", "redis-server",
+                       "cassandra", "elasticsearch", "clickhouse-server"]
+
+set recon_tools     = ["nmap", "masscan", "ncrack", "hydra", "medusa",
+                       "nuclei", "gobuster", "ffuf", "nikto", "sqlmap"]
+
+set exfil_tools     = ["curl", "wget", "nc", "netcat", "socat", "rclone",
+                       "rsync", "scp", "ftp", "tftp"]
+
+set sensitive_procs = ["lsass.exe", "winlogon.exe", "csrss.exe", "svchost.exe",
+                       "gpg-agent", "ssh-agent", "gpg", "pass"]
+
+// ─── File path sets ──────────────────────────────────────────────────────
+set credential_paths = [
+    "/etc/shadow", "/etc/passwd", "/etc/sudoers",
+    "~/.aws/credentials", "~/.aws/config",
+    "~/.ssh/id_rsa", "~/.ssh/id_ed25519", "~/.ssh/authorized_keys",
+    "~/.gnupg/", "/proc/*/mem", "/proc/*/maps"
+]
+
+set sensitive_dirs   = ["/etc", "/root", "/proc/1", "/sys/kernel",
+                        "/var/shadow", "C:\\Windows\\System32\\config"]
+
+set tmp_dirs         = ["/tmp", "/var/tmp", "/dev/shm", "/run/shm",
+                        "C:\\Windows\\Temp", "C:\\Users\\Public"]
+
+// ─── Network port sets ───────────────────────────────────────────────────
+set c2_ports         = [4444, 4445, 1337, 31337, 8081, 8082, 9001, 1080]
+
+set well_known_ports = [80, 443, 22, 21, 25, 53, 110, 143, 389, 636,
+                        3306, 5432, 6379, 27017, 9200, 8080, 8443]
+
+// ─── Reputation / risk levels ────────────────────────────────────────────
+set malicious_reputation  = ["malicious", "known_bad", "blacklisted"]
+set suspicious_reputation = ["suspicious", "unknown", "newly_registered"]
+set bad_reputation        = ["malicious", "suspicious", "known_bad", "blacklisted"]
+
+// ─── Container/debug allow-lists ────────────────────────────────────────
+set approved_debug_images = [
+    "busybox",
+    "alpine",
+    "ubuntu",
+    "debian",
+    "toolbox/debug"
+]

@@ -12,10 +12,10 @@
 
 use crate::ast::{
     ActionStmt, AuthKind, ChallengeKind, CorrelateArm, CorrelateBlock, CorrelateJoin,
-    CorrelateMode, DurationUnit, EmitStmt, EventPattern, Expr, ImportDecl, IsolateKind,
-    LetBinding, MatchBlock, MatchStep, OilDuration, Program, RequireClause, RespondArm,
-    RespondBlock, RevokeKind, RuleBody, RuleDecl, ScoreExpr, ScoreModifier, SetDecl, Severity,
-    SnapshotKind, SourceSpec, Spanned, VerifyClause,
+    CorrelateMode, DurationUnit, EmitStmt, EventPattern, Expr, FactDecl, ImportDecl, IsolateKind,
+    LetBinding, MatchBlock, MatchStep, OilDuration, PredicateDecl, Program, RequireClause,
+    RespondArm, RespondBlock, RevokeKind, RuleBody, RuleDecl, ScoreExpr, ScoreModifier, SetDecl,
+    Severity, SnapshotKind, SourceSpec, Spanned, VerifyClause,
 };
 use crate::lexer::{Keyword, Span, TimeUnit, Token, TokenKind};
 
@@ -97,12 +97,24 @@ impl Parser {
                 continue;
             }
 
-            // Top-level declarations we intentionally skip at this stage.
-            if self.peek_keyword(Keyword::Predicate)
-                || self.peek_keyword(Keyword::Template)
-                || self.peek_keyword(Keyword::Fact)
-                || self.peek_keyword(Keyword::Policy)
-            {
+            if self.peek_keyword(Keyword::Predicate) {
+                match self.parse_predicate_decl() {
+                    Some(decl) => program.predicates.push(decl),
+                    None => self.synchronize_top_level(),
+                }
+                continue;
+            }
+
+            if self.peek_keyword(Keyword::Fact) {
+                match self.parse_fact_decl() {
+                    Some(decl) => program.facts.push(decl),
+                    None => self.synchronize_top_level(),
+                }
+                continue;
+            }
+
+            // Remaining top-level declarations still intentionally skipped.
+            if self.peek_keyword(Keyword::Template) || self.peek_keyword(Keyword::Policy) {
                 self.skip_unimplemented_top_level_decl();
                 continue;
             }
@@ -169,6 +181,80 @@ impl Parser {
 
         self.expect(&TokenKind::RBracket, "expected closing ']' for set literal")?;
         Some(SetDecl { name, values })
+    }
+
+    fn parse_predicate_decl(&mut self) -> Option<PredicateDecl> {
+        self.advance(); // predicate
+
+        let name = self.parse_dotted_name("expected predicate name after 'predicate'")?;
+        self.expect(&TokenKind::LParen, "expected '(' after predicate name")?;
+        let params = self.parse_param_list()?;
+        self.expect(&TokenKind::RParen, "expected ')' after predicate params")?;
+        self.expect(&TokenKind::Assign, "expected '=' in predicate declaration")?;
+        let body = self.parse_expr()?;
+
+        Some(PredicateDecl { name, params, body })
+    }
+
+    fn parse_fact_decl(&mut self) -> Option<FactDecl> {
+        self.advance(); // fact
+
+        let name = self.parse_dotted_name("expected fact name after 'fact'")?;
+        self.expect(&TokenKind::LParen, "expected '(' after fact name")?;
+        let params = self.parse_param_list()?;
+        self.expect(&TokenKind::RParen, "expected ')' after fact params")?;
+
+        let expires = if self.peek_keyword(Keyword::Expires) {
+            let kw = self.advance().clone();
+            match self.peek().kind {
+                TokenKind::DurationLit { value, unit } => {
+                    let tok = self.advance().clone();
+                    Some(Spanned::new(
+                        OilDuration {
+                            value,
+                            unit: map_duration_unit(unit),
+                        },
+                        kw.span.start..tok.span.end,
+                    ))
+                }
+                _ => {
+                    self.error_here("expected duration literal after 'expires'");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        Some(FactDecl {
+            name,
+            params,
+            expires,
+        })
+    }
+
+    fn parse_param_list(&mut self) -> Option<Vec<Spanned<String>>> {
+        let mut params = Vec::new();
+        self.consume_newlines();
+        while !self.is_at_end() && !self.check(&TokenKind::RParen) {
+            let p = self.expect_name_atom("expected parameter name")?.clone();
+            let text = self.name_atom_text(&p)?;
+            params.push(Spanned::new(text, p.span));
+
+            if self.match_kind(&TokenKind::Comma) {
+                self.consume_newlines();
+                continue;
+            }
+
+            self.consume_newlines();
+            if self.check(&TokenKind::RParen) {
+                break;
+            }
+
+            self.error_here("expected ',' or ')' in parameter list");
+            self.synchronize_expr();
+        }
+        Some(params)
     }
 
     fn parse_rule_decl(&mut self) -> Option<RuleDecl> {
@@ -321,11 +407,11 @@ impl Parser {
     }
 
     fn parse_source_spec(&mut self) -> Option<SourceSpec> {
-        let domain_tok = self.expect_ident("expected source domain")?.clone();
-        let domain = self.ident_text(&domain_tok)?;
+        let domain_tok = self.expect_name_atom("expected source domain")?.clone();
+        let domain = self.name_atom_text(&domain_tok)?;
         self.expect(&TokenKind::Dot, "expected '.' in source spec")?;
-        let event_tok = self.expect_ident("expected source event kind")?.clone();
-        let event = self.ident_text(&event_tok)?;
+        let event_tok = self.expect_name_atom("expected source event kind")?.clone();
+        let event = self.name_atom_text(&event_tok)?;
 
         let alias = if self.match_ident_text("as") {
             let a = self.expect_ident("expected alias after 'as'")?.clone();
@@ -545,8 +631,15 @@ impl Parser {
                 name: Spanned::new(self.ident_text(&name_tok).unwrap_or_default(), name_tok.span),
                 value,
             });
-
-            self.synchronize_rule_line();
+            // If expression parsing stopped before line end (for syntax we do not
+            // fully support yet, e.g. indexing/call-chains), consume the tail of
+            // the current line so the next newline-separated binding is preserved.
+            if !self.check(&TokenKind::Newline)
+                && !self.check(&TokenKind::RBrace)
+                && !self.at_line_start()
+            {
+                self.synchronize_rule_line();
+            }
         }
 
         bindings
@@ -963,7 +1056,7 @@ impl Parser {
                 break;
             }
 
-            if let Some(target) = self.parse_dotted_name("expected snapshot target") {
+            if let Some(target) = self.parse_snapshot_target() {
                 targets.push(target);
             } else {
                 self.synchronize_rule_line();
@@ -988,6 +1081,41 @@ impl Parser {
             },
             start..end,
         ))
+    }
+
+    fn parse_snapshot_target(&mut self) -> Option<Spanned<String>> {
+        let base = self.parse_dotted_name("expected snapshot target")?;
+        if !self.check(&TokenKind::LParen) {
+            return Some(base);
+        }
+
+        let call_start = base.span.start;
+        self.advance(); // '('
+        let mut args = Vec::new();
+        while !self.is_at_end() && !self.check(&TokenKind::RParen) {
+            self.consume_newlines();
+            if self.check(&TokenKind::RParen) {
+                break;
+            }
+            let arg = self.parse_expr()?;
+            args.push(expr_to_pattern_string(&arg.node));
+
+            if self.match_kind(&TokenKind::Comma) {
+                continue;
+            }
+            self.consume_newlines();
+            if self.check(&TokenKind::RParen) {
+                break;
+            }
+            self.error_here("expected ',' or ')' in snapshot target call");
+            self.synchronize_expr();
+        }
+
+        let end_tok = self
+            .expect(&TokenKind::RParen, "expected ')' after snapshot target call")?
+            .clone();
+        let text = format!("{}({})", base.node, args.join(", "));
+        Some(Spanned::new(text, call_start..end_tok.span.end))
     }
 
     fn parse_open_case_action(&mut self) -> Option<Spanned<ActionStmt>> {
@@ -1292,8 +1420,15 @@ impl Parser {
     fn parse_ident_path_or_call(&mut self) -> Option<Spanned<Expr>> {
         let first = self.expect_ident("expected identifier")?.clone();
         let first_name = self.ident_text(&first)?;
+        let mut parts = vec![first_name];
+        let mut end = first.span.end;
+        while self.match_kind(&TokenKind::Dot) {
+            let seg = self.expect_ident("expected identifier after '.'")?.clone();
+            end = seg.span.end;
+            parts.push(self.ident_text(&seg)?);
+        }
 
-        // function call: foo(...)
+        // function call: foo(...), a.b(...)
         if self.check(&TokenKind::LParen) {
             self.advance(); // '('
             let mut args = Vec::new();
@@ -1320,20 +1455,11 @@ impl Parser {
             let end_tok = self.expect(&TokenKind::RParen, "expected ')' to close call")?.clone();
             return Some(Spanned::new(
                 Expr::Call {
-                    name: first_name,
+                    name: parts.join("."),
                     args,
                 },
                 first.span.start..end_tok.span.end,
             ));
-        }
-
-        // path: a.b.c
-        let mut parts = vec![first_name];
-        let mut end = first.span.end;
-        while self.match_kind(&TokenKind::Dot) {
-            let seg = self.expect_ident("expected identifier after '.'")?.clone();
-            end = seg.span.end;
-            parts.push(self.ident_text(&seg)?);
         }
 
         if parts.len() == 1 {
@@ -1588,6 +1714,15 @@ impl Parser {
         }
     }
 
+    fn expect_name_atom(&mut self, message: impl Into<String>) -> Option<&Token> {
+        if matches!(self.peek().kind, TokenKind::Ident(_) | TokenKind::Kw(Keyword::Use)) {
+            Some(self.advance())
+        } else {
+            self.error_here(message);
+            None
+        }
+    }
+
     fn match_ident_text(&mut self, expected: &str) -> bool {
         match &self.peek().kind {
             TokenKind::Ident(s) if s == expected => {
@@ -1603,6 +1738,17 @@ impl Parser {
             TokenKind::Ident(s) => Some(s.clone()),
             _ => {
                 self.push_error("expected identifier token", tok.span.clone());
+                None
+            }
+        }
+    }
+
+    fn name_atom_text(&mut self, tok: &Token) -> Option<String> {
+        match &tok.kind {
+            TokenKind::Ident(s) => Some(s.clone()),
+            TokenKind::Kw(Keyword::Use) => Some("use".to_string()),
+            _ => {
+                self.push_error("expected name atom token", tok.span.clone());
                 None
             }
         }
@@ -1649,11 +1795,11 @@ impl Parser {
     }
 
     fn parse_event_pattern(&mut self) -> Option<EventPattern> {
-        let domain_tok = self.expect_ident("expected event domain")?.clone();
-        let domain = self.ident_text(&domain_tok)?;
+        let domain_tok = self.expect_name_atom("expected event domain")?.clone();
+        let domain = self.name_atom_text(&domain_tok)?;
         self.expect(&TokenKind::Dot, "expected '.' in event pattern")?;
-        let kind_tok = self.expect_ident("expected event kind")?.clone();
-        let kind = self.ident_text(&kind_tok)?;
+        let kind_tok = self.expect_name_atom("expected event kind")?.clone();
+        let kind = self.name_atom_text(&kind_tok)?;
         Some(EventPattern { domain, kind })
     }
 

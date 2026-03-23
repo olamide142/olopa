@@ -1,7 +1,5 @@
 set shell_binaries = ["sh", "bash", "dash", "zsh", "fish"]
 
-predicate is_shell(p) = p.name in shell_binaries
-
 rule "interactive_shell_in_container" {
   from endpoint.process, container.runtime
 

@@ -1,87 +1,201 @@
-// Entity schemas are defined in the OIL standard library.
-// Field accesses are type-checked against these schemas at compile time.
+// OIL stdlib schema prelude.
+// This file defines:
+// 1) Runtime roots available without declaration (host, process, user, ...)
+// 2) Entity/field contracts used by resolver and type-checking.
 
+// --------------------------------------------------------------------------
+// Root model
+// --------------------------------------------------------------------------
+// A root can be used as:
+// - variable-like entity root: `host.id`
+// - callable lookup root: `host(p.host_id).baseline.domains`
+root host: Host
+root process: Process
+root user: User
+root session: Session
+root container: ContainerContext
+root workload: WorkloadInfo
+root network: NetworkFlow
+root file: FileEvent
+root dns: DnsQuery
 
+// --------------------------------------------------------------------------
+// Core entities
+// --------------------------------------------------------------------------
+
+// Process and execution context.
 entity Process {
-    id:             Int,
-    pid:            Int,
-    ppid:           Int,
-    name:           Str,      // also: comm
-    filename:       Path,
-    argv_hash:      Str,
-    uid:            Int,
-    gid:            Int,
-    elevated:       Bool,     // uid == 0 or has privilege caps
-    signed:         Bool,
-    hash:           Str,      // binary hash
-    risk_score:     Float,
-    prevalence:     Prevalence,
-    parent:         Process,  // recursive — resolved lazily
-    host_id:        Str,
-    container_id:   Str?,     // nullable
-    command_line:   Str,
+    id: Int,
+    pid: Int,
+    ppid: Int,
+    name: Str,
+    tty: Bool,
+    uid: Int,
+    gid: Int,
+    elevated: Bool,
+    host_id: Str,
+    container_id: Str?,
+    command_line: Str?,
+    parent: Process?,
+    user: User?,
+    binary: Binary?,
 }
 
-
-entity Prevalence {
-    global:         Float,    // fraction of fleet that has seen this binary
-    tenant:         Float,    // fraction within this tenant
+// Binary metadata attached to a process execution.
+entity Binary {
+    path: Path,
+    filename: Path?,
+    signed: Bool,
+    hash: Str?,
 }
 
+// Host state and baseline profile.
+entity Host {
+    id: Str,
+    hostname: Str?,
+    risk_score: Float?,
+    baseline: HostBaseline,
+}
 
+// Host baseline used by anomaly checks.
+entity HostBaseline {
+    domains: Set<Str>,
+    ips: Set<IpAddr>,
+    processes: Set<Str>,
+    users: Set<Str>,
+}
+
+// User identity and behavior profile.
 entity User {
-    id:             Str,
-    uid:            Int,
-    name:           Str,
-    groups:         Set<Str>,
-    trust_score:    Float,
-    baseline:       UserBaseline,
-    last_known_device: Str,
+    id: Str,
+    uid: Int?,
+    name: Str,
+    groups: Set<Str>,
+    trust_score: Float?,
+    baseline: UserBaseline,
+    last_known_device: Str?,
 }
 
-
+// User baseline used in geo/device/time checks.
 entity UserBaseline {
-    countries:      Set<Str>,
-    hosts:          Set<Str>,
-    geos:           Set<Str>,
-    login_hours:    Set<Int>,
+    countries: Set<Str>,
+    hosts: Set<Str>,
+    geos: Set<Str>,
+    login_hours: Set<Int>,
 }
 
-
-entity NetworkEndpoint {
-    ip:             IpAddr,
-    port:           Int,
-    proto:          Str,
-    is_internal:    Bool,
-    threat_score:   Float,
-    geo_country:    Str,
-    asn:            Str,
-    reputation:     Str,    // "clean" | "suspicious" | "malicious"
-    domain:         Str?,
-}
-
-
-entity File {
-    path:           Path,
-    sensitivity_label: Str,
-    inode:          Int,
-    last_modified:  Duration,
-}
-
-
-entity Secret {
-    type:           Str,    // "api_key" | "certificate" | "password" | "token"
-    source_path:    Path,
-    sensitivity:    Str,
-}
-
-
+// Authentication/session telemetry.
 entity Session {
-    id:             Str,
-    user_id:        Str,
-    device_id:      Str,
-    country:        Str,
-    mfa_present:    Bool,
-    age:            Duration,
-    token:          Token,
+    id: Str,
+    user_id: Str,
+    device_id: Str?,
+    country: Str?,
+    mfa_present: Bool?,
+    age: Duration?,
+}
+
+// --------------------------------------------------------------------------
+// File and network entities
+// --------------------------------------------------------------------------
+
+// File event payload (open/write/etc).
+entity FileEvent {
+    path: Path,
+    mode: Str?,
+    process_id: Int?,
+    inode: Int?,
+    sensitivity_label: Str?,
+    last_modified: Duration?,
+}
+
+// Network flow event payload.
+entity NetworkFlow {
+    process_id: Int?,
+    direction: Str?,
+    bytes_out: Int?,
+    dest: NetworkEndpoint,
+}
+
+// Endpoint details for network telemetry.
+entity NetworkEndpoint {
+    ip: IpAddr?,
+    port: Int?,
+    proto: Str?,
+    is_internal: Bool?,
+    threat_score: Float?,
+    geo_country: Str?,
+    asn: Str?,
+    reputation: Str?,
+    domain: Str?,
+}
+
+// DNS query telemetry used in stress-test rules.
+entity DnsQuery {
+    domain: DnsDomain,
+}
+
+// DNS domain features for detection logic.
+entity DnsDomain {
+    value: Str?,
+    entropy: Float?,
+}
+
+// --------------------------------------------------------------------------
+// Container and workload entities
+// --------------------------------------------------------------------------
+
+// Container context/runtime view.
+entity ContainerContext {
+    container_id: Str,
+    pod_uid: Str?,
+    exists: Bool,
+    orchestrator: Str?,
+    tags: Set<Str>,
+    image: ContainerImage,
+    labels: ContainerLabels,
+    security: ContainerSecurity,
+    namespaces: ContainerNamespaces,
+    capabilities: ContainerCapabilities,
+    initiator: InitiatorRef?,
+}
+
+// Container image identity.
+entity ContainerImage {
+    id: Str?,
+    repo: Str?,
+    tag: Str?,
+}
+
+// Container labels that are commonly referenced.
+entity ContainerLabels {
+    environment: Str?,
+}
+
+// Security configuration for container launch.
+entity ContainerSecurity {
+    privileged: Bool,
+}
+
+// Namespace escape/host-sharing indicators.
+entity ContainerNamespaces {
+    host_pid: Bool,
+    host_network: Bool,
+    host_ipc: Bool,
+}
+
+// Capability additions requested by the container.
+entity ContainerCapabilities {
+    added: Set<Str>,
+}
+
+// Actor that initiated an operation.
+entity InitiatorRef {
+    user_id: Str?,
+}
+
+// Kubernetes/workload metadata.
+entity WorkloadInfo {
+    pod_uid: Str?,
+    namespace: Str?,
+    name: Str?,
 }
