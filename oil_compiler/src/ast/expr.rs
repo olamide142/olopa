@@ -90,6 +90,10 @@ pub enum Expr {
         name: String,
         args: Vec<Spanned<Expr>>,
     },
+    Member {
+        base: Box<Spanned<Expr>>,
+        field: String,
+    },
     List(Vec<Spanned<Expr>>),
 }
 

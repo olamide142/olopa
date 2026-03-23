@@ -1,0 +1,37 @@
+
+rule "high_volume_egress_from_rare_process" {
+  from endpoint.process, network.flow, container.runtime, k8s.workload
+
+  correlate
+    process.spawn as p
+    with network.connect as n on n.process_id == p.id
+    with container.context as c on c.container_id == p.container_id
+    with workload.info as w on w.pod_uid == c.pod_uid
+
+  where
+    n.direction == "outbound"
+    and n.bytes_out > 1000000
+
+  let
+    rare_for_workload = p.name not in baseline.workload(w.namespace, w.name).allowed_processes
+    prod = w.namespace in ["prod", "payments", "identity"]
+    suspicious_dest = n.dest.reputation in suspicious_reputation
+
+  score
+    60
+    +20 if rare_for_workload
+    +10 if prod
+    +10 if suspicious_dest
+
+  emit
+    fact host.rare_process_exfil(host.id) expires 8h
+
+  respond
+    if score >= 80 {
+      alert critical
+      snapshot p, n, c, w
+      open case "High-volume egress from rare process"
+    } else {
+      alert high
+    }
+}

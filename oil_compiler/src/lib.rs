@@ -5,6 +5,7 @@ mod parser;
 mod prelude;
 mod resolver;
 mod schema;
+mod typecheck;
 pub mod ast;
 pub mod diagnostics;
 
@@ -15,14 +16,15 @@ use std::ops::Range;
 // Public exports for downstream consumers/tests.
 pub use parser::{ParseError, Parser};
 pub use prelude::{
-    parse_builtin_callables, parse_builtin_predicates, parse_builtin_sets, PreludeContext,
-    PreludeError,
+    parse_builtin_callable_signatures, parse_builtin_callables, parse_builtin_predicates,
+    parse_builtin_sets, PreludeContext, PreludeError,
 };
 pub use resolver::{
     resolve_program, resolve_program_with_globals, resolve_program_with_schema, ExternalRef, ExternalSymbolSource,
     ResolveOutput, ResolvedCall, ResolvedCallKind, SymbolTable,
 };
 pub use schema::{parse_schema, EntitySchema, FieldSchema, FieldType, PrimitiveType, RootSchema, SchemaRegistry};
+pub use typecheck::{typecheck_program, TypeDiagnostic, TypecheckOutput};
 
 #[derive(Debug, Clone, Default)]
 pub struct CompilerConfig;
@@ -48,6 +50,8 @@ pub struct CompileOutput {
     pub prelude: Option<PreludeContext>,
     // Stage 3 output.
     pub resolve: Option<ResolveOutput>,
+    // Stage 4 output.
+    pub typecheck: Option<TypecheckOutput>,
     // Non-fatal diagnostics (currently resolver-focused).
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -196,6 +200,16 @@ fn load_stage0(_config: &CompilerConfig) -> Result<(SchemaRegistry, PreludeConte
             })
             .collect::<Vec<_>>()
     })?;
+    let builtin_callable_signatures =
+        parse_builtin_callable_signatures(builtin_callables_src).map_err(|errs| {
+        errs.into_iter()
+            .map(|e| Diagnostic {
+                stage: "prelude",
+                message: format!("callables.oil:{}:{}: {}", e.line, e.col, e.message),
+                span: None,
+            })
+            .collect::<Vec<_>>()
+    })?;
 
     Ok((
         schema,
@@ -203,6 +217,7 @@ fn load_stage0(_config: &CompilerConfig) -> Result<(SchemaRegistry, PreludeConte
             builtin_predicates,
             builtin_sets,
             builtin_callables,
+            builtin_callable_signatures,
         },
     ))
 }
@@ -248,9 +263,15 @@ fn finalize_unit(
         &prelude.builtin_callables,
         global_symbols,
     );
+    let typecheck = typecheck_program(&program, &schema, &prelude.builtin_callable_signatures);
     let mut diagnostics = Vec::new();
     diagnostics.extend(resolve.diagnostics.iter().map(|d| Diagnostic {
         stage: "resolve",
+        message: d.message.clone(),
+        span: d.span.clone(),
+    }));
+    diagnostics.extend(typecheck.diagnostics.iter().map(|d| Diagnostic {
+        stage: "typecheck",
         message: d.message.clone(),
         span: d.span.clone(),
     }));
@@ -261,6 +282,7 @@ fn finalize_unit(
         schema: Some(schema),
         prelude: Some(prelude),
         resolve: Some(resolve),
+        typecheck: Some(typecheck),
         diagnostics,
     }
 }

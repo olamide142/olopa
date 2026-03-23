@@ -1,0 +1,35 @@
+fact host.shell_bad_egress(host_id) expires 4h
+
+rule "shell_outbound_to_bad_reputation" {
+  from endpoint.process, network.flow
+
+  correlate
+    process.spawn as p
+    with network.connect as n on n.process_id == p.id
+
+  where
+    p.name in shells
+    and n.direction == "outbound"
+    and n.dest.reputation in bad_reputation
+
+  let
+    high_exfil = n.bytes_out > 500000
+    public_dest = n.dest.is_internal == false
+
+  score
+    65
+    +10 if public_dest
+    +15 if high_exfil
+
+  emit
+    fact host.shell_bad_egress(host.id) expires 4h
+
+  respond
+    if score >= 80 {
+      alert critical
+      snapshot p, n
+      open case "Shell outbound connection to bad reputation destination"
+    } else {
+      alert high
+    }
+}

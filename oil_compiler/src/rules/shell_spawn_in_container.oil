@@ -1,4 +1,5 @@
 set shell_binaries = ["sh", "bash", "dash", "zsh", "fish"]
+set approved_debug_images = []
 
 rule "interactive_shell_in_container" {
   from endpoint.process, container.runtime

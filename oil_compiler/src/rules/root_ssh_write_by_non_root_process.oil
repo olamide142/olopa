@@ -1,0 +1,33 @@
+fact host.root_ssh_write(host_id) expires 6h
+
+rule "root_ssh_write_by_non_root_process" {
+  from endpoint.file, endpoint.process
+
+  correlate
+    file.write as f by process as p
+
+  where
+    f.path under "/root/.ssh"
+    and p.uid != 0
+
+  let
+    suspicious_proc = p.name not in ["sshd", "scp", "rsync"]
+    stealthy_target = f.path in ["/root/.ssh/authorized_keys", "/root/.ssh/id_rsa"]
+
+  score
+    60
+    +15 if suspicious_proc
+    +20 if stealthy_target
+
+  emit
+    fact host.root_ssh_write(host.id) expires 6h
+
+  respond
+    if score >= 80 {
+      alert critical
+      snapshot p, f
+      open case "Write under /root/.ssh by non-root process"
+    } else {
+      alert high
+    }
+}

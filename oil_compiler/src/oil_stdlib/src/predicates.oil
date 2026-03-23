@@ -16,6 +16,9 @@ predicate unusual_hour(user, ts) =
     ts.hour not_in user.baseline.login_hours
 
 //  Process predicates
+predicate is_shell(proc) =
+    proc.name in shells
+
 predicate from_tmp(proc) =
     proc.filename under tmp_dirs
 

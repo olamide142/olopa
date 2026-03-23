@@ -106,6 +106,8 @@ pub fn resolve_program_with_globals(
     builtin_callables: &HashSet<String>,
     global_symbols: Option<&SymbolTable>,
 ) -> ResolveOutput {
+    // Resolver is intentionally a sidecar pass: it does not mutate AST,
+    // it only classifies names/calls and emits diagnostics.
     let mut resolver = Resolver::new(
         schema,
         builtin_predicates,
@@ -129,14 +131,21 @@ pub fn resolve_program_with_globals(
 
 #[derive(Debug)]
 struct Resolver<'a> {
+    // Typed schema loaded from stdlib schema.oil.
     schema: &'a SchemaRegistry,
+    // Stage-0 prelude symbols available globally.
     builtin_predicates: &'a HashSet<String>,
     builtin_sets: &'a HashSet<String>,
     builtin_callables: &'a HashSet<String>,
+    // Optional cross-file declarations from compile_many.
     global_symbols: Option<&'a SymbolTable>,
+    // Symbols visible in the current resolution unit.
     symbols: SymbolTable,
+    // Imported external refs (`intel.*`, `org.*`, ...).
     external_refs: Vec<ExternalRef>,
+    // Every call expression seen in rules, with best-effort classification.
     calls: Vec<ResolvedCall>,
+    // Non-fatal semantic diagnostics.
     diagnostics: Vec<ResolveDiagnostic>,
 }
 
@@ -163,6 +172,7 @@ impl<'a> Resolver<'a> {
 
     /// Pass 1: build global declaration table.
     fn collect_symbols(&mut self, program: &Program) {
+        // Imports register external namespaces/symbols that are treated as known.
         for import in &program.imports {
             if import.path.node.is_empty() {
                 continue;
@@ -188,6 +198,7 @@ impl<'a> Resolver<'a> {
             });
         }
 
+        // Local declarations.
         for set in &program.sets {
             if !self.symbols.sets.insert(set.name.node.clone()) {
                 self.diagnostics.push(ResolveDiagnostic {
@@ -217,6 +228,7 @@ impl<'a> Resolver<'a> {
             }
         }
         // Local fact emissions should be visible in the same file.
+        // This allows a file to emit+consume a fact without duplicate declarations.
         for rule in &program.rules {
             for emit in &rule.emit {
                 self.symbols.facts.insert(emit.fact_name.node.clone());
@@ -245,6 +257,7 @@ impl<'a> Resolver<'a> {
             std::collections::BTreeMap::new();
 
         // Source aliases are local bindings visible inside rule clauses.
+        // We also record alias -> entity so path checks can use schema types.
         for src in &rule.sources {
             if let Some(alias) = &src.alias {
                 scope.insert(alias.node.clone());
@@ -316,6 +329,7 @@ impl<'a> Resolver<'a> {
         }
 
         for emit in &rule.emit {
+            // Emit must target declared facts (or project/global discovered ones).
             if !self.symbols.facts.contains(&emit.fact_name.node) {
                 self.diagnostics.push(ResolveDiagnostic {
                     message: format!(
@@ -380,8 +394,15 @@ impl<'a> Resolver<'a> {
         alias_entity: &std::collections::BTreeMap<String, String>,
     ) {
         match &expr.node {
+            // Ident and Path are resolved differently:
+            // - Ident: variable/set/external/root/builtin name lookup
+            // - Path: schema-aware chain validation where possible
             Expr::Ident(name) => self.resolve_name_like(name, expr.span.clone(), scope, alias_entity),
             Expr::Path(parts) => self.resolve_path_expr(parts, expr.span.clone(), scope, alias_entity),
+            // Member is currently produced for post-call chains
+            // (e.g. host(id).baseline.domains). We recurse into base so call
+            // resolution still runs; deeper member typing is handled in typecheck.
+            Expr::Member { base, .. } => self.resolve_expr(base, scope, alias_entity),
             Expr::UnaryMinus(inner)
             | Expr::Not(inner)
             | Expr::Rare(inner)
@@ -412,6 +433,8 @@ impl<'a> Resolver<'a> {
             }
             Expr::UnusualFor { val, .. } => self.resolve_expr(val, scope, alias_entity),
             Expr::Call { name, args } => {
+                // Name-resolution classification:
+                // fact call, predicate call, or unknown callable.
                 let kind = if self.symbols.facts.contains(name) {
                     ResolvedCallKind::FactRef
                 } else if self.symbols.predicates.contains(name) {
@@ -467,6 +490,7 @@ impl<'a> Resolver<'a> {
         }
 
         let root = &parts[0];
+        // If root is a bound alias or schema root, validate path by schema.
         if let Some(entity_name) = alias_entity
             .get(root)
             .cloned()
@@ -476,6 +500,7 @@ impl<'a> Resolver<'a> {
             return;
         }
 
+        // Otherwise fallback to generic name-like checks on the root symbol.
         self.resolve_name_like(root, span, scope, alias_entity);
     }
 
@@ -492,6 +517,8 @@ impl<'a> Resolver<'a> {
                 return;
             };
 
+            // Resolver policy: warn when dereferencing through nullable fields.
+            // This is strict by design so rule authors consciously handle nullability.
             if nullable_chain {
                 self.diagnostics.push(ResolveDiagnostic {
                     message: format!("invalid chain after nullable type before field '{seg}'"),

@@ -65,6 +65,11 @@ entity HostBaseline {
     users: Set<Str>,
 }
 
+// External baseline profile queried by baseline.image(...) / baseline.workload(...).
+entity BaselineProfile {
+    allowed_processes: Set<Str>,
+}
+
 // User identity and behavior profile.
 entity User {
     id: Str,

@@ -1,5 +1,6 @@
-// oil_stdlib/callables.oil — globally available built-in callable symbols
+// Globally available built-in callable symbols
 // These callables are resolved without explicit `use`.
 
-callable baseline.image
-callable baseline.workload
+// Returns workload/image baseline profile used for process rarity checks.
+callable baseline.image -> BaselineProfile
+callable baseline.workload -> BaselineProfile

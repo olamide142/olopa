@@ -1453,13 +1453,31 @@ impl Parser {
             }
 
             let end_tok = self.expect(&TokenKind::RParen, "expected ')' to close call")?.clone();
-            return Some(Spanned::new(
+            let mut expr = Spanned::new(
                 Expr::Call {
                     name: parts.join("."),
                     args,
                 },
                 first.span.start..end_tok.span.end,
-            ));
+            );
+
+            // Post-call member access: host(id).baseline.domains
+            while self.match_kind(&TokenKind::Dot) {
+                let seg = self
+                    .expect_ident("expected identifier after '.' in member access")?
+                    .clone();
+                let field = self.ident_text(&seg)?;
+                let span = expr.span.start..seg.span.end;
+                expr = Spanned::new(
+                    Expr::Member {
+                        base: Box::new(expr),
+                        field,
+                    },
+                    span,
+                );
+            }
+
+            return Some(expr);
         }
 
         if parts.len() == 1 {
@@ -1936,6 +1954,7 @@ fn expr_to_pattern_string(expr: &Expr) -> String {
         Expr::StrLit(s) => s.clone(),
         Expr::Ident(s) => s.clone(),
         Expr::Path(parts) => parts.join("."),
+        Expr::Member { base, field } => format!("{}.{}", expr_to_pattern_string(&base.node), field),
         _ => format!("{:?}", expr),
     }
 }
