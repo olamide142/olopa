@@ -57,7 +57,9 @@ impl ProbeManager {
     /// Current baseline:
     /// - `sched/sched_process_fork` (build PID lineage)
     /// - `syscalls/sys_enter_execve`
+    /// - `syscalls/sys_enter_execveat`
     /// - `syscalls/sys_enter_openat`
+    /// - `syscalls/sys_enter_openat2`
     /// - `syscalls/sys_enter_connect`
     pub fn attach_defaults(&mut self, bpf: &mut Ebpf, iface: &str) -> Result<()> {
         self.attach_tracepoint(
@@ -70,9 +72,25 @@ impl ProbeManager {
 
         self.attach_tracepoint(bpf, "on_execve", "syscalls", "sys_enter_execve")?;
         self.record(ProbeKind::ExecTracepoint, "syscalls:sys_enter_execve");
+        if self.attach_tracepoint_if_present(
+            bpf,
+            "on_execveat",
+            "syscalls",
+            "sys_enter_execveat",
+        )? {
+            self.record(ProbeKind::ExecTracepoint, "syscalls:sys_enter_execveat");
+        }
 
         self.attach_tracepoint(bpf, "on_openat", "syscalls", "sys_enter_openat")?;
         self.record(ProbeKind::FileTracepoint, "syscalls:sys_enter_openat");
+        if self.attach_tracepoint_if_present(
+            bpf,
+            "on_openat2",
+            "syscalls",
+            "sys_enter_openat2",
+        )? {
+            self.record(ProbeKind::FileTracepoint, "syscalls:sys_enter_openat2");
+        }
 
         self.attach_tracepoint(bpf, "on_connect", "syscalls", "sys_enter_connect")?;
         self.record(ProbeKind::NetTracepoint, "syscalls:sys_enter_connect");
@@ -168,6 +186,36 @@ impl ProbeManager {
 
         info!("tracepoint attached: {}/{}", category, name);
         Ok(())
+    }
+
+    /// Attach tracepoint if present on this kernel.
+    ///
+    /// Returns:
+    /// - `Ok(true)` when attached
+    /// - `Ok(false)` when tracepoint is unavailable and skipped
+    /// - `Err(...)` for other failures (load/program lookup/etc)
+    pub fn attach_tracepoint_if_present(
+        &self,
+        bpf: &mut Ebpf,
+        fn_name: &str,
+        category: &str,
+        name: &str,
+    ) -> Result<bool> {
+        match self.attach_tracepoint(bpf, fn_name, category, name) {
+            Ok(()) => Ok(true),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("No such file or directory") || msg.contains("ENOENT") {
+                    warn!(
+                        "tracepoint not available on this kernel: {}/{} (skipping)",
+                        category, name
+                    );
+                    Ok(false)
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 }
 

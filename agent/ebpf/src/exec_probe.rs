@@ -1,6 +1,6 @@
-//! Process execution probe — tracepoint on sys_enter_execve.
+//! Process execution probes — tracepoints on sys_enter_execve and sys_enter_execveat.
 //!
-//! Fires on every execve() call — every new program launch.
+//! Fires on process execution syscalls — every new program launch image.
 //! Foundation of process lineage: pid + ppid on every exec lets the agent
 //! reconstruct the full process tree for kill chain detection.
 //!
@@ -52,10 +52,18 @@ unsafe fn try_sched_process_fork(ctx: &TracePointContext) -> u32 {
 
 #[tracepoint]
 pub fn on_execve(ctx: TracePointContext) -> u32 {
-    unsafe { try_execve(&ctx) }
+    unsafe { try_execve(&ctx, 16) }
 }
 
-unsafe fn try_execve(ctx: &TracePointContext) -> u32 {
+#[tracepoint]
+pub fn on_execveat(ctx: TracePointContext) -> u32 {
+    // sys_enter_execveat args:
+    //   dfd @ 16, filename ptr @ 24, argv @ 32, envp @ 40, flags @ 48
+    // We only need filename for the shared ExecEvent payload.
+    unsafe { try_execve(&ctx, 24) }
+}
+
+unsafe fn try_execve(ctx: &TracePointContext, filename_ptr_offset: usize) -> u32 {
     // Reserve ring buffer slot. None = buffer full, drop silently.
     let mut entry = match EVENTS.reserve::<ExecEvent>(0) {
         Some(e) => e,
@@ -90,8 +98,10 @@ unsafe fn try_execve(ctx: &TracePointContext) -> u32 {
         }
     };
 
-    // filename pointer at offset 16 in sys_enter_execve args
-    let filename_ptr: u64 = match ctx.read_at(16) {
+    // filename pointer offset differs by syscall variant:
+    // - execve:   16
+    // - execveat: 24
+    let filename_ptr: u64 = match ctx.read_at(filename_ptr_offset) {
         Ok(ptr) => ptr,
         Err(_) => {
             entry.discard(0);

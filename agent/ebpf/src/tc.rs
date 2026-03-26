@@ -9,6 +9,10 @@
 //!   - Egress blocking after routing
 //!
 //! Userspace attaches via SchedClassifier + clsact qdisc (Aya handles qdisc creation).
+//!
+//! Current behavior:
+//! - Program is intentionally pass-through (`TC_ACT_OK`) while policy/data
+//!   maps are staged. This keeps attach path exercised without packet impact.
 
 use aya_ebpf::{
     bindings::TC_ACT_OK,

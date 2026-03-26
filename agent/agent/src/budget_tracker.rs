@@ -1,3 +1,15 @@
+//! Runtime budget controller for telemetry scheduling.
+//!
+//! This module provides a lightweight PI control loop that periodically reads
+//! process-level utilization from `/proc` and adjusts multi-resource budgets
+//! consumed by the scheduler/batcher path.
+//!
+//! Current state:
+//! - CPU and memory utilization are measured from live `/proc` counters.
+//! - IO/NET/BW feedback channels are scaffolded and currently held at zero.
+//! - The exported `BudgetSnapshot` is the single budget contract used by
+//!   runtime components.
+
 use std::fs;
 use std::io;
 use std::time::Instant;

@@ -11,6 +11,10 @@
 //!
 //! Strategy: do ALL validation before reserving the ring buffer slot.
 //! This avoids needing to discard on most early-exit paths.
+//!
+//! Current scope:
+//! - IPv4 connect events only (AF_INET).
+//! - IPv6 can be added later with sockaddr_in6 decoding and wider payload.
 
 use aya_ebpf::{
     helpers::{
@@ -40,6 +44,7 @@ pub fn on_connect(ctx: TracePointContext) -> u32 {
 unsafe fn try_connect(ctx: &TracePointContext) -> u32 {
     const AF_INET: u16 = 2;
 
+    // fd is currently unused but still parsed to keep offsets explicit.
     let fd_raw: i64 = match ctx.read_at(16) {
         Ok(v) => v,
         Err(_) => return 1,

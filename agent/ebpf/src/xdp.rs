@@ -9,6 +9,10 @@
 //! Current: pass everything and count packets.
 //! Future:  blacklist map → XDP_DROP
 //!          risk score map → XDP_REDIRECT to honeypot
+//!
+//! Design note:
+//! - XDP program currently mutates only counter map state and does not emit
+//!   ring-buffer events. Process-aware telemetry remains in tracepoint/TC paths.
 
 use aya_ebpf::{
     bindings::xdp_action,

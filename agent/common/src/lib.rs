@@ -1,5 +1,12 @@
 //! Shared types between the eBPF kernel programs and the userspace agent.
 //! Must be #![no_std] so it compiles for both bpfel-unknown-none and the host.
+//!
+//! Contract notes:
+//! - `#[repr(C)]` keeps ABI layout stable across kernel/userspace boundary.
+//! - Any field changes here must be coordinated with:
+//!   - eBPF probe writers (`agent/ebpf/src/*`)
+//!   - userspace ring-buffer decoders (`agent/agent/src/agent.rs`)
+//! - Fixed-size byte arrays are NUL-terminated when sourced from kernel helpers.
 #![no_std]
 
 /// Process execution event (execve / execveat syscall)

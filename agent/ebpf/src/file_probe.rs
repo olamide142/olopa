@@ -1,4 +1,4 @@
-//! File access probe — tracepoint on sys_enter_openat.
+//! File access probes — tracepoints on sys_enter_openat and sys_enter_openat2.
 //!
 //! Fires on every file open. Detects:
 //!   - Credential reads:  /etc/shadow, ~/.ssh/id_rsa
@@ -12,11 +12,15 @@
 //!   offset 24: umode_t mode
 //!
 //! VERIFIER RULE: no ? after reservation. Discard on all error paths.
+//!
+//! openat2 specifics:
+//! - Kernel passes `struct open_how*` instead of raw `flags`.
+//! - We read the first `u64` from `open_how` and downcast to `u32` flags.
 
 use aya_ebpf::{
     helpers::{
         bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid,
-        bpf_ktime_get_ns, bpf_probe_read_user_str_bytes,
+        bpf_ktime_get_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes,
     },
     macros::tracepoint,
     programs::TracePointContext,
@@ -27,10 +31,19 @@ use crate::EVENTS;
 
 #[tracepoint]
 pub fn on_openat(ctx: TracePointContext) -> u32 {
-    unsafe { try_openat(&ctx) }
+    unsafe { try_openat(&ctx, false) }
 }
 
-unsafe fn try_openat(ctx: &TracePointContext) -> u32 {
+#[tracepoint]
+pub fn on_openat2(ctx: TracePointContext) -> u32 {
+    // sys_enter_openat2 args:
+    //   dfd @ 16, filename ptr @ 24, open_how* @ 32, size @ 40
+    // Aya tracepoint context exposes syscall args beginning at offset 0,
+    // so we keep the same filename offset used by openat and switch flag extraction.
+    unsafe { try_openat(&ctx, true) }
+}
+
+unsafe fn try_openat(ctx: &TracePointContext, openat2: bool) -> u32 {
     let mut entry = match EVENTS.reserve::<FileEvent>(0) {
         Some(e) => e,
         None => return 1,
@@ -46,11 +59,31 @@ unsafe fn try_openat(ctx: &TracePointContext) -> u32 {
     let uid_gid  = bpf_get_current_uid_gid();
     (*event).uid = uid_gid as u32;
 
-    (*event).flags = match ctx.read_at::<u32>(16) {
-        Ok(f) => f,
-        Err(_) => {
-            entry.discard(0);
-            return 1;
+    (*event).flags = if openat2 {
+        // openat2 passes pointer to `struct open_how` at arg index 2.
+        // `flags` is the first u64 field in that struct.
+        let how_ptr: u64 = match ctx.read_at(16) {
+            Ok(ptr) => ptr,
+            Err(_) => {
+                entry.discard(0);
+                return 1;
+            }
+        };
+        if how_ptr == 0 {
+            0
+        } else {
+            match bpf_probe_read_user(how_ptr as *const u64) {
+                Ok(f) => f as u32,
+                Err(_) => 0,
+            }
+        }
+    } else {
+        match ctx.read_at::<u32>(16) {
+            Ok(f) => f,
+            Err(_) => {
+                entry.discard(0);
+                return 1;
+            }
         }
     };
 

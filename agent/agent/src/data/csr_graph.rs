@@ -18,6 +18,7 @@
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::Arc;
 use crossbeam_utils::CachePadded;
+use log::warn;
 
 // ── Compile-time size guards ─────────────────────────────────
 const _: () = assert!(std::mem::size_of::<NodeProps>()  == 32);
@@ -379,15 +380,14 @@ fn rebuild_csr(base: &CsrSnapshot, delta: DeltaBuffer) -> CsrSnapshot {
     let num_nodes = base.num_nodes as usize;
 
     // Merge base edges + delta edges into one sorted edge list
+    //
+    // NOTE:
+    // This bootstrap implementation currently rebuilds from delta edges only.
+    // `base` is used for node metadata continuity, not edge replay.
+    // Keep capacities bounded by actual vector lengths to avoid stale-count panics.
     let mut all_edges: Vec<(u32, u32, EdgeProps)> = Vec::with_capacity(
-        base.num_edges as usize + delta.new_edges.len(),
+        base.adjacency.len() + delta.new_edges.len(),
     );
-    for k in 0..base.num_edges as usize {
-        let src = base.adjacency[k];
-        // Recover src from offsets[] via binary search (for simplicity here)
-        // Production: store src in a parallel array during rebuild
-        let _ = src; // placeholder
-    }
     all_edges.extend(delta.new_edges);
 
     // Sort by src so all edges from the same source are contiguous
@@ -398,11 +398,26 @@ fn rebuild_csr(base: &CsrSnapshot, delta: DeltaBuffer) -> CsrSnapshot {
     let mut offsets    = vec![0u32; num_nodes + 1];
     let mut adjacency  = Vec::with_capacity(all_edges.len());
     let mut edge_props = Vec::with_capacity(all_edges.len());
+    let mut dropped_oob_edges = 0u64;
 
     for (src, dst, props) in &all_edges {
-        offsets[*src as usize + 1] += 1;
+        let src_idx = *src as usize;
+        let dst_idx = *dst as usize;
+        if src_idx >= num_nodes || dst_idx >= num_nodes {
+            dropped_oob_edges = dropped_oob_edges.saturating_add(1);
+            continue;
+        }
+
+        offsets[src_idx + 1] += 1;
         adjacency.push(*dst);
         edge_props.push(*props);
+    }
+
+    if dropped_oob_edges > 0 {
+        warn!(
+            "csr_graph: dropped {} out-of-range edges (num_nodes={})",
+            dropped_oob_edges, num_nodes
+        );
     }
     // Prefix-sum to convert counts → cumulative offsets
     for i in 1..=num_nodes {
@@ -426,7 +441,8 @@ fn rebuild_csr(base: &CsrSnapshot, delta: DeltaBuffer) -> CsrSnapshot {
 
     CsrSnapshot {
         num_nodes: num_nodes as u32,
-        num_edges: all_edges.len() as u32,
+        // Authoritative edge count is what actually made it into adjacency[].
+        num_edges: adjacency.len() as u32,
         offsets,
         adjacency,
         edge_props,

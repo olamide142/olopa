@@ -19,6 +19,8 @@ log          = "0.4"
 env_logger   = "0.11"
 crossbeam-utils = { version = "0.8.21"}
 parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [build-dependencies]
 # build.rs compiles the eBPF crate and embeds it into the agent binary

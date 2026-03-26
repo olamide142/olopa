@@ -1,18 +1,25 @@
-//! Olopa agent — userspace orchestrator entrypoint.
+//! Olopa agent userspace entrypoint.
+//!
+//! Responsibilities in this file:
+//! - Parse runtime CLI options.
+//! - Bootstrap eBPF probe attachment.
+//! - Wire concrete implementations into the orchestrator traits.
+//! - Start the long-running `OlopaAgent::run(...)` loop.
 
 mod agent;
 mod budget_tracker;
 mod probe_manager;
 mod data;
+mod runtime_ir;
 
 use anyhow::Result;
 use clap::Parser;
-use log::info;
+use log::{info, warn};
 use std::time::{Duration, Instant};
 
 use crate::agent::{
     BatcherLike, BatcherPush, EventStoreLike, GraphLike, IngestEvent,
-    MetricAggregatorLike, OlopaAgent, RelevanceScorerLike, RuleEngineLike,
+    MetricAggregatorLike, OlopaAgent, RelevanceScorerLike, RuleEngineLike, RuleMatch,
     SchedulerLike, SenderLike, SenderStats,
 };
 use crate::budget_tracker::{BudgetSnapshot as RuntimeBudgetSnapshot, BudgetTracker};
@@ -24,6 +31,7 @@ use crate::data::mdkp_scheduler::{
 use crate::data::metric_aggregator::{MetricAggregator, MetricSummary};
 use crate::data::relevance_scorer::RelevanceScorer;
 use crate::probe_manager::ProbeManager;
+use crate::runtime_ir::RuntimeIrRuleEngine;
 
 #[derive(Debug, Parser)]
 #[command(name = "olopa-agent", about = "Olopa kernel security agent")]
@@ -46,12 +54,12 @@ async fn main() -> Result<()> {
     probe_manager.attach_defaults(agent.bpf_mut(), &opt.iface)?;
     info!("olopa-agent initialized and probes attached");
 
-    // 2) Wire concrete runtime components.
+    // 2) Wire concrete runtime components (adapters + default implementations).
     let mut relevance_scorer = RealRelevanceScorer::default();
     let mut event_store = RealEventStore::default();
     let mut graph = RealGraph::default();
     let mut metric_aggregator = RealMetricAggregator::default();
-    let mut rule_engine = SimpleRuleEngine;
+    let mut rule_engine = ActiveRuleEngine::from_env();
     let mut scheduler = RealScheduler::default();
     let mut batcher = SimpleBatcher::default();
     let mut sender = SimpleSender::default();
@@ -73,11 +81,12 @@ async fn main() -> Result<()> {
         .await
 }
 
-// --- Real wrappers for orchestrator traits ---
+// --- Concrete adapters for orchestrator traits ---
 
 #[derive(Default)]
 struct RealRelevanceScorer {
     inner: RelevanceScorer,
+    // Monotonic synthetic event id passed into scorer state machine.
     next_event_id: usize,
 }
 impl Default for RelevanceScorer {
@@ -87,6 +96,8 @@ impl Default for RelevanceScorer {
 }
 impl RelevanceScorerLike for RealRelevanceScorer {
     fn score(&mut self, event: &mut IngestEvent) {
+        // Current bridge passes core numeric fields only; richer context wiring
+        // can be layered later without changing orchestrator contract.
         let scored = self.inner.score(
             self.next_event_id,
             event.vertex_id,
@@ -113,6 +124,7 @@ impl Default for RealEventStore {
 }
 impl EventStoreLike for RealEventStore {
     fn push(&mut self, event: IngestEvent) -> Option<usize> {
+        // Split event into hot/cold representations expected by EventStore.
         let hot = HotEvent {
             ts_ns: event.ts_ns,
             pid: event.pid,
@@ -138,6 +150,7 @@ impl EventStoreLike for RealEventStore {
     }
 
     fn serialize_event(&self, event_id: usize) -> Option<Vec<u8>> {
+        // Bootstrap wire format: plain text line; replace with protobuf later.
         let hot = self.inner.hot_events().get(event_id)?;
         let cold = self.inner.cold_event(event_id)?;
         Some(
@@ -170,6 +183,7 @@ impl Default for RealGraph {
 }
 impl GraphLike for RealGraph {
     fn write_edge(&mut self, event: &IngestEvent) {
+        // Map lightweight event discriminator to graph edge kind.
         let kind = match event.event_type {
             1 => EdgeKind::Spawned,
             2 => EdgeKind::ReadFile,
@@ -206,6 +220,7 @@ impl Default for RealMetricAggregator {
 }
 impl MetricAggregatorLike for RealMetricAggregator {
     fn record(&mut self, event: &IngestEvent) {
+        // Risk metric keyed by comm_id to preserve low cardinality.
         self.inner.record_risk(event.comm_id, event.risk_score);
     }
 
@@ -226,6 +241,7 @@ impl Default for RealScheduler {
 }
 impl SchedulerLike for RealScheduler {
     fn update_budget(&mut self, snapshot: RuntimeBudgetSnapshot) {
+        // Convert runtime tracker snapshot into scheduler-local budget type.
         let converted = SchedulerBudgetSnapshot {
             total: snapshot.total,
             remaining: snapshot.remaining,
@@ -247,17 +263,67 @@ impl SchedulerLike for RealScheduler {
     }
 }
 
-// --- Remaining bootstrap components (sender/batcher/rule) ---
+// --- Bootstrap components for rule engine, batching, and transport ---
 
 struct SimpleRuleEngine;
 impl RuleEngineLike for SimpleRuleEngine {
-    fn evaluate(&mut self, event: &IngestEvent) -> bool {
-        event.risk_score >= 0.95
+    fn evaluate(&mut self, event: &IngestEvent) -> Vec<RuleMatch> {
+        if event.risk_score >= 0.95 {
+            vec![RuleMatch {
+                rule_id: "simple:fallback".to_string(),
+                rule_name: "simple_fallback_threshold".to_string(),
+            }]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+enum ActiveRuleEngine {
+    // Compiler-emitted runtime IR evaluator.
+    RuntimeIr(RuntimeIrRuleEngine),
+    // Minimal fallback matcher when runtime IR cannot be loaded.
+    Simple(SimpleRuleEngine),
+}
+
+impl ActiveRuleEngine {
+    fn from_env() -> Self {
+        const DEFAULT_RUNTIME_IR_PATH: &str = "/etc/olopa/runtime-ir.json";
+        // Explicit env var overrides default deployment path.
+        let path = std::env::var("OLOPA_RUNTIME_IR")
+            .unwrap_or_else(|_| DEFAULT_RUNTIME_IR_PATH.to_string());
+
+        match RuntimeIrRuleEngine::from_file(std::path::Path::new(&path)) {
+            Ok(engine) => {
+                info!(
+                    "rule engine loaded runtime-ir from {} (rules={})",
+                    path,
+                    engine.rule_count()
+                );
+                Self::RuntimeIr(engine)
+            }
+            Err(e) => {
+                warn!("failed to load runtime-ir from {}: {}", path, e);
+                info!("rule engine using SimpleRuleEngine fallback");
+                Self::Simple(SimpleRuleEngine)
+            }
+        }
+    }
+}
+
+impl RuleEngineLike for ActiveRuleEngine {
+    fn evaluate(&mut self, event: &IngestEvent) -> Vec<RuleMatch> {
+        match self {
+            ActiveRuleEngine::RuntimeIr(engine) => engine.evaluate_matches(event),
+            ActiveRuleEngine::Simple(engine) => engine.evaluate(event),
+        }
     }
 }
 
 struct SimpleBatcher {
+    // Accumulated serialized telemetry events.
     pending: Vec<Vec<u8>>,
+    // Last time a flush happened (used for periodic flush trigger).
     last_flush: Instant,
 }
 impl Default for SimpleBatcher {
@@ -270,6 +336,7 @@ impl Default for SimpleBatcher {
 }
 impl BatcherLike for SimpleBatcher {
     fn push(&mut self, serialized_event: &[u8], _budget: &RuntimeBudgetSnapshot) -> BatcherPush {
+        // Bootstrap threshold-only batching policy.
         self.pending.push(serialized_event.to_vec());
         if self.pending.len() >= 64 {
             BatcherPush::FlushNeeded
@@ -302,8 +369,11 @@ impl BatcherLike for SimpleBatcher {
 
 #[derive(Default)]
 struct SimpleSender {
+    // Count of payloads sent directly (non-spooled).
     sent: u64,
+    // In-memory spool used while sender is in spooling mode.
     spooled: Vec<Vec<u8>>,
+    // Toggle for degraded transport mode.
     spooling: bool,
 }
 impl SenderLike for SimpleSender {
@@ -336,6 +406,7 @@ impl SenderLike for SimpleSender {
 }
 
 fn serialize_metric_summary(s: MetricSummary) -> Vec<u8> {
+    // Bootstrap text wire format for metric snapshots.
     format!(
         "metric comm_id={} count={} min={:.4} max={:.4} mean={:.4} p50={:.4} p95={:.4} p99={:.4}",
         s.comm_id, s.count, s.min, s.max, s.mean, s.p50, s.p95, s.p99

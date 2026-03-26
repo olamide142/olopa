@@ -6,7 +6,9 @@
 //!   xdp_filter  — XDP hook: drop/pass at NIC driver level
 //!   tc_egress   — TC hook:  egress (has PID context, unlike XDP)
 //!   on_execve   — tracepoint: process execution
+//!   on_execveat — tracepoint: process execution via execveat
 //!   on_openat   — tracepoint: file open
+//!   on_openat2  — tracepoint: file open via openat2
 //!   on_connect  — tracepoint: outbound network connect
 
 #![no_std]
