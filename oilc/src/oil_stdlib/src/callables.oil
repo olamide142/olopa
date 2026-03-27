@@ -1,0 +1,9 @@
+// Globally available built-in callable symbols
+// These callables are resolved without explicit `use`.
+
+// Returns workload/image baseline profile used for process rarity checks.
+callable baseline.image(image_id: Str) -> BaselineProfile
+callable baseline.workload(namespace: Str, name: Str) -> BaselineProfile
+
+// Example non-entity return callable: feed lookup returns a domain set.
+callable intel.domains(feed: Str) -> Set<Str>

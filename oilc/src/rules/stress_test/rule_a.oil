@@ -1,0 +1,6 @@
+rule "critical_pid_480365" {
+  from endpoint.process
+  correlate process.spawn as p
+  where p.pid == 480365
+  respond alert high
+}

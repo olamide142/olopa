@@ -1,6 +1,0 @@
-// Globally available built-in callable symbols
-// These callables are resolved without explicit `use`.
-
-// Returns workload/image baseline profile used for process rarity checks.
-callable baseline.image -> BaselineProfile
-callable baseline.workload -> BaselineProfile
