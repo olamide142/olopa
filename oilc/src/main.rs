@@ -358,6 +358,9 @@ fn write_runtime_ir_artifact(
     Ok(())
 }
 
+// Renders human-readable CLI output for a single compiled file based on the selected mode.
+// `check` mode intentionally prints nothing; other modes print the available stage artifact
+// (AST, MIR, runtime IR, or generated code) with a fallback message when that artifact is missing.
 fn render_mode_output(mode: OutputMode, file: &Path, output: &oilc::CompileOutput) {
     match mode {
         OutputMode::Check => {}

@@ -149,9 +149,13 @@ pub fn compile_many(inputs: Vec<CompileUnitInput>, config: &CompilerConfig) -> C
     for input in inputs {
         match lex_and_parse(&input.source) {
             Ok((tokens, program)) => {
+                // Keep successfully parsed units for later multi-file passes
+                // (global symbol collection + per-unit resolution/codegen).
                 parsed_units.push((input.id, tokens, program));
             }
             Err(errors) => {
+                // Parsing failed for this unit, so record a per-file failure now.
+                // We still continue compiling other inputs that parsed correctly.
                 unit_results.push(CompileUnitResult {
                     id: input.id,
                     output: None,
@@ -313,6 +317,8 @@ fn finalize_unit(
     } else {
         None
     };
+
+    // Stage 4: Typecheck semantic correctness (fact/set usage, callable signatures, etc.).
     let typecheck = if config.run_typecheck {
         Some(typecheck_program(
             &program,
@@ -322,22 +328,32 @@ fn finalize_unit(
     } else {
         None
     };
+
+    // Stage 5: Lower AST into MIR when MIR consumers are enabled (validation/codegen/runtime IR).
     let mir = if config.run_mir || config.run_codegen {
         Some(lower_program(&program))
     } else {
         None
     };
+
+    // Stage 6: Validate MIR for structural/semantic issues emitted by lowering.
     let mir_diagnostics = if config.run_mir {
         mir.as_ref().map(validate_program).unwrap_or_default()
     } else {
         Vec::new()
     };
+
+    // Stage 7: Generate backend artifacts (e.g., EPL/Cypher) from MIR when requested.
     let codegen = if config.run_codegen {
         mir.as_ref().map(generate_backends)
     } else {
         None
     };
+
+    // Stage 8: Build runtime IR from MIR for downstream runtime execution/serialization.
     let runtime_ir = mir.as_ref().map(lower_runtime_program);
+
+    // Stage 9: Normalize diagnostics from each stage into a single CLI/API-friendly list.
     let mut diagnostics = Vec::new();
     if let Some(resolve) = &resolve {
         diagnostics.extend(resolve.diagnostics.iter().map(|d| Diagnostic {
@@ -364,6 +380,7 @@ fn finalize_unit(
         span: None,
     }));
 
+    // Stage 10: Return all produced artifacts (plus diagnostics) for this compile unit.
     CompileOutput {
         tokens,
         program: Some(program),
