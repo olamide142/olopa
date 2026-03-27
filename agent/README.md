@@ -106,3 +106,12 @@ Run these commands from `olopa/agent`.
 ### Run sample userspace program
 
 - `RUST_LOG=info cargo run --manifest-path Cargo.toml -p olopa-agent -- --iface lo`
+- Select probe groups with `--probe-events` (comma-separated): `fork,exec,file,net,xdp,tc`
+  - Example (exec + net only): `RUST_LOG=info cargo run --manifest-path Cargo.toml -p olopa-agent -- --iface lo --probe-events exec,net`
+- Userspace graph is dumped to `/tmp/olopa_graph.json` by default.
+- Dump JSON includes topology (`nodes`, `edges`) and a rolling `events` list with fields like `event_type`, `span_id`, `parent_span_id`, `parent_id`, `pid`, `uid`, and timestamps.
+- `nodes` now includes only active nodes (seen in edges/events), while `snapshot_nodes`/`snapshot_edges` expose raw CSR capacity/state.
+- Event payload includes both original IDs (`source_id`, `target_id`) and normalized graph IDs (`graph_source_id`, `graph_target_id`) used for CSR indexing.
+- `edges` now contains both merged graph edges (`edge_origin: "graph"`) and immediate event-derived edges (`edge_origin: "event"`) so visualizers always have live connections.
+- Override dump path/interval with:
+  - `RUST_LOG=info cargo run --manifest-path Cargo.toml -p olopa-agent -- --iface lo --graph-dump-path /tmp/olopa_graph.json --graph-dump-interval-ms 500`

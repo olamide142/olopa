@@ -4,7 +4,7 @@
 //! It intentionally does not own event ingestion, scoring, scheduling,
 //! batching, or sending logic.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
 
 use anyhow::{Context, Result};
@@ -18,6 +18,17 @@ use aya::{
 use log::{info, warn};
 
 use olopa_common::{ExecEvent, FileEvent, NetEvent};
+
+/// CLI-selectable probe groups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProbeSelection {
+    Fork,
+    Exec,
+    File,
+    Net,
+    Xdp,
+    Tc,
+}
 
 /// Logical probe kinds used for userspace attachment bookkeeping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -62,46 +73,42 @@ impl ProbeManager {
     /// - `syscalls/sys_enter_openat2`
     /// - `syscalls/sys_enter_connect`
     pub fn attach_defaults(&mut self, bpf: &mut Ebpf, iface: &str) -> Result<()> {
-        self.attach_tracepoint(
-            bpf,
-            "on_sched_process_fork",
-            "sched",
-            "sched_process_fork",
-        )?;
-        self.record(ProbeKind::ForkTracepoint, "sched:sched_process_fork");
+        self.attach_selected(bpf, iface, Self::default_probe_selections())
+    }
 
-        self.attach_tracepoint(bpf, "on_execve", "syscalls", "sys_enter_execve")?;
-        self.record(ProbeKind::ExecTracepoint, "syscalls:sys_enter_execve");
-        if self.attach_tracepoint_if_present(
-            bpf,
-            "on_execveat",
-            "syscalls",
-            "sys_enter_execveat",
-        )? {
-            self.record(ProbeKind::ExecTracepoint, "syscalls:sys_enter_execveat");
+    /// Baseline probe profile used when caller does not specify custom probes.
+    pub fn default_probe_selections() -> &'static [ProbeSelection] {
+        &[
+            ProbeSelection::Fork,
+            ProbeSelection::Exec,
+            ProbeSelection::File,
+            ProbeSelection::Net,
+        ]
+    }
+
+    /// Attach only the requested probe groups.
+    pub fn attach_selected(
+        &mut self,
+        bpf: &mut Ebpf,
+        iface: &str,
+        selections: &[ProbeSelection],
+    ) -> Result<()> {
+        let mut seen = HashSet::new();
+        for selection in selections {
+            if !seen.insert(*selection) {
+                continue;
+            }
+            match selection {
+                ProbeSelection::Fork => self.attach_fork_tracepoints(bpf)?,
+                ProbeSelection::Exec => self.attach_exec_tracepoints(bpf)?,
+                ProbeSelection::File => self.attach_file_tracepoints(bpf)?,
+                ProbeSelection::Net => self.attach_net_tracepoints(bpf)?,
+                ProbeSelection::Xdp => self.attach_xdp(bpf, iface)?,
+                ProbeSelection::Tc => self.attach_tc(bpf, iface)?,
+            }
         }
 
-        self.attach_tracepoint(bpf, "on_openat", "syscalls", "sys_enter_openat")?;
-        self.record(ProbeKind::FileTracepoint, "syscalls:sys_enter_openat");
-        if self.attach_tracepoint_if_present(
-            bpf,
-            "on_openat2",
-            "syscalls",
-            "sys_enter_openat2",
-        )? {
-            self.record(ProbeKind::FileTracepoint, "syscalls:sys_enter_openat2");
-        }
-
-        self.attach_tracepoint(bpf, "on_connect", "syscalls", "sys_enter_connect")?;
-        self.record(ProbeKind::NetTracepoint, "syscalls:sys_enter_connect");
-        info!("all default probes attached");
-
-        // Optional hooks kept for staged rollout:
-        // self.attach_xdp(bpf, iface)?;
-        // self.record(ProbeKind::Xdp, iface);
-        // self.attach_tc(bpf, iface)?;
-        // self.record(ProbeKind::Tc, iface);
-        let _ = iface;
+        info!("selected probes attached (count={})", selections.len());
         Ok(())
     }
 
@@ -121,10 +128,55 @@ impl ProbeManager {
             .push(target.to_owned());
     }
 
+    fn attach_fork_tracepoints(&mut self, bpf: &mut Ebpf) -> Result<()> {
+        self.attach_tracepoint(
+            bpf,
+            "on_sched_process_fork",
+            "sched",
+            "sched_process_fork",
+        )?;
+        self.record(ProbeKind::ForkTracepoint, "sched:sched_process_fork");
+        Ok(())
+    }
+
+    fn attach_exec_tracepoints(&mut self, bpf: &mut Ebpf) -> Result<()> {
+        self.attach_tracepoint(bpf, "on_execve", "syscalls", "sys_enter_execve")?;
+        self.record(ProbeKind::ExecTracepoint, "syscalls:sys_enter_execve");
+        if self.attach_tracepoint_if_present(
+            bpf,
+            "on_execveat",
+            "syscalls",
+            "sys_enter_execveat",
+        )? {
+            self.record(ProbeKind::ExecTracepoint, "syscalls:sys_enter_execveat");
+        }
+        Ok(())
+    }
+
+    fn attach_file_tracepoints(&mut self, bpf: &mut Ebpf) -> Result<()> {
+        self.attach_tracepoint(bpf, "on_openat", "syscalls", "sys_enter_openat")?;
+        self.record(ProbeKind::FileTracepoint, "syscalls:sys_enter_openat");
+        if self.attach_tracepoint_if_present(
+            bpf,
+            "on_openat2",
+            "syscalls",
+            "sys_enter_openat2",
+        )? {
+            self.record(ProbeKind::FileTracepoint, "syscalls:sys_enter_openat2");
+        }
+        Ok(())
+    }
+
+    fn attach_net_tracepoints(&mut self, bpf: &mut Ebpf) -> Result<()> {
+        self.attach_tracepoint(bpf, "on_connect", "syscalls", "sys_enter_connect")?;
+        self.record(ProbeKind::NetTracepoint, "syscalls:sys_enter_connect");
+        Ok(())
+    }
+
     /// Attach XDP to interface.
     ///
     /// Tries native mode first; falls back to SKB mode when unsupported.
-    pub fn attach_xdp(&self, bpf: &mut Ebpf, iface: &str) -> Result<()> {
+    pub fn attach_xdp(&mut self, bpf: &mut Ebpf, iface: &str) -> Result<()> {
         let prog: &mut Xdp = bpf
             .program_mut("xdp_filter")
             .context("xdp_filter program not found — check SEC name in xdp.rs")?
@@ -145,11 +197,12 @@ impl ProbeManager {
                 info!("XDP attached on {} (SKB_MODE fallback)", iface);
             }
         }
+        self.record(ProbeKind::Xdp, iface);
         Ok(())
     }
 
     /// Attach TC egress classifier to interface.
-    pub fn attach_tc(&self, bpf: &mut Ebpf, iface: &str) -> Result<()> {
+    pub fn attach_tc(&mut self, bpf: &mut Ebpf, iface: &str) -> Result<()> {
         // Ensure clsact exists; ignore errors like "already exists".
         let _ = aya::programs::tc::qdisc_add_clsact(iface);
 
@@ -163,6 +216,7 @@ impl ProbeManager {
             .with_context(|| format!("failed to attach TC egress on {}", iface))?;
 
         info!("TC egress attached on {}", iface);
+        self.record(ProbeKind::Tc, iface);
         Ok(())
     }
 

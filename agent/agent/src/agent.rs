@@ -26,6 +26,7 @@ pub struct IngestEvent {
     pub event_type: u8, // 1=exec, 2=file, 3=net
     pub vertex_id: u32,
     pub dst_vertex_id: u32,
+    pub comm: [u8; 16],
     pub comm_id: u32,
     pub risk_score: f32,
 }
@@ -325,6 +326,7 @@ impl OlopaAgent {
                     event_type: 1,
                     vertex_id: raw.pid,
                     dst_vertex_id: raw.ppid,
+                    comm: raw.comm,
                     comm_id: fnv1a_32(&raw.comm),
                     risk_score: 0.5,
                 }
@@ -339,6 +341,7 @@ impl OlopaAgent {
                     event_type: 2,
                     vertex_id: raw.pid,
                     dst_vertex_id: fnv1a_32(&raw.filename),
+                    comm: raw.comm,
                     comm_id: fnv1a_32(&raw.comm),
                     risk_score: if raw.flags & 0x3 == 0 { 0.35 } else { 0.60 },
                 }
@@ -355,6 +358,7 @@ impl OlopaAgent {
                     event_type: 3,
                     vertex_id: raw.pid,
                     dst_vertex_id: dst,
+                    comm: raw.comm,
                     comm_id: fnv1a_32(&raw.comm),
                     risk_score: 0.7,
                 }
@@ -510,6 +514,12 @@ impl OlopaAgent {
     }
 }
 
+
+fn comm_to_str(comm: &[u8; 16]) -> &str {
+    let end = comm.iter().position(|&b| b == 0).unwrap_or(16);
+    std::str::from_utf8(&comm[..end]).unwrap_or("")
+}
+    
 fn log_exec_ingest(e: &ExecEvent) {
     info!(
         "[ringbuf][exec] pid={} ppid={} uid={} gid={} comm={} file={}",
