@@ -1,0 +1,3 @@
+# Rust compilation output
+target/
+**/target/
