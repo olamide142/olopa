@@ -20,11 +20,11 @@ use std::sync::Arc;
 use crossbeam_utils::CachePadded;
 use log::warn;
 
-// ── Compile-time size guards ─────────────────────────────────
+// -- Compile-time size guards 
 const _: () = assert!(std::mem::size_of::<NodeProps>()  == 32);
 const _: () = assert!(std::mem::size_of::<EdgeProps>()  == 16);
 
-// ── Node types (matches graph data model) ───────────────────
+// -- Node types (matches graph data model)
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NodeLabel {
@@ -40,7 +40,7 @@ pub enum NodeLabel {
     DomainName      = 9,
 }
 
-// ── Edge types ───────────────────────────────────────────────
+// -- Edge types 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EdgeKind {
@@ -58,7 +58,7 @@ pub enum EdgeKind {
     HasProcess      = 11,
 }
 
-// ── NodeProps — 32 bytes, one per node ──────────────────────
+// -- NodeProps — 32 bytes, one per node
 // Packed: largest fields first, no wasted padding.
 // Fits in half a cache line; two nodes per cache line.
 #[repr(C)]
@@ -75,7 +75,7 @@ pub struct NodeProps {
     pub _pad:             [u8; 4], // explicit — brings total to 32 bytes
 }
 
-// ── EdgeProps — 16 bytes, one per directed edge ─────────────
+// -- EdgeProps — 16 bytes, one per directed edge 
 // Parallel to adjacency[]. adjacency[k] = dst node, edge_props[k] = metadata.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -90,7 +90,7 @@ pub struct EdgeProps {
 // Total: 16 bytes. Adjacency + EdgeProps fit in 8 bytes + 16 bytes = 24 bytes
 // per edge. Dense graphs stay comfortably in L3.
 
-// ── The immutable CSR snapshot ───────────────────────────────
+// -- The immutable CSR snapshot 
 // Built once from accumulated deltas, then swapped in atomically.
 // Readers hold an Arc<CsrSnapshot> — they are never blocked.
 // The writer builds a new snapshot, swaps the Arc, and the old
@@ -106,30 +106,30 @@ pub struct CsrSnapshot {
 }
 
 impl CsrSnapshot {
-    // ── Core access: neighbors of node v ────────────────────
+    // -- Core access: neighbors of node v 
     // Returns a slice of neighbor node IDs.
     // Cost: two array reads (offsets) + one slice construction.
     // All data is contiguous — hardware prefetcher reads ahead.
     #[inline(always)]
     pub fn neighbors(&self, v: u32) -> &[u32] {
-        let v = v as usize;
+        let v: usize = v as usize;
         debug_assert!(v < self.num_nodes as usize);
-        let start = self.offsets[v]     as usize;
-        let end   = self.offsets[v + 1] as usize;
+        let start: usize = self.offsets[v]     as usize;
+        let end: usize   = self.offsets[v + 1] as usize;
         &self.adjacency[start..end]
     }
 
-    // ── Edge props for neighbors of node v ──────────────────
+    // -- Edge props for neighbors of node v 
     // Parallel slice to neighbors(). Same start/end offsets.
     #[inline(always)]
     pub fn neighbor_props(&self, v: u32) -> &[EdgeProps] {
-        let v = v as usize;
-        let start = self.offsets[v]     as usize;
-        let end   = self.offsets[v + 1] as usize;
+        let v: usize = v as usize;
+        let start: usize = self.offsets[v]     as usize;
+        let end: usize   = self.offsets[v + 1] as usize;
         &self.edge_props[start..end]
     }
 
-    // ── Node props for a single node ────────────────────────
+    // -- Node props for a single node 
     // Direct array index — O(1), no search.
     // XDP pre-tags each packet with vertex_id so this is always
     // a known index, never a lookup.
@@ -139,14 +139,14 @@ impl CsrSnapshot {
         &self.node_props[v as usize]
     }
 
-    // ── Degree of node v ────────────────────────────────────
+    // -- Degree of node v
     #[inline(always)]
     pub fn degree(&self, v: u32) -> u32 {
         let v = v as usize;
         self.offsets[v + 1] - self.offsets[v]
     }
 
-    // ── Find a specific edge (src → dst) ────────────────────
+    // -- Find a specific edge (src → dst)
     // Linear scan over adjacency slice for src — typically small.
     // For hot-path use, prefer maintaining a reverse index map.
     pub fn find_edge(&self, src: u32, dst: u32) -> Option<&EdgeProps> {
@@ -156,7 +156,7 @@ impl CsrSnapshot {
                  .map(|i| &props[i])
     }
 
-    // ── BFS from a start node (bounded depth) ───────────────
+    // -- BFS from a start node (bounded depth) 
     // Used by subgraph extractor for GNN inference.
     // Returns (node_id, depth) pairs within max_depth hops.
     // Pre-allocated buffers — no Vec::new() on the hot path.
@@ -181,7 +181,7 @@ impl CsrSnapshot {
         result
     }
 
-    // ── k-hop subgraph extraction ────────────────────────────
+    // -- k-hop subgraph extraction 
     // Used by GNN inference service: pull k-hop neighborhood
     // around a trigger node and convert to PyG Data object.
     // Returns (nodes, edges) as parallel vecs.
@@ -207,7 +207,7 @@ impl CsrSnapshot {
         (nodes, edges)
     }
 
-    // ── Canary check ─────────────────────────────────────────
+    // -- Canary check 
     // Any edge written to a canary node = zero-FP CRITICAL alert.
     // Called by event-driven trigger on every graph write.
     #[inline(always)]
@@ -217,7 +217,7 @@ impl CsrSnapshot {
             .map_or(false, |n| n.is_canary)
     }
 
-    // ── Find external neighbors ──────────────────────────────
+    // -- Find external neighbors 
     // Returns node IDs of NetworkEndpoint neighbors that are external.
     // Used by kill-chain detection: process connected to external IP?
     pub fn external_neighbors(&self, v: u32) -> Vec<u32> {
@@ -232,7 +232,7 @@ impl CsrSnapshot {
     }
 }
 
-// ── Delta buffer — one per ingest worker thread ──────────────
+// -- Delta buffer — one per ingest worker thread 
 // Hot path writes here. Never touches the shared CsrSnapshot.
 // No locking. No contention. One writer per core.
 // Drained every 10ms by the merge task.
@@ -252,7 +252,7 @@ impl DeltaBuffer {
         }
     }
 
-    // ── Hot-path write — called ~15M times/sec per core ─────
+    // -- Hot-path write — called ~15M times/sec per core 
     #[inline(always)]
     pub fn add_edge(&mut self, src: u32, dst: u32, props: EdgeProps) {
         self.new_edges.push((src, dst, props));
@@ -275,14 +275,14 @@ impl DeltaBuffer {
     }
 }
 
-// ── CsrGraph — the live graph, RCU-protected ────────────────
+// -- CsrGraph — the live graph, RCU-protected
 // Writers build a new CsrSnapshot from accumulated deltas,
 // then atomically swap the Arc pointer.
 // Readers call `snapshot()` to get an Arc — they hold it for
 // the duration of their traversal. The old snapshot is dropped
 // when all readers release their Arc. Zero blocking.
 pub struct CsrGraph {
-    // Current live snapshot — read by detection workers constantly
+    // Current live snapshot - read by detection workers constantly
     current: Arc<parking_lot::RwLock<Arc<CsrSnapshot>>>,
 
     // Per-thread delta buffers — written by ingest workers, never shared
@@ -325,7 +325,7 @@ impl CsrGraph {
         }
     }
 
-    // ── Reader: get current snapshot (Arc clone, ~5ns) ──────
+    // -- Reader: get current snapshot (Arc clone, ~5ns) 
     // Readers hold this Arc for the duration of their traversal.
     // No blocking. No locking on the traversal itself.
     #[inline(always)]
@@ -333,7 +333,7 @@ impl CsrGraph {
         self.current.read().clone()
     }
 
-    // ── Writer: queue an edge from ingest worker ─────────────
+    // -- Writer: queue an edge from ingest worker
     // Hot path. Writes to delta buffer only — no shared state.
     // In production, each ingest worker has its own DeltaBuffer
     // (thread_local!). The Mutex here is for illustration.
@@ -343,19 +343,19 @@ impl CsrGraph {
         self.edge_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    // ── Merge task: runs every 10ms on a background thread ───
+    // -- Merge task: runs every 10ms on a background thread ---
     // Drains all delta buffers, rebuilds CSR arrays, swaps pointer.
     // Readers are never blocked — they hold the old Arc until done.
     pub fn merge_deltas(&self) {
-        let delta = self.delta.lock().drain();
+        let delta: DeltaBuffer = self.delta.lock().drain();
 
         // Get the current snapshot as our base
-        let current = self.snapshot();
+        let current: Arc<CsrSnapshot> = self.snapshot();
 
         // Rebuild CSR from current + delta
         // In production: sort edges by src, compute offsets[], fill adjacency[].
         // Simplified here for clarity — production uses radix sort for speed.
-        let new_snapshot = Arc::new(rebuild_csr(&current, delta));
+        let new_snapshot: Arc<CsrSnapshot> = Arc::new(rebuild_csr(&current, delta));
 
         // Atomic swap — O(1), no reader is blocked
         *self.current.write() = new_snapshot;
@@ -363,7 +363,7 @@ impl CsrGraph {
     }
 
     pub fn stats(&self) -> CsrStats {
-        let snap = self.snapshot();
+        let snap: Arc<CsrSnapshot> = self.snapshot();
         CsrStats {
             num_nodes:   snap.num_nodes,
             num_edges:   snap.num_edges,
@@ -372,7 +372,7 @@ impl CsrGraph {
     }
 }
 
-// ── CSR rebuild from base + delta ───────────────────────────
+// -- CSR rebuild from base + delta
 // Production implementation uses a radix sort on (src, dst) pairs.
 // The sort brings all edges for the same source together,
 // making offsets[] trivial to compute in one linear pass.
@@ -457,7 +457,7 @@ pub struct CsrStats {
     pub merge_count: u64,
 }
 
-// ── Tests ────────────────────────────────────────────────────
+// -- Tests 
 #[cfg(test)]
 mod tests {
     use super::*;
