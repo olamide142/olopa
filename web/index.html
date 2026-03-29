@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OLOPA — Kernel-Native Security Agent</title>
+  <title>OLOPA - Kernel-Native Security Agent</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link
     href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap"
@@ -48,11 +48,11 @@
       background: radial-gradient(circle at 20% -10%, #1c3763 0%, transparent 45%), linear-gradient(180deg, #091428 0%, #081427 100%);
       color: var(--text);
       font-family: var(--sans);
-      font-size: 14px;
+      font-size: 15px;
       line-height: 1.6;
       min-height: 100vh;
       overflow-x: hidden;
-      zoom: 1.03;
+      zoom: 1.12;
     }
 
     /* ── NOISE OVERLAY ── */
@@ -119,7 +119,7 @@
 
     .logo {
       font-family: var(--mono);
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 600;
       letter-spacing: 0.18em;
       color: var(--text-hi);
@@ -131,7 +131,7 @@
 
     .status-pill {
       font-family: var(--mono);
-      font-size: 10px;
+      font-size: 11px;
       font-weight: 500;
       letter-spacing: 0.12em;
       color: #f0c96a;
@@ -149,7 +149,7 @@
 
     .nav-link {
       font-family: var(--mono);
-      font-size: 11px;
+      font-size: 12px;
       letter-spacing: 0.1em;
       color: var(--text-hi);
       text-decoration: none;
@@ -163,7 +163,7 @@
 
     .btn-nav {
       font-family: var(--mono);
-      font-size: 11px;
+      font-size: 12px;
       letter-spacing: 0.1em;
       color: var(--text-hi);
       background: var(--accent-cta);
@@ -192,7 +192,7 @@
 
     .hero-eyebrow {
       font-family: var(--mono);
-      font-size: 10px;
+      font-size: 11px;
       letter-spacing: 0.2em;
       color: var(--text-hi);
       text-transform: uppercase;
@@ -212,7 +212,7 @@
 
     h1 {
       font-family: var(--mono);
-      font-size: 42px;
+      font-size: 46px;
       font-weight: 600;
       line-height: 1.1;
       letter-spacing: -0.02em;
@@ -226,7 +226,7 @@
 
     .hero-sub {
       font-family: var(--sans);
-      font-size: 15px;
+      font-size: 17px;
       font-weight: 300;
       color: var(--text);
       max-width: 520px;
@@ -243,7 +243,7 @@
 
     .btn-primary {
       font-family: var(--mono);
-      font-size: 12px;
+      font-size: 13px;
       letter-spacing: 0.12em;
       color: #fff;
       background: var(--accent-cta);
@@ -267,7 +267,7 @@
 
     .cta-note {
       font-family: var(--mono);
-      font-size: 10px;
+      font-size: 11px;
       color: var(--text-hi);
       letter-spacing: 0.08em;
     }
@@ -277,7 +277,7 @@
       background: var(--bg2);
       border: 1px solid var(--border);
       font-family: var(--mono);
-      font-size: 11px;
+      font-size: 12px;
       line-height: 1.8;
       padding: 0;
       margin-top: 8px;
@@ -981,7 +981,7 @@
       }
 
       h1 {
-        font-size: 28px;
+        font-size: 32px;
       }
 
       .topbar {
@@ -1047,7 +1047,7 @@
         <div class="dot dot-r"></div>
         <div class="dot dot-y"></div>
         <div class="dot dot-g"></div>
-        <span class="terminal-title">olopa-agent — live</span>
+        <span class="terminal-title">olopa-agent - live</span>
       </div>
       <div class="terminal-body">
         <span class="t-block t-dim mb">$ olopa status --verbose</span>
@@ -1085,7 +1085,7 @@
       <span class="wip-icon">[ WIP ]</span>
       <p class="wip-text">
         <strong>Olopa is an active research prototype.</strong> The architecture and core agent are pre-production.
-        APIs, schemas, and interfaces will change without notice. This page documents ongoing research direction — not
+        APIs, schemas, and interfaces will change without notice. This page documents ongoing research direction - not
         all features are available in the current build. Beta participants collaborate directly with <a href="https://www.linkedin.com/in/victor-olowofeso-9631a117a/">Victor Olowofeso</a>
       </p>
     </div>
@@ -1109,7 +1109,7 @@
       <div class="cap-card">
         <span class="cap-icon">[ FIREWALL ]</span>
         <div class="cap-title">Agentic Firewall</div>
-        <p class="cap-body">Every AI agent tool call — MCP, REST, SQL, shell, file — passes through the firewall before
+        <p class="cap-body">Every AI agent tool call - MCP, REST, SQL, shell, file - passes through the firewall before
           execution. A six-dimension risk model scores each call. A sequence-aware policy engine evaluates entire
           session action chains, blocking exfiltration patterns that are invisible when inspecting individual calls.</p>
       </div>
@@ -1117,7 +1117,7 @@
         <span class="cap-icon">[ XDP / L4 ]</span>
         <div class="cap-title">L4 Network Control</div>
         <p class="cap-body">Inspired by Cloudflare's Unimog architecture, every host is both a worker and a load
-          balancer. Packet-level decisions — drop, redirect to honeypot, or pass — occur in under one microsecond via
+          balancer. Packet-level decisions - drop, redirect to honeypot, or pass - occur in under one microsecond via
           XDP, before any TCP/IP stack processing. Per-source token buckets prevent flood attacks from exhausting the
           ingest path.</p>
       </div>
@@ -1139,8 +1139,8 @@
       <div class="cap-card">
         <span class="cap-icon">[ TRANSFORMER ]</span>
         <div class="cap-title">Sequence Foundation Model</div>
-        <p class="cap-body">A decoder-only transformer pre-trained on structured eBPF event sequences — not raw log text
-          — scores anomalies by prediction error. Temporal positional encoding encodes inter-event timing deltas
+        <p class="cap-body">A decoder-only transformer pre-trained on structured eBPF event sequences - not raw log text
+          - scores anomalies by prediction error. Temporal positional encoding encodes inter-event timing deltas
           explicitly. A cross-attention fusion layer combines sequence and graph embeddings into a unified risk score.
         </p>
       </div>
@@ -1226,7 +1226,7 @@
           <span class="det-title">Cypher Pattern Matching</span>
           <span class="det-badge badge-graph">Graph</span>
         </div>
-        <p class="det-body">Event-driven triggers fire the instant a graph write completes a dangerous pattern — no
+        <p class="det-body">Event-driven triggers fire the instant a graph write completes a dangerous pattern - no
           polling. Subgraph isomorphism against a MITRE ATT&CK-parameterised pattern library. Deterministic,
           explainable, zero false negatives for known TTPs.</p>
         <ul class="det-list">
@@ -1244,7 +1244,7 @@
         </div>
         <p class="det-body">A GAT-based graph classifier trained on 93,000+ synthetic MITRE-labelled attack graphs
           catches structural variants no Cypher rule was written for. GNNExplainer and attention weights surface
-          critical edges for analyst review. Triggered by Cypher matches — never on every event.</p>
+          critical edges for analyst review. Triggered by Cypher matches - never on every event.</p>
         <ul class="det-list">
           <li>7 attack classes + benign</li>
           <li>Synthetic data bootstraps training</li>
@@ -1259,11 +1259,11 @@
           <span class="det-badge badge-kernel">Kernel</span>
         </div>
         <p class="det-body">Six kernel tracepoints capture ground truth that user-space cannot tamper with. Structured
-          ring buffers eliminate copies. The OR scheduler applies relevance scoring — severity, delta from baseline,
-          recency, contextual flags — before any event reaches the network.</p>
+          ring buffers eliminate copies. The OR scheduler applies relevance scoring - severity, delta from baseline,
+          recency, contextual flags - before any event reaches the network.</p>
         <ul class="det-list">
           <li>execve, openat, write, connect</li>
-          <li>accept, fork — full process lineage</li>
+          <li>accept, fork - full process lineage</li>
           <li>XDP: drop floods at wire speed</li>
           <li>CO-RE portability (kernel 5.4+)</li>
           <li>Per-CPU perf fallback (5.4–5.7)</li>
@@ -1274,8 +1274,8 @@
           <span class="det-title">Sequence Transformer</span>
           <span class="det-badge badge-stream">Foundation Model</span>
         </div>
-        <p class="det-body">Structured eBPF event fields are tokenised into typed semantic embeddings — not subword text
-          — preserving privilege levels, timing deltas, IP class semantics, and path sensitivity. Anomaly score is the
+        <p class="det-body">Structured eBPF event fields are tokenised into typed semantic embeddings - not subword text
+          - preserving privilege levels, timing deltas, IP class semantics, and path sensitivity. Anomaly score is the
           negative log-probability of the observed next event. No attack labels required for pre-training.</p>
         <ul class="det-list">
           <li>Temporal PE encodes inter-event delta</li>
@@ -1298,60 +1298,60 @@
       <div class="owasp-card">
         <span class="owasp-num">01</span>
         <span class="owasp-id">LLM01</span>
-        <div class="owasp-label">Prompt Injection — Sequence-aware firewall, retrieval source scoring, context
+        <div class="owasp-label">Prompt Injection - Sequence-aware firewall, retrieval source scoring, context
           segmentation</div>
       </div>
       <div class="owasp-card">
         <span class="owasp-num">02</span>
         <span class="owasp-id">LLM02</span>
-        <div class="owasp-label">Sensitive Data Disclosure — Semantic DLP on tool args, output redaction, egress
+        <div class="owasp-label">Sensitive Data Disclosure - Semantic DLP on tool args, output redaction, egress
           controls</div>
       </div>
       <div class="owasp-card">
         <span class="owasp-num">03</span>
         <span class="owasp-id">LLM03</span>
-        <div class="owasp-label">Supply Chain — Signed tool manifests, connector registry, egress allowlists, SBOM</div>
+        <div class="owasp-label">Supply Chain - Signed tool manifests, connector registry, egress allowlists, SBOM</div>
       </div>
       <div class="owasp-card">
         <span class="owasp-num">04</span>
         <span class="owasp-id">LLM04</span>
-        <div class="owasp-label">Data & Model Poisoning — Ingestion trust scoring, retrieval provenance, source
+        <div class="owasp-label">Data & Model Poisoning - Ingestion trust scoring, retrieval provenance, source
           quarantine</div>
       </div>
       <div class="owasp-card">
         <span class="owasp-num">05</span>
         <span class="owasp-id">LLM05</span>
-        <div class="owasp-label">Improper Output Handling — Strict output schema validation, sandbox code execution
+        <div class="owasp-label">Improper Output Handling - Strict output schema validation, sandbox code execution
         </div>
       </div>
       <div class="owasp-card">
         <span class="owasp-num">06</span>
         <span class="owasp-id">LLM06</span>
-        <div class="owasp-label">Excessive Agency — Least-privilege tool scopes, approval gates, per-session action
+        <div class="owasp-label">Excessive Agency - Least-privilege tool scopes, approval gates, per-session action
           budgets</div>
       </div>
       <div class="owasp-card">
         <span class="owasp-num">07</span>
         <span class="owasp-id">LLM07</span>
-        <div class="owasp-label">System Prompt Leakage — Response leakage detectors, canary tokens, compartmentalisation
+        <div class="owasp-label">System Prompt Leakage - Response leakage detectors, canary tokens, compartmentalisation
         </div>
       </div>
       <div class="owasp-card">
         <span class="owasp-num">08</span>
         <span class="owasp-id">LLM08</span>
-        <div class="owasp-label">Vector/Embedding Weaknesses — Multi-tenant retrieval isolation, metadata integrity
+        <div class="owasp-label">Vector/Embedding Weaknesses - Multi-tenant retrieval isolation, metadata integrity
         </div>
       </div>
       <div class="owasp-card">
         <span class="owasp-num">09</span>
         <span class="owasp-id">LLM09</span>
-        <div class="owasp-label">Misinformation — Evidence scoring, retrieval-backed enforcement, high-stakes routing
+        <div class="owasp-label">Misinformation - Evidence scoring, retrieval-backed enforcement, high-stakes routing
         </div>
       </div>
       <div class="owasp-card">
         <span class="owasp-num">10</span>
         <span class="owasp-id">LLM10</span>
-        <div class="owasp-label">Unbounded Consumption — Token quotas, cost guardrails, OR scheduler budget caps</div>
+        <div class="owasp-label">Unbounded Consumption - Token quotas, cost guardrails, OR scheduler budget caps</div>
       </div>
     </div>
   </section>
@@ -1360,13 +1360,13 @@
   <section>
     <div class="section-header">
       <span class="section-num">05</span>
-      <h2>OIL — Olopa Intent Language</h2>
+      <h2>OIL - Olopa Intent Language</h2>
     </div>
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border);">
       <div style="background: var(--bg2); padding: 32px;">
         <p style="font-size: 13px; font-weight: 300; color: var(--text-dim); line-height: 1.7; margin-bottom: 20px;">OIL
-          is a declarative, compiled security language that replaces four separate policy surfaces — event filtering,
-          graph correlation, risk scoring, and response playbooks — with a single coherent grammar. The compiler routes
+          is a declarative, compiled security language that replaces four separate policy surfaces - event filtering,
+          graph correlation, risk scoring, and response playbooks - with a single coherent grammar. The compiler routes
           each rule to the optimal runtime: EPL &thinsp;.so (15ns), Tokio stream operator, Memgraph Cypher trigger.</p>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
           <div
@@ -1440,7 +1440,7 @@
             <div class="req-dot ok"></div>Direct access to a security engineer on your side
           </div>
           <div class="req-item">
-            <div class="req-dot"></div>Production traffic preferred — not strictly required
+            <div class="req-dot"></div>Production traffic preferred - not strictly required
           </div>
         </div>
       </div>
@@ -1457,9 +1457,9 @@
 
   <!-- FOOTER -->
   <footer>
-    <div class="footer-left">OLOPA RESEARCH PROTOTYPE — PRE-PRODUCTION — EXPERIMENTAL</div>
+    <div class="footer-left">OLOPA RESEARCH PROTOTYPE - PRE-PRODUCTION - EXPERIMENTAL</div>
     <div class="footer-right">
-      <span>v0.x — WIP</span>
+      <span>v0.x - WIP</span>
       <span>Linux ≥ 5.8</span>
       <span>Rust · eBPF · Memgraph · ClickHouse</span>
     </div>
