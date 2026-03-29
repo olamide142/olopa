@@ -1,0 +1,1774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OLOPA — Control Panel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,300&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:       #080b0f;
+  --bg2:      #0c1018;
+  --bg3:      #111620;
+  --bg4:      #161d2a;
+  --border:   #1a2130;
+  --border2:  #222c3a;
+  --text:     #8fa3bc;
+  --text-dim: #3d5068;
+  --text-hi:  #d4e0ee;
+  --accent:   #2d7dd2;
+  --accent2:  #1a5aa8;
+  --accent-glow: rgba(45,125,210,0.15);
+  --warn:     #e8a020;
+  --ok:       #1db954;
+  --red:      #e03030;
+  --crit:     #ff4444;
+  --purple:   #7c5cbf;
+  --mono:     'IBM Plex Mono', monospace;
+  --sans:     'IBM Plex Sans', sans-serif;
+  --sidebar:  220px;
+  --topbar:   44px;
+}
+html,body{height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13px;display:flex;flex-direction:column}
+
+/* ── SCROLLBAR ── */
+::-webkit-scrollbar{width:3px;height:3px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border2)}
+
+/* ── TOPBAR ── */
+#topbar{
+  height:var(--topbar);flex-shrink:0;
+  display:flex;align-items:center;
+  border-bottom:1px solid var(--border);
+  background:var(--bg);
+  z-index:100;
+}
+.top-logo{
+  width:var(--sidebar);flex-shrink:0;
+  display:flex;align-items:center;gap:10px;
+  padding:0 18px;
+  border-right:1px solid var(--border);
+  height:100%;
+}
+.top-logo-text{font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:0.2em;color:var(--text-hi)}
+.top-logo-ver{font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:0.1em}
+.top-center{flex:1;display:flex;align-items:center;gap:24px;padding:0 20px}
+.top-stat{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10px;letter-spacing:0.06em}
+.top-stat-dot{width:5px;height:5px;border-radius:50%;background:var(--ok);animation:pulse 2.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(29,185,84,0.4)}50%{opacity:0.6;box-shadow:0 0 0 4px rgba(29,185,84,0)}}
+.top-stat-label{color:var(--text-dim)}
+.top-stat-val{color:var(--text-hi)}
+.top-right{display:flex;align-items:center;gap:0;padding-right:16px;border-left:1px solid var(--border);height:100%;padding-left:16px;margin-left:auto}
+.top-time{font-family:var(--mono);font-size:10px;color:var(--text-dim);letter-spacing:0.1em}
+.top-alert-btn{
+  font-family:var(--mono);font-size:9px;letter-spacing:0.1em;
+  background:rgba(224,48,48,0.1);border:1px solid rgba(224,48,48,0.3);
+  color:var(--red);padding:4px 12px;cursor:pointer;margin-left:12px;
+  text-transform:uppercase;transition:background 0.2s;
+}
+.top-alert-btn:hover{background:rgba(224,48,48,0.18)}
+
+/* ── MAIN LAYOUT ── */
+#main{flex:1;display:flex;overflow:hidden}
+
+/* ── SIDEBAR ── */
+#sidebar{
+  width:var(--sidebar);flex-shrink:0;
+  border-right:1px solid var(--border);
+  display:flex;flex-direction:column;
+  overflow-y:auto;
+  background:var(--bg);
+}
+.sb-section{padding:16px 0 8px}
+.sb-label{
+  font-family:var(--mono);font-size:9px;letter-spacing:0.2em;
+  color:var(--text-dim);text-transform:uppercase;
+  padding:0 16px 8px;
+}
+.sb-item{
+  display:flex;align-items:center;gap:9px;
+  padding:8px 16px;cursor:pointer;
+  font-family:var(--mono);font-size:10px;letter-spacing:0.08em;
+  color:var(--text-dim);text-transform:uppercase;
+  transition:background 0.15s,color 0.15s;
+  border-left:2px solid transparent;
+  position:relative;
+}
+.sb-item:hover{background:var(--bg2);color:var(--text)}
+.sb-item.active{
+  background:var(--bg2);color:var(--accent);
+  border-left-color:var(--accent);
+}
+.sb-icon{width:14px;text-align:center;font-size:11px;opacity:0.7}
+.sb-badge{
+  margin-left:auto;font-size:9px;
+  background:rgba(224,48,48,0.15);border:1px solid rgba(224,48,48,0.3);
+  color:var(--red);padding:1px 6px;letter-spacing:0.05em;
+}
+.sb-divider{height:1px;background:var(--border);margin:6px 14px}
+
+.sb-agent-status{margin:auto 14px 14px;background:var(--bg2);border:1px solid var(--border);padding:10px 12px}
+.sb-agent-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}
+.sb-agent-row:last-child{margin-bottom:0}
+.sb-agent-key{font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:0.08em}
+.sb-agent-val{font-family:var(--mono);font-size:9px;color:var(--text-hi)}
+.sb-bar{height:2px;background:var(--border);margin:4px 0;position:relative;overflow:hidden}
+.sb-bar-fill{height:100%;background:var(--accent);transition:width 0.5s}
+.sb-bar-fill.warn{background:var(--warn)}
+
+/* ── CONTENT ── */
+#content{flex:1;overflow:hidden;display:flex;flex-direction:column}
+.panel{display:none;flex:1;overflow:hidden;flex-direction:column}
+.panel.active{display:flex}
+
+/* ── PANEL HEADER ── */
+.panel-header{
+  flex-shrink:0;padding:12px 20px;
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:12px;
+  background:var(--bg);
+}
+.panel-title{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:0.18em;color:var(--text-hi);text-transform:uppercase}
+.panel-sub{font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:0.08em}
+.panel-actions{margin-left:auto;display:flex;gap:8px}
+.btn{
+  font-family:var(--mono);font-size:9px;letter-spacing:0.1em;text-transform:uppercase;
+  padding:5px 12px;cursor:pointer;border:1px solid var(--border2);
+  background:var(--bg2);color:var(--text);transition:all 0.15s;
+}
+.btn:hover{background:var(--bg3);border-color:var(--text-dim);color:var(--text-hi)}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent2)}
+.btn-danger{background:rgba(224,48,48,0.1);border-color:rgba(224,48,48,0.3);color:var(--red)}
+.btn-danger:hover{background:rgba(224,48,48,0.2)}
+.btn-ok{background:rgba(29,185,84,0.1);border-color:rgba(29,185,84,0.3);color:var(--ok)}
+
+/* ══════════════════════════════════════
+   METRICS PANEL
+══════════════════════════════════════ */
+#panel-metrics{overflow-y:auto}
+.metrics-grid{padding:16px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.metric-card{
+  background:var(--bg2);border:1px solid var(--border);
+  padding:14px 16px;
+}
+.mc-label{font-family:var(--mono);font-size:9px;letter-spacing:0.14em;color:var(--text-dim);text-transform:uppercase;margin-bottom:6px}
+.mc-val{font-family:var(--mono);font-size:22px;font-weight:600;color:var(--text-hi);line-height:1}
+.mc-unit{font-size:11px;color:var(--text-dim);font-weight:300;margin-left:3px}
+.mc-delta{font-family:var(--mono);font-size:9px;margin-top:5px}
+.mc-delta.up{color:var(--ok)} .mc-delta.dn{color:var(--red)} .mc-delta.flat{color:var(--text-dim)}
+.mc-sparkline{margin-top:8px;height:28px;overflow:hidden}
+.mc-sparkline svg{width:100%;height:28px}
+
+.metrics-row{padding:0 16px 16px;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.chart-card{background:var(--bg2);border:1px solid var(--border);padding:14px}
+.chart-title{font-family:var(--mono);font-size:9px;letter-spacing:0.14em;color:var(--text-dim);text-transform:uppercase;margin-bottom:12px}
+.chart-area{height:100px;position:relative}
+.chart-area svg{width:100%;height:100%}
+.budget-bars{display:grid;gap:8px;margin-top:4px}
+.budget-row{display:flex;align-items:center;gap:10px}
+.budget-key{font-family:var(--mono);font-size:9px;color:var(--text-dim);width:40px;text-transform:uppercase;letter-spacing:0.06em}
+.budget-track{flex:1;height:4px;background:var(--border);position:relative;overflow:hidden}
+.budget-fill{height:100%;transition:width 1s}
+.budget-pct{font-family:var(--mono);font-size:9px;color:var(--text);width:30px;text-align:right}
+
+.events-table{margin:0 16px 16px;background:var(--bg2);border:1px solid var(--border)}
+.ev-table-head{display:grid;grid-template-columns:80px 120px 1fr 80px 70px;padding:8px 14px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:9px;letter-spacing:0.1em;color:var(--text-dim);text-transform:uppercase;gap:10px}
+.ev-table-body{overflow-y:auto;max-height:180px}
+.ev-row{display:grid;grid-template-columns:80px 120px 1fr 80px 70px;padding:7px 14px;border-bottom:1px solid rgba(26,33,48,0.5);font-family:var(--mono);font-size:10px;gap:10px;align-items:center;transition:background 0.1s;cursor:default}
+.ev-row:hover{background:var(--bg3)}
+.ev-row:last-child{border-bottom:none}
+.ev-ts{color:var(--text-dim)}
+.ev-host{color:var(--text)}
+.ev-desc{color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sev{font-size:9px;padding:2px 7px;text-align:center;letter-spacing:0.05em}
+.sev-crit{color:var(--crit);background:rgba(255,68,68,0.1);border:1px solid rgba(255,68,68,0.25)}
+.sev-high{color:var(--warn);background:rgba(232,160,32,0.1);border:1px solid rgba(232,160,32,0.25)}
+.sev-med{color:var(--accent);background:rgba(45,125,210,0.1);border:1px solid rgba(45,125,210,0.25)}
+.sev-low{color:var(--text-dim);background:var(--border);border:1px solid var(--border2)}
+.ev-engine{font-size:9px;color:var(--text-dim);text-align:right}
+
+/* ══════════════════════════════════════
+   GRAPH PANEL
+══════════════════════════════════════ */
+#panel-graph{overflow:hidden}
+.graph-layout{flex:1;display:grid;grid-template-columns:1fr 280px;overflow:hidden}
+.graph-canvas-wrap{position:relative;overflow:hidden;background:var(--bg);cursor:grab}
+.graph-canvas-wrap:active{cursor:grabbing}
+#graphCanvas{width:100%;height:100%;display:block}
+.graph-sidebar{border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+.gs-section{border-bottom:1px solid var(--border);padding:12px 14px}
+.gs-title{font-family:var(--mono);font-size:9px;letter-spacing:0.15em;color:var(--text-dim);text-transform:uppercase;margin-bottom:10px}
+.gs-node-selected{background:var(--bg2);border:1px solid var(--border);padding:10px 12px}
+.gs-node-type{font-family:var(--mono);font-size:9px;color:var(--accent);letter-spacing:0.1em;margin-bottom:4px}
+.gs-node-id{font-family:var(--mono);font-size:11px;color:var(--text-hi);margin-bottom:8px}
+.gs-prop{display:flex;justify-content:space-between;margin-bottom:3px}
+.gs-prop-key{font-family:var(--mono);font-size:9px;color:var(--text-dim)}
+.gs-prop-val{font-family:var(--mono);font-size:9px;color:var(--text)}
+.gs-legend{display:flex;flex-direction:column;gap:5px}
+.gs-legend-row{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:9px;color:var(--text-dim)}
+.gs-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.gs-paths{flex:1;overflow-y:auto;padding:12px 14px}
+.gs-path-item{
+  background:var(--bg2);border:1px solid var(--border);
+  padding:8px 10px;margin-bottom:6px;cursor:pointer;
+  transition:border-color 0.15s;
+}
+.gs-path-item:hover{border-color:var(--border2)}
+.gs-path-ttp{font-family:var(--mono);font-size:9px;color:var(--warn);letter-spacing:0.08em}
+.gs-path-chain{font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:3px;line-height:1.5}
+.gs-path-sev{font-size:9px;margin-top:4px}
+.graph-controls{
+  position:absolute;bottom:14px;left:14px;
+  display:flex;flex-direction:column;gap:4px;
+}
+.gc-btn{
+  width:26px;height:26px;background:var(--bg2);border:1px solid var(--border2);
+  color:var(--text);font-size:13px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);transition:background 0.15s;
+}
+.gc-btn:hover{background:var(--bg3);color:var(--text-hi)}
+.graph-filter{
+  position:absolute;top:10px;left:10px;
+  display:flex;gap:4px;
+}
+.gf-btn{
+  font-family:var(--mono);font-size:9px;letter-spacing:0.08em;
+  padding:4px 10px;cursor:pointer;border:1px solid var(--border2);
+  background:var(--bg2);color:var(--text-dim);transition:all 0.15s;text-transform:uppercase;
+}
+.gf-btn.active{background:var(--accent-glow);border-color:var(--accent);color:var(--accent)}
+
+/* ══════════════════════════════════════
+   INCIDENTS PANEL
+══════════════════════════════════════ */
+#panel-incidents{overflow:hidden}
+.incidents-layout{flex:1;display:grid;grid-template-columns:340px 1fr;overflow:hidden}
+.incident-list{border-right:1px solid var(--border);overflow-y:auto;background:var(--bg)}
+.incident-item{
+  padding:12px 14px;border-bottom:1px solid var(--border);
+  cursor:pointer;transition:background 0.15s;
+  position:relative;
+}
+.incident-item::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:transparent;transition:background 0.15s}
+.incident-item:hover{background:var(--bg2)}
+.incident-item.active{background:var(--bg2)}
+.incident-item.active::before{background:var(--accent)}
+.incident-item.crit::before,.incident-item.crit.active::before{background:var(--crit)}
+.ii-head{display:flex;align-items:center;gap:7px;margin-bottom:4px}
+.ii-id{font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:0.08em}
+.ii-title{font-family:var(--mono);font-size:10px;color:var(--text-hi);margin-bottom:3px;line-height:1.3}
+.ii-meta{font-family:var(--mono);font-size:9px;color:var(--text-dim);display:flex;gap:10px}
+.ii-ttp{color:var(--text-dim)}
+.ii-host{color:var(--text)}
+.incident-detail{overflow-y:auto;background:var(--bg);padding:0}
+.id-empty{display:flex;align-items:center;justify-content:center;height:100%;font-family:var(--mono);font-size:10px;color:var(--text-dim);letter-spacing:0.1em}
+.id-section{padding:14px 18px;border-bottom:1px solid var(--border)}
+.id-section-title{font-family:var(--mono);font-size:9px;letter-spacing:0.15em;color:var(--text-dim);text-transform:uppercase;margin-bottom:10px}
+.id-alert-box{background:var(--bg2);border:1px solid var(--border);padding:12px 14px;margin-bottom:10px}
+.id-alert-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.id-alert-title{font-family:var(--mono);font-size:12px;color:var(--text-hi);font-weight:600}
+.id-props{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.id-prop{display:flex;flex-direction:column;gap:2px}
+.id-prop-k{font-family:var(--mono);font-size:8px;color:var(--text-dim);letter-spacing:0.12em;text-transform:uppercase}
+.id-prop-v{font-family:var(--mono);font-size:10px;color:var(--text)}
+.timeline{display:flex;flex-direction:column;gap:0}
+.tl-item{display:flex;gap:12px;padding:7px 0;position:relative}
+.tl-item::before{content:'';position:absolute;left:9px;top:20px;bottom:-7px;width:1px;background:var(--border)}
+.tl-item:last-child::before{display:none}
+.tl-dot{width:18px;height:18px;border-radius:50%;background:var(--bg);border:1px solid var(--border2);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:7px;margin-top:1px}
+.tl-dot.alert{border-color:var(--crit);color:var(--crit)}
+.tl-dot.info{border-color:var(--accent);color:var(--accent)}
+.tl-dot.ok{border-color:var(--ok);color:var(--ok)}
+.tl-content{flex:1}
+.tl-ts{font-family:var(--mono);font-size:8px;color:var(--text-dim);margin-bottom:2px}
+.tl-text{font-family:var(--mono);font-size:9px;color:var(--text);line-height:1.5}
+.evidence-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.ev-box{background:var(--bg2);border:1px solid var(--border);padding:8px 10px}
+.ev-box-label{font-family:var(--mono);font-size:8px;color:var(--text-dim);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:4px}
+.ev-box-val{font-family:var(--mono);font-size:9px;color:var(--text);line-height:1.5}
+.action-row{display:flex;gap:6px;flex-wrap:wrap}
+
+/* ══════════════════════════════════════
+   OIL PLAYGROUND
+══════════════════════════════════════ */
+#panel-oil{overflow:hidden}
+.oil-layout{flex:1;display:grid;grid-template-columns:1fr 340px;overflow:hidden}
+.oil-editor-wrap{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--border)}
+.oil-toolbar{padding:8px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;background:var(--bg);flex-shrink:0}
+.oil-select{
+  font-family:var(--mono);font-size:9px;letter-spacing:0.08em;
+  background:var(--bg2);border:1px solid var(--border2);color:var(--text);
+  padding:4px 8px;cursor:pointer;
+}
+.oil-editor{flex:1;position:relative;overflow:hidden}
+#oilCode{
+  width:100%;height:100%;
+  background:var(--bg);color:var(--text-hi);
+  font-family:var(--mono);font-size:11px;line-height:1.8;
+  border:none;outline:none;resize:none;
+  padding:14px 16px;
+  tab-size:2;
+}
+.oil-output-wrap{display:flex;flex-direction:column;overflow:hidden}
+.oil-output-tabs{display:flex;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg)}
+.oil-tab{
+  font-family:var(--mono);font-size:9px;letter-spacing:0.1em;text-transform:uppercase;
+  padding:9px 14px;cursor:pointer;color:var(--text-dim);
+  border-bottom:2px solid transparent;transition:all 0.15s;
+}
+.oil-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.oil-tab:hover{color:var(--text)}
+.oil-out{display:none;flex:1;overflow-y:auto;padding:12px 14px;font-family:var(--mono);font-size:10px;line-height:1.7}
+.oil-out.active{display:block}
+.oil-out pre{color:var(--text);white-space:pre-wrap;word-break:break-all}
+.oil-token-kw{color:var(--accent)}
+.oil-token-str{color:#c8a4d4}
+.oil-token-num{color:var(--ok)}
+.oil-token-comment{color:var(--text-dim);font-style:italic}
+.oil-err{color:var(--red);background:rgba(224,48,48,0.06);border-left:2px solid var(--red);padding:6px 10px;margin-bottom:6px;font-size:9px}
+.oil-warn{color:var(--warn);background:rgba(232,160,32,0.06);border-left:2px solid var(--warn);padding:6px 10px;margin-bottom:6px;font-size:9px}
+.oil-ok{color:var(--ok);background:rgba(29,185,84,0.06);border-left:2px solid var(--ok);padding:6px 10px;margin-bottom:6px;font-size:9px}
+.oil-info{color:var(--text-dim);padding:4px 0;font-size:9px;letter-spacing:0.04em}
+.ast-tree{font-size:9px;line-height:1.8}
+.ast-node{color:var(--accent)}
+.ast-prop{color:var(--text-dim)}
+.ast-val{color:var(--text)}
+.mir-block{margin-bottom:10px}
+.mir-label{color:var(--warn);font-size:9px;letter-spacing:0.08em}
+.mir-line{color:var(--text);font-size:9px;padding-left:16px;line-height:1.7}
+.codegen-output{color:var(--ok);font-size:9px;line-height:1.8}
+.codegen-comment{color:var(--text-dim);font-style:italic}
+.run-status{display:flex;align-items:center;gap:8px;padding:8px 14px;border-top:1px solid var(--border);flex-shrink:0;font-family:var(--mono);font-size:9px}
+.run-dot{width:6px;height:6px;border-radius:50%}
+
+/* ══════════════════════════════════════
+   COMPILER PANEL
+══════════════════════════════════════ */
+#panel-compiler{overflow:hidden}
+.compiler-layout{flex:1;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;overflow:hidden;gap:1px;background:var(--border)}
+.compiler-pane{background:var(--bg);display:flex;flex-direction:column;overflow:hidden}
+.cp-header{padding:8px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-shrink:0;background:var(--bg2)}
+.cp-title{font-family:var(--mono);font-size:9px;letter-spacing:0.15em;color:var(--text-dim);text-transform:uppercase}
+.cp-badge{font-family:var(--mono);font-size:8px;padding:2px 7px;letter-spacing:0.06em;margin-left:auto}
+.cp-body{flex:1;overflow-y:auto;padding:10px 12px;font-family:var(--mono);font-size:9px;line-height:1.7}
+.pipeline-step{
+  display:flex;align-items:center;gap:10px;
+  padding:7px 10px;margin-bottom:3px;
+  background:var(--bg2);border:1px solid var(--border);
+  transition:all 0.3s;
+}
+.pipeline-step.done{border-color:rgba(29,185,84,0.25)}
+.pipeline-step.running{border-color:rgba(45,125,210,0.35);background:rgba(45,125,210,0.05)}
+.pipeline-step.error{border-color:rgba(224,48,48,0.25)}
+.ps-icon{width:14px;text-align:center;font-size:11px;flex-shrink:0}
+.ps-name{flex:1;color:var(--text);letter-spacing:0.06em}
+.ps-time{color:var(--text-dim);font-size:8px;letter-spacing:0.06em}
+.pass-item{padding:5px 0;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border)}
+.pass-item:last-child{border-bottom:none}
+.pass-name{flex:1;color:var(--text)}
+.pass-result{font-size:8px;padding:2px 6px;letter-spacing:0.06em}
+.target-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)}
+.target-row:last-child{border-bottom:none}
+.tr-icon{font-size:10px;width:16px;text-align:center}
+.tr-name{flex:1;color:var(--text)}
+.tr-status{font-size:8px;color:var(--text-dim)}
+.tr-size{font-size:8px;color:var(--text-dim);text-align:right;width:50px}
+.diag-item{padding:5px 0;border-bottom:1px solid var(--border);cursor:pointer}
+.diag-item:last-child{border-bottom:none}
+.diag-item:hover{background:var(--bg2)}
+.diag-code{font-size:8px;color:var(--text-dim)}
+.diag-msg{color:var(--text);font-size:9px;margin:2px 0}
+.diag-loc{font-size:8px;color:var(--text-dim)}
+.compiler-run-bar{
+  flex-shrink:0;padding:10px 16px;
+  border-top:1px solid var(--border);
+  background:var(--bg2);
+  display:flex;align-items:center;gap:12px;
+}
+.run-progress{flex:1;height:2px;background:var(--border);overflow:hidden}
+.run-progress-fill{height:100%;background:var(--accent);width:0;transition:width 0.4s}
+
+/* ══════════════════════════════════════
+   ANIM HELPERS
+══════════════════════════════════════ */
+@keyframes spin{to{transform:rotate(360deg)}}
+.spinning{animation:spin 0.8s linear infinite;display:inline-block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+.fade-in{animation:fadeIn 0.25s ease forwards}
+</style>
+</head>
+<body>
+
+<!-- ── TOPBAR ── -->
+<div id="topbar">
+  <div class="top-logo">
+    <div>
+      <div class="top-logo-text">OLOPA</div>
+      <div class="top-logo-ver">v0.4.1-dev</div>
+    </div>
+  </div>
+  <div class="top-center">
+    <div class="top-stat">
+      <div class="top-stat-dot"></div>
+      <span class="top-stat-label">agent</span>
+      <span class="top-stat-val">running</span>
+    </div>
+    <div class="top-stat">
+      <span class="top-stat-label">events/s</span>
+      <span class="top-stat-val" id="ts-eps">24,871</span>
+    </div>
+    <div class="top-stat">
+      <span class="top-stat-label">cpu</span>
+      <span class="top-stat-val" id="ts-cpu">3.2%</span>
+    </div>
+    <div class="top-stat">
+      <span class="top-stat-label">mem</span>
+      <span class="top-stat-val">41 MB</span>
+    </div>
+    <div class="top-stat">
+      <span class="top-stat-label">alerts open</span>
+      <span class="top-stat-val" style="color:var(--warn)" id="ts-alerts">3</span>
+    </div>
+  </div>
+  <div class="top-right">
+    <span class="top-time" id="clock">--:--:--</span>
+  </div>
+</div>
+
+<!-- ── MAIN ── -->
+<div id="main">
+
+  <!-- SIDEBAR -->
+  <div id="sidebar">
+    <div class="sb-section">
+      <div class="sb-label">Monitor</div>
+      <div class="sb-item active" data-panel="metrics" onclick="switchPanel('metrics',this)">
+        <span class="sb-icon">▦</span> Metrics
+      </div>
+      <div class="sb-item" data-panel="graph" onclick="switchPanel('graph',this)">
+        <span class="sb-icon">◈</span> Graph View
+      </div>
+      <div class="sb-item" data-panel="incidents" onclick="switchPanel('incidents',this)">
+        <span class="sb-icon">⚑</span> Incidents
+        <span class="sb-badge" id="sb-inc-badge">3</span>
+      </div>
+    </div>
+    <div class="sb-divider"></div>
+    <div class="sb-section">
+      <div class="sb-label">Developer</div>
+      <div class="sb-item" data-panel="oil" onclick="switchPanel('oil',this)">
+        <span class="sb-icon">⌥</span> OIL Playground
+      </div>
+      <div class="sb-item" data-panel="compiler" onclick="switchPanel('compiler',this)">
+        <span class="sb-icon">⚙</span> Compiler
+      </div>
+    </div>
+    <div style="flex:1"></div>
+    <div class="sb-agent-status">
+      <div class="sb-agent-row">
+        <span class="sb-agent-key">CPU</span>
+        <span class="sb-agent-val" id="sb-cpu">3.2%</span>
+      </div>
+      <div class="sb-bar"><div class="sb-bar-fill" id="sb-cpu-bar" style="width:32%"></div></div>
+      <div class="sb-agent-row">
+        <span class="sb-agent-key">MEM</span>
+        <span class="sb-agent-val">41 MB</span>
+      </div>
+      <div class="sb-bar"><div class="sb-bar-fill" style="width:41%"></div></div>
+      <div class="sb-agent-row" style="margin-top:5px">
+        <span class="sb-agent-key">PROBES</span>
+        <span class="sb-agent-val" style="color:var(--ok)">6 / 6</span>
+      </div>
+      <div class="sb-agent-row">
+        <span class="sb-agent-key">BACKEND</span>
+        <span class="sb-agent-val" style="color:var(--ok)">8 ms</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONTENT -->
+  <div id="content">
+
+    <!-- ═══ METRICS PANEL ═══ -->
+    <div class="panel active" id="panel-metrics">
+      <div class="panel-header">
+        <span class="panel-title">Metrics</span>
+        <span class="panel-sub">/ live · 5s window</span>
+        <div class="panel-actions">
+          <button class="btn">Export CSV</button>
+          <button class="btn">1h</button>
+          <button class="btn btn-primary">5m</button>
+        </div>
+      </div>
+      <div style="flex:1;overflow-y:auto">
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="mc-label">Events / sec</div>
+            <div class="mc-val"><span id="m-eps">24,871</span><span class="mc-unit">eps</span></div>
+            <div class="mc-delta up" id="m-eps-d">↑ 2.1%</div>
+            <div class="mc-sparkline"><canvas id="spark-eps" height="28"></canvas></div>
+          </div>
+          <div class="metric-card">
+            <div class="mc-label">Transmitted</div>
+            <div class="mc-val">98<span class="mc-unit">%</span></div>
+            <div class="mc-delta flat">→ stable</div>
+            <div class="mc-sparkline"><canvas id="spark-tx" height="28"></canvas></div>
+          </div>
+          <div class="metric-card">
+            <div class="mc-label">Firewall Decisions</div>
+            <div class="mc-val"><span id="m-fw">3,441</span><span class="mc-unit">/s</span></div>
+            <div class="mc-delta up">↑ 0.4%</div>
+            <div class="mc-sparkline"><canvas id="spark-fw" height="28"></canvas></div>
+          </div>
+          <div class="metric-card">
+            <div class="mc-label">Alerts Fired</div>
+            <div class="mc-val" style="color:var(--warn)">3<span class="mc-unit">open</span></div>
+            <div class="mc-delta dn">↑ +1 this window</div>
+            <div class="mc-sparkline"><canvas id="spark-al" height="28"></canvas></div>
+          </div>
+        </div>
+        <div class="metrics-row">
+          <div class="chart-card">
+            <div class="chart-title">OR Budget Utilisation</div>
+            <div class="budget-bars">
+              <div class="budget-row"><span class="budget-key">CPU</span><div class="budget-track"><div class="budget-fill" style="width:64%;background:var(--accent)"></div></div><span class="budget-pct">64%</span></div>
+              <div class="budget-row"><span class="budget-key">MEM</span><div class="budget-track"><div class="budget-fill" style="width:41%;background:var(--accent)"></div></div><span class="budget-pct">41%</span></div>
+              <div class="budget-row"><span class="budget-key">IO</span><div class="budget-track"><div class="budget-fill" style="width:28%;background:var(--ok)"></div></div><span class="budget-pct">28%</span></div>
+              <div class="budget-row"><span class="budget-key">NET</span><div class="budget-track"><div class="budget-fill" style="width:52%;background:var(--accent)"></div></div><span class="budget-pct">52%</span></div>
+              <div class="budget-row"><span class="budget-key">BW</span><div class="budget-track"><div class="budget-fill" style="width:36%;background:var(--ok)"></div></div><span class="budget-pct">36%</span></div>
+            </div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Firewall Verdict Distribution</div>
+            <canvas id="chart-verdicts" height="100"></canvas>
+          </div>
+        </div>
+        <div class="events-table">
+          <div class="ev-table-head">
+            <span>Timestamp</span><span>Host</span><span>Description</span><span>Severity</span><span>Engine</span>
+          </div>
+          <div class="ev-table-body" id="events-tbody"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ GRAPH PANEL ═══ -->
+    <div class="panel" id="panel-graph">
+      <div class="panel-header">
+        <span class="panel-title">Graph View</span>
+        <span class="panel-sub">/ live entity graph · Memgraph</span>
+        <div class="panel-actions">
+          <button class="btn" onclick="resetGraph()">Reset</button>
+          <button class="btn btn-primary" onclick="addAttackPath()">Simulate Attack</button>
+        </div>
+      </div>
+      <div class="graph-layout">
+        <div class="graph-canvas-wrap">
+          <canvas id="graphCanvas"></canvas>
+          <div class="graph-filter">
+            <button class="gf-btn active" onclick="toggleFilter(this,'all')">All</button>
+            <button class="gf-btn" onclick="toggleFilter(this,'process')">Process</button>
+            <button class="gf-btn" onclick="toggleFilter(this,'network')">Network</button>
+            <button class="gf-btn" onclick="toggleFilter(this,'file')">File</button>
+            <button class="gf-btn" onclick="toggleFilter(this,'agent')">Agent</button>
+          </div>
+          <div class="graph-controls">
+            <button class="gc-btn" onclick="zoomGraph(1.2)">+</button>
+            <button class="gc-btn" onclick="zoomGraph(0.8)">−</button>
+          </div>
+        </div>
+        <div class="graph-sidebar">
+          <div class="gs-section">
+            <div class="gs-title">Selected Node</div>
+            <div class="gs-node-selected" id="gs-node-info">
+              <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim)">Click a node to inspect</div>
+            </div>
+          </div>
+          <div class="gs-section">
+            <div class="gs-title">Legend</div>
+            <div class="gs-legend">
+              <div class="gs-legend-row"><div class="gs-dot" style="background:#2d7dd2"></div>Process</div>
+              <div class="gs-legend-row"><div class="gs-dot" style="background:#e8a020"></div>Network Endpoint</div>
+              <div class="gs-legend-row"><div class="gs-dot" style="background:#7c5cbf"></div>File</div>
+              <div class="gs-legend-row"><div class="gs-dot" style="background:#1db954"></div>User</div>
+              <div class="gs-legend-row"><div class="gs-dot" style="background:#e03030"></div>Secret</div>
+              <div class="gs-legend-row"><div class="gs-dot" style="background:#4ecdc4"></div>Agent Session</div>
+            </div>
+          </div>
+          <div class="gs-section"><div class="gs-title">Detected Paths</div></div>
+          <div class="gs-paths" id="gs-paths">
+            <div class="gs-path-item" onclick="highlightPath(0)">
+              <div class="gs-path-ttp">T1059 · CONFIRMED</div>
+              <div class="gs-path-chain">nginx:1241 → bash:4821 → 185.220.x.x</div>
+              <div class="gs-path-sev"><span class="sev sev-crit">CRITICAL</span></div>
+            </div>
+            <div class="gs-path-item" onclick="highlightPath(1)">
+              <div class="gs-path-ttp">T1552 · PROBABLE</div>
+              <div class="gs-path-chain">python:8821 → /etc/shadow → curl:9921</div>
+              <div class="gs-path-sev"><span class="sev sev-high">HIGH</span></div>
+            </div>
+            <div class="gs-path-item" onclick="highlightPath(2)">
+              <div class="gs-path-ttp">LLM01 · POSSIBLE</div>
+              <div class="gs-path-chain">agent-session:abc → tool:read_gdrive → tool:send_email</div>
+              <div class="gs-path-sev"><span class="sev sev-high">HIGH</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ INCIDENTS PANEL ═══ -->
+    <div class="panel" id="panel-incidents">
+      <div class="panel-header">
+        <span class="panel-title">Incidents</span>
+        <span class="panel-sub">/ 3 open · sorted by severity</span>
+        <div class="panel-actions">
+          <button class="btn">Export</button>
+          <button class="btn btn-danger">Triage All</button>
+        </div>
+      </div>
+      <div class="incidents-layout">
+        <div class="incident-list" id="incident-list"></div>
+        <div class="incident-detail" id="incident-detail">
+          <div class="id-empty">← Select an incident</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ OIL PLAYGROUND ═══ -->
+    <div class="panel" id="panel-oil">
+      <div class="panel-header">
+        <span class="panel-title">OIL Playground</span>
+        <span class="panel-sub">/ Olopa Intent Language · live compile</span>
+        <div class="panel-actions">
+          <select class="oil-select" onchange="loadTemplate(this.value)">
+            <option value="">— Load Template —</option>
+            <option value="webshell">Webshell Detect (EPL)</option>
+            <option value="lateral">Lateral Movement (Graph)</option>
+            <option value="exfil">Credential Exfil Chain (Temporal)</option>
+            <option value="policy">Adaptive Policy</option>
+            <option value="dns">DNS Tunnel (Around)</option>
+          </select>
+          <button class="btn" onclick="clearEditor()">Clear</button>
+          <button class="btn btn-primary" onclick="runOilCompile()">▶ Compile</button>
+        </div>
+      </div>
+      <div class="oil-layout">
+        <div class="oil-editor-wrap">
+          <div class="oil-toolbar">
+            <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:0.1em">EDITOR</span>
+            <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-left:auto" id="oil-linecount">0 lines</span>
+          </div>
+          <div class="oil-editor">
+            <textarea id="oilCode" spellcheck="false" placeholder="# Write OIL rules here...
+# Ctrl+Enter to compile" oninput="updateLineCount()"></textarea>
+          </div>
+        </div>
+        <div class="oil-output-wrap">
+          <div class="oil-output-tabs">
+            <div class="oil-tab active" onclick="switchOilTab('diagnostics',this)">Diagnostics</div>
+            <div class="oil-tab" onclick="switchOilTab('ast',this)">AST</div>
+            <div class="oil-tab" onclick="switchOilTab('mir',this)">MIR</div>
+            <div class="oil-tab" onclick="switchOilTab('codegen',this)">Codegen</div>
+          </div>
+          <div class="oil-out active" id="oil-out-diagnostics">
+            <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:0.08em">Ready. Write a rule and click ▶ Compile.</div>
+          </div>
+          <div class="oil-out" id="oil-out-ast"></div>
+          <div class="oil-out" id="oil-out-mir"></div>
+          <div class="oil-out" id="oil-out-codegen"></div>
+          <div class="run-status" id="oil-run-status">
+            <div class="run-dot" style="background:var(--text-dim)"></div>
+            <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim)" id="oil-run-msg">idle</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ COMPILER PANEL ═══ -->
+    <div class="panel" id="panel-compiler">
+      <div class="panel-header">
+        <span class="panel-title">Compiler</span>
+        <span class="panel-sub">/ OIL → EPL .so / Cypher / Stream / OPA</span>
+        <div class="panel-actions">
+          <button class="btn" onclick="resetCompiler()">Reset</button>
+          <button class="btn btn-primary" id="compile-btn" onclick="runFullCompile()">▶ Run Pipeline</button>
+        </div>
+      </div>
+      <div class="compiler-layout">
+        <div class="compiler-pane">
+          <div class="cp-header">
+            <span class="cp-title">Pipeline Stages</span>
+            <span class="cp-badge" style="color:var(--text-dim);background:var(--border);border:1px solid var(--border2)" id="cp-stage-status">idle</span>
+          </div>
+          <div class="cp-body" id="cp-pipeline"></div>
+        </div>
+        <div class="compiler-pane">
+          <div class="cp-header">
+            <span class="cp-title">Optimiser Passes</span>
+            <span class="cp-badge" style="color:var(--ok);background:rgba(29,185,84,0.08);border:1px solid rgba(29,185,84,0.2)" id="cp-pass-status">7 passes</span>
+          </div>
+          <div class="cp-body" id="cp-passes"></div>
+        </div>
+        <div class="compiler-pane">
+          <div class="cp-header">
+            <span class="cp-title">Output Targets</span>
+            <span class="cp-badge" style="color:var(--accent);background:rgba(45,125,210,0.08);border:1px solid rgba(45,125,210,0.2)">4 backends</span>
+          </div>
+          <div class="cp-body" id="cp-targets"></div>
+        </div>
+        <div class="compiler-pane">
+          <div class="cp-header">
+            <span class="cp-title">Diagnostics</span>
+            <span class="cp-badge" style="color:var(--ok);background:rgba(29,185,84,0.08);border:1px solid rgba(29,185,84,0.2)" id="cp-diag-status">0 errors</span>
+          </div>
+          <div class="cp-body" id="cp-diagnostics"></div>
+        </div>
+      </div>
+      <div class="compiler-run-bar">
+        <button class="btn btn-primary" id="compile-btn2" onclick="runFullCompile()" style="padding:5px 18px">▶ Run</button>
+        <div class="run-progress"><div class="run-progress-fill" id="compiler-progress"></div></div>
+        <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim)" id="compiler-status-msg">Awaiting input</span>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /main -->
+
+<script>
+/* ════════════════════════════════════════════════
+   NAVIGATION
+════════════════════════════════════════════════ */
+function switchPanel(name, el) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.sb-item').forEach(s => s.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  el.classList.add('active');
+  if (name === 'graph') { setTimeout(initGraph, 50); }
+  if (name === 'compiler') { initCompilerUI(); }
+}
+
+/* ════════════════════════════════════════════════
+   CLOCK + LIVE METRICS
+════════════════════════════════════════════════ */
+function updateClock() {
+  const n = new Date();
+  document.getElementById('clock').textContent =
+    n.toTimeString().slice(0,8) + ' UTC';
+}
+setInterval(updateClock, 1000); updateClock();
+
+let epsBase = 24871;
+function jitter(v, pct) { return Math.round(v * (1 + (Math.random()-0.5)*pct)); }
+
+const sparkData = { eps:[], tx:[], fw:[], al:[] };
+for(let i=0;i<30;i++) {
+  sparkData.eps.push(jitter(24871,0.05));
+  sparkData.tx.push(jitter(98,0.02));
+  sparkData.fw.push(jitter(3441,0.06));
+  sparkData.al.push(Math.random()>0.85?1:0);
+}
+
+function drawSparkline(canvasId, data, color) {
+  const c = document.getElementById(canvasId);
+  if(!c) return;
+  const ctx = c.getContext('2d');
+  const w = c.offsetWidth||160, h = 28;
+  c.width = w; c.height = h;
+  const mn = Math.min(...data)*0.97, mx = Math.max(...data)*1.03;
+  ctx.clearRect(0,0,w,h);
+  ctx.strokeStyle = color||'#2d7dd2';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  data.forEach((v,i)=>{
+    const x = (i/(data.length-1))*w;
+    const y = h - ((v-mn)/(mx-mn||1))*(h-4) - 2;
+    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+  ctx.strokeStyle='transparent';
+  ctx.fillStyle=color+'22'||'#2d7dd229';
+  ctx.lineTo(w,h);ctx.lineTo(0,h);ctx.closePath();ctx.fill();
+}
+
+function liveUpdate() {
+  const eps = jitter(epsBase, 0.04);
+  sparkData.eps.push(eps); if(sparkData.eps.length>30)sparkData.eps.shift();
+  sparkData.fw.push(jitter(3441,0.05)); if(sparkData.fw.length>30)sparkData.fw.shift();
+  sparkData.tx.push(jitter(98,0.01)); if(sparkData.tx.length>30)sparkData.tx.shift();
+
+  document.getElementById('m-eps').textContent = eps.toLocaleString();
+  document.getElementById('ts-eps').textContent = eps.toLocaleString();
+  const cpu = (2.8+Math.random()*0.8).toFixed(1)+'%';
+  document.getElementById('ts-cpu').textContent = cpu;
+  document.getElementById('sb-cpu').textContent = cpu;
+  document.getElementById('sb-cpu-bar').style.width = (parseFloat(cpu)*6.4)+'%';
+
+  drawSparkline('spark-eps',sparkData.eps,'#2d7dd2');
+  drawSparkline('spark-tx',sparkData.tx,'#1db954');
+  drawSparkline('spark-fw',sparkData.fw,'#e8a020');
+  drawSparkline('spark-al',sparkData.al,'#e03030');
+  drawVerdictChart();
+}
+setInterval(liveUpdate, 2000); setTimeout(liveUpdate, 100);
+
+/* verdict chart */
+function drawVerdictChart() {
+  const c = document.getElementById('chart-verdicts');
+  if(!c)return;
+  const ctx = c.getContext('2d');
+  const w = c.offsetWidth||280, h = 100;
+  c.width=w; c.height=h;
+  ctx.clearRect(0,0,w,h);
+  const bars=[
+    {label:'ALLOW',val:jitter(3441,0.03),color:'#1db954'},
+    {label:'DENY', val:jitter(2,0.3),    color:'#e03030'},
+    {label:'APRV', val:jitter(1,0.5),    color:'#e8a020'},
+    {label:'REDIR',val:jitter(12,0.1),   color:'#2d7dd2'},
+  ];
+  const mx=Math.max(...bars.map(b=>b.val));
+  const bw=(w/bars.length)-10;
+  bars.forEach((b,i)=>{
+    const bh=((b.val/mx)*(h-20));
+    const x=i*(w/bars.length)+5;
+    const y=h-bh-15;
+    ctx.fillStyle=b.color+'33';
+    ctx.fillRect(x,y,bw,bh);
+    ctx.fillStyle=b.color;
+    ctx.fillRect(x,y,bw,2);
+    ctx.fillStyle='#3d5068';
+    ctx.font='8px IBM Plex Mono';
+    ctx.fillText(b.label,x,h-3);
+    ctx.fillStyle=b.color;
+    ctx.fillText(b.val.toLocaleString(),x,y-3);
+  });
+}
+
+/* events table */
+const EVENTS_DATA = [
+  {ts:'14:32:07',host:'prod-web-01',desc:'nginx:1241 spawned bash:4821',sev:'crit',eng:'EPL'},
+  {ts:'14:31:58',host:'prod-web-01',desc:'bash:4821 connected to 185.220.101.x:4444',sev:'crit',eng:'Graph'},
+  {ts:'14:31:44',host:'prod-db-03',desc:'python:8821 read /etc/shadow',sev:'high',eng:'eBPF'},
+  {ts:'14:30:21',host:'agent-svc',  desc:'AgentSession:abc called send_email external',sev:'high',eng:'Firewall'},
+  {ts:'14:29:33',host:'prod-api-02',desc:'uid 0→1000 after SUID exec',sev:'high',eng:'EPL'},
+  {ts:'14:28:11',host:'prod-web-01',desc:'DNS query entropy 4.8 — dga_suspect',sev:'med',eng:'Stream'},
+  {ts:'14:27:50',host:'prod-db-03', desc:'10 internal hosts reached via SSH',sev:'high',eng:'Graph'},
+  {ts:'14:26:39',host:'prod-api-02',desc:'Outbound bytes > 500KB to ASN 60781',sev:'med',eng:'ClickHouse'},
+  {ts:'14:25:02',host:'worker-11',  desc:'Container escape attempt — ns_change',sev:'high',eng:'eBPF'},
+  {ts:'14:24:18',host:'prod-web-01',desc:'Low-prevalence binary from /tmp',sev:'low',eng:'EPL'},
+];
+(function buildEventsTable(){
+  const tb = document.getElementById('events-tbody');
+  EVENTS_DATA.forEach(e=>{
+    const r = document.createElement('div');
+    r.className='ev-row';
+    const sc = e.sev==='crit'?'sev-crit':e.sev==='high'?'sev-high':e.sev==='med'?'sev-med':'sev-low';
+    const sl = e.sev==='crit'?'CRIT':e.sev==='high'?'HIGH':e.sev==='med'?'MED':'LOW';
+    r.innerHTML=`<span class="ev-ts">${e.ts}</span><span class="ev-host">${e.host}</span><span class="ev-desc">${e.desc}</span><span class="sev ${sc}">${sl}</span><span class="ev-engine">${e.eng}</span>`;
+    tb.appendChild(r);
+  });
+})();
+
+/* ════════════════════════════════════════════════
+   GRAPH ENGINE
+════════════════════════════════════════════════ */
+let graphNodes=[], graphEdges=[], gScale=1, gOffX=0, gOffY=0;
+let graphDragging=false, gdx=0, gdy=0, selectedNode=null;
+let graphInited=false;
+
+const NODE_COLORS={Process:'#2d7dd2',NetworkEndpoint:'#e8a020',File:'#7c5cbf',User:'#1db954',Secret:'#e03030',AgentSession:'#4ecdc4'};
+
+function makeNodes() {
+  const W=700,H=450;
+  return [
+    {id:0,type:'Process',label:'nginx:1241',x:W*0.2,y:H*0.35,risk:0.1},
+    {id:1,type:'Process',label:'bash:4821', x:W*0.4,y:H*0.25,risk:0.9,alert:true},
+    {id:2,type:'NetworkEndpoint',label:'185.220.x.x:4444',x:W*0.65,y:H*0.18,risk:1.0,alert:true},
+    {id:3,type:'Process',label:'worker:1242',x:W*0.2,y:H*0.55,risk:0.0},
+    {id:4,type:'User',label:'www-data(33)',x:W*0.08,y:H*0.45,risk:0.1},
+    {id:5,type:'Process',label:'python:8821',x:W*0.35,y:H*0.62,risk:0.7},
+    {id:6,type:'Secret',label:'/etc/shadow',x:W*0.55,y:H*0.72,risk:0.9},
+    {id:7,type:'File',label:'/tmp/sh.py',x:W*0.25,y:H*0.75,risk:0.6},
+    {id:8,type:'AgentSession',label:'session:abc',x:W*0.72,y:H*0.52,risk:0.5},
+    {id:9,type:'NetworkEndpoint',label:'10.0.0.5:5432',x:W*0.88,y:H*0.35,risk:0.1},
+    {id:10,type:'Process',label:'logrotate:512',x:W*0.08,y:H*0.72,risk:0.0},
+    {id:11,type:'File',label:'/var/log/nginx',x:W*0.18,y:H*0.86,risk:0.0},
+  ];
+}
+
+function makeEdges() {
+  return [
+    {s:0,t:1,rel:'SPAWNED',alert:true},
+    {s:1,t:2,rel:'CONNECTED_TO',alert:true},
+    {s:0,t:3,rel:'SPAWNED'},
+    {s:4,t:0,rel:'RAN_AS'},
+    {s:4,t:5,rel:'RAN_AS'},
+    {s:5,t:6,rel:'ACCESSED_SECRET',alert:true},
+    {s:5,t:7,rel:'READ_FILE'},
+    {s:8,t:9,rel:'CONNECTED_TO'},
+    {s:10,t:11,rel:'WROTE_FILE'},
+    {s:0,t:9,rel:'CONNECTED_TO'},
+  ];
+}
+
+function initGraph() {
+  if(graphInited) { drawGraph(); return; }
+  graphNodes = makeNodes();
+  graphEdges = makeEdges();
+  const wrap = document.querySelector('.graph-canvas-wrap');
+  const c = document.getElementById('graphCanvas');
+  c.width = wrap.offsetWidth;
+  c.height = wrap.offsetHeight;
+  const scaleX = c.width/700, scaleY = c.height/450;
+  const sc = Math.min(scaleX,scaleY)*0.88;
+  gOffX=(c.width - 700*sc)/2;
+  gOffY=(c.height - 450*sc)/2;
+  gScale=sc;
+
+  c.addEventListener('mousedown', e=>{
+    graphDragging=true; gdx=e.clientX-gOffX; gdy=e.clientY-gOffY; e.preventDefault();
+  });
+  window.addEventListener('mousemove', e=>{
+    if(!graphDragging)return;
+    gOffX=e.clientX-gdx; gOffY=e.clientY-gdy; drawGraph();
+  });
+  window.addEventListener('mouseup',()=>graphDragging=false);
+  c.addEventListener('click', e=>{
+    const rect=c.getBoundingClientRect();
+    const mx=(e.clientX-rect.left-gOffX)/gScale;
+    const my=(e.clientY-rect.top-gOffY)/gScale;
+    let hit=null;
+    graphNodes.forEach(n=>{
+      const dx=n.x-mx,dy=n.y-my;
+      if(Math.sqrt(dx*dx+dy*dy)<12) hit=n;
+    });
+    selectedNode=hit; drawGraph(); if(hit) showNodeInfo(hit);
+  });
+  c.addEventListener('wheel', e=>{
+    e.preventDefault();
+    const factor=e.deltaY<0?1.1:0.9;
+    zoomGraph(factor);
+  });
+  graphInited=true;
+  drawGraph();
+  setInterval(()=>{ if(document.getElementById('panel-graph').classList.contains('active')) animateGraph(); },100);
+}
+
+let animT=0;
+function animateGraph(){
+  animT+=0.02;
+  graphNodes.forEach(n=>{ if(n.alert) n._pulse=(Math.sin(animT*3)*0.3+0.7); });
+  drawGraph();
+}
+
+function drawGraph(){
+  const c=document.getElementById('graphCanvas');
+  if(!c)return;
+  const ctx=c.getContext('2d');
+  ctx.clearRect(0,0,c.width,c.height);
+  ctx.save();
+  ctx.translate(gOffX,gOffY);
+  ctx.scale(gScale,gScale);
+
+  // edges
+  graphEdges.forEach(e=>{
+    const s=graphNodes[e.s],t=graphNodes[e.t];
+    ctx.beginPath();
+    ctx.moveTo(s.x,s.y);ctx.lineTo(t.x,t.y);
+    ctx.strokeStyle=e.alert?'rgba(224,48,48,0.5)':'rgba(34,44,58,0.9)';
+    ctx.lineWidth=e.alert?1.5:1;
+    if(e.alert){ctx.setLineDash([4,3])}else{ctx.setLineDash([])}
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // arrow
+    const ang=Math.atan2(t.y-s.y,t.x-s.x);
+    const ax=t.x-Math.cos(ang)*13,ay=t.y-Math.sin(ang)*13;
+    ctx.beginPath();
+    ctx.moveTo(ax,ay);
+    ctx.lineTo(ax-5*Math.cos(ang-0.4),ay-5*Math.sin(ang-0.4));
+    ctx.lineTo(ax-5*Math.cos(ang+0.4),ay-5*Math.sin(ang+0.4));
+    ctx.closePath();
+    ctx.fillStyle=e.alert?'rgba(224,48,48,0.6)':'rgba(55,70,90,0.8)';
+    ctx.fill();
+    // edge label
+    const mx=(s.x+t.x)/2,my=(s.y+t.y)/2;
+    ctx.fillStyle='rgba(61,80,104,0.9)';
+    ctx.font='7px IBM Plex Mono';
+    ctx.fillText(e.rel,mx-ctx.measureText(e.rel).width/2,my-3);
+  });
+
+  // nodes
+  graphNodes.forEach(n=>{
+    const col=NODE_COLORS[n.type]||'#888';
+    const r=n===selectedNode?13:10;
+    if(n.alert && n._pulse){
+      ctx.beginPath();
+      ctx.arc(n.x,n.y,r*1.8*(n._pulse||0.7),0,Math.PI*2);
+      ctx.fillStyle=col+'18';
+      ctx.fill();
+    }
+    if(n===selectedNode){
+      ctx.beginPath();
+      ctx.arc(n.x,n.y,r+4,0,Math.PI*2);
+      ctx.strokeStyle=col+'88';
+      ctx.lineWidth=1.5;
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.arc(n.x,n.y,r,0,Math.PI*2);
+    ctx.fillStyle=col+(n.alert?'':n===selectedNode?'':'aa');
+    ctx.fill();
+    if(n.risk>0.5){
+      ctx.beginPath();
+      ctx.arc(n.x,n.y,r,0,Math.PI*2);
+      ctx.strokeStyle='rgba(224,48,48,0.4)';
+      ctx.lineWidth=1;
+      ctx.stroke();
+    }
+    ctx.fillStyle='#d4e0ee';
+    ctx.font=`${n===selectedNode?'bold ':' '}8px IBM Plex Mono`;
+    ctx.fillText(n.label,n.x-ctx.measureText(n.label).width/2,n.y+r+10);
+  });
+
+  ctx.restore();
+}
+
+function showNodeInfo(n){
+  document.getElementById('gs-node-info').innerHTML=`
+    <div class="gs-node-type">${n.type}</div>
+    <div class="gs-node-id">${n.label}</div>
+    <div class="gs-prop"><span class="gs-prop-key">risk_score</span><span class="gs-prop-val" style="color:${n.risk>0.7?'var(--red)':n.risk>0.3?'var(--warn)':'var(--ok)'}">${n.risk.toFixed(2)}</span></div>
+    <div class="gs-prop"><span class="gs-prop-key">alert</span><span class="gs-prop-val" style="color:${n.alert?'var(--red)':'var(--ok)'}">${n.alert?'true':'false'}</span></div>
+    <div class="gs-prop"><span class="gs-prop-key">type</span><span class="gs-prop-val">${n.type}</span></div>
+  `;
+}
+
+function zoomGraph(f){
+  gScale*=f;
+  drawGraph();
+}
+function resetGraph(){
+  graphInited=false;
+  initGraph();
+}
+function addAttackPath(){
+  const c=document.getElementById('graphCanvas');
+  const n1={id:graphNodes.length,type:'Process',label:'svchost.exe',x:450,y:300,risk:0.8,alert:true};
+  const n2={id:graphNodes.length+1,type:'NetworkEndpoint',label:'10.0.0.99:445',x:580,y:390,risk:0.5};
+  graphNodes.push(n1,n2);
+  graphEdges.push({s:n1.id,t:n2.id,rel:'LATERAL_MOVE',alert:true});
+  drawGraph();
+}
+function toggleFilter(btn,type){
+  document.querySelectorAll('.gf-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+}
+function highlightPath(idx){
+  const paths=[[0,1,2],[5,6],[8,9]];
+  if(paths[idx]){
+    selectedNode=graphNodes[paths[idx][0]];
+    drawGraph();
+    if(selectedNode) showNodeInfo(selectedNode);
+  }
+}
+
+/* ════════════════════════════════════════════════
+   INCIDENTS
+════════════════════════════════════════════════ */
+const INCIDENTS=[
+  {id:'INC-0041',sev:'crit',ttp:'T1059',host:'prod-web-01',engine:'Graph+EPL',
+   title:'Web Shell → Reverse Shell Confirmed',
+   ts:'2024-01-15 14:32:07',confidence:0.94,
+   mitre:['T1059','T1190'],
+   summary:'nginx:1241 spawned bash:4821 which established an outbound connection to 185.220.101.x:4444 within 2 seconds. Cypher trigger fired on SPAWNED edge write. GNN confidence 0.94. Three engines corroborated.',
+   timeline:[
+     {type:'alert',ts:'14:32:07',text:'EPL rule webshell_spawn_detect fired — nginx→bash SPAWNED edge'},
+     {type:'alert',ts:'14:32:07',text:'Graph trigger webshell_chain fired — bash→ext CONNECTED_TO edge'},
+     {type:'alert',ts:'14:32:09',text:'GNN inference: attack_class=webshell, confidence=0.94'},
+     {type:'info', ts:'14:32:10',text:'Detection Orchestrator fused 3 signals → CRITICAL alert'},
+     {type:'info', ts:'14:32:10',text:'Snapshot: process_tree(bash:4821) captured'},
+   ],
+   evidence:{pid:'4821',ppid:'1241',comm:'bash',uid:'33',dst_ip:'185.220.101.47',dst_port:'4444',duration_ms:'2041ms'}
+  },
+  {id:'INC-0040',sev:'high',ttp:'T1552',host:'prod-db-03',engine:'eBPF+Graph',
+   title:'Credential File Access + Exfil Path',
+   ts:'2024-01-15 14:31:44',confidence:0.78,
+   mitre:['T1552','T1041'],
+   summary:'python:8821 read /etc/shadow (uid=0). Graph path traced from Secret node to external NetworkEndpoint via curl subprocess. Risk score 78.',
+   timeline:[
+     {type:'alert',ts:'14:31:44',text:'eBPF openat probe — /etc/shadow opened by python:8821'},
+     {type:'info', ts:'14:31:46',text:'Graph secret exfiltration path query matched'},
+     {type:'alert',ts:'14:31:51',text:'curl:9921 subprocess launched, connected to 45.33.x.x:443'},
+     {type:'info', ts:'14:31:52',text:'Temporal correlate rule credential_access_exfil fired'},
+   ],
+   evidence:{pid:'8821',file:'/etc/shadow',uid:'0',child_proc:'curl:9921',dst_ip:'45.33.32.156'}
+  },
+  {id:'INC-0039',sev:'high',ttp:'LLM01',host:'agent-svc',engine:'Firewall',
+   title:'Agentic Session Data Exfiltration Chain',
+   ts:'2024-01-15 14:30:21',confidence:0.71,
+   mitre:['LLM01','LLM06'],
+   summary:'AgentSession:abc accessed internal Google Drive file, queried customer DB, then attempted send_email to external domain. Firewall DENIED at step 5. Sequence-aware policy exfil-chain-001 matched.',
+   timeline:[
+     {type:'info', ts:'14:30:01',text:'Tool call: read_gdrive("Q4_revenue.xlsx") — ALLOW'},
+     {type:'info', ts:'14:30:08',text:'Tool call: query_customer_db("SELECT * FROM contacts") — ALLOW'},
+     {type:'alert',ts:'14:30:21',text:'Tool call: send_email(to=external@domain.com) — DENY by exfil-chain-001'},
+     {type:'ok',   ts:'14:30:21',text:'Firewall blocked. Alert generated. Session flagged.'},
+   ],
+   evidence:{session_id:'abc',agent:'gpt-4o',rule:'exfil-chain-001',verdict:'DENY',chain_len:'5'}
+  },
+];
+
+(function buildIncidents(){
+  const list=document.getElementById('incident-list');
+  INCIDENTS.forEach((inc,i)=>{
+    const el=document.createElement('div');
+    el.className=`incident-item${inc.sev==='crit'?' crit':''}`;
+    el.innerHTML=`
+      <div class="ii-head">
+        <span class="ii-id">${inc.id}</span>
+        <span class="sev ${inc.sev==='crit'?'sev-crit':inc.sev==='high'?'sev-high':'sev-med'}">${inc.sev.toUpperCase()}</span>
+      </div>
+      <div class="ii-title">${inc.title}</div>
+      <div class="ii-meta">
+        <span class="ii-ttp">${inc.mitre.join(' · ')}</span>
+        <span class="ii-host">${inc.host}</span>
+      </div>`;
+    el.onclick=()=>openIncident(inc,el);
+    list.appendChild(el);
+  });
+})();
+
+function openIncident(inc,el){
+  document.querySelectorAll('.incident-item').forEach(e=>e.classList.remove('active'));
+  el.classList.add('active');
+  const sc=inc.sev==='crit'?'sev-crit':inc.sev==='high'?'sev-high':'sev-med';
+  const sl=inc.sev.toUpperCase();
+  const evHtml=Object.entries(inc.evidence).map(([k,v])=>`
+    <div class="ev-box"><div class="ev-box-label">${k}</div><div class="ev-box-val">${v}</div></div>
+  `).join('');
+  const tlHtml=inc.timeline.map(t=>`
+    <div class="tl-item">
+      <div class="tl-dot ${t.type}">${t.type==='alert'?'!':t.type==='ok'?'✓':'i'}</div>
+      <div class="tl-content">
+        <div class="tl-ts">${t.ts}</div>
+        <div class="tl-text">${t.text}</div>
+      </div>
+    </div>
+  `).join('');
+  document.getElementById('incident-detail').innerHTML=`
+    <div class="id-section">
+      <div class="id-alert-box">
+        <div class="id-alert-head">
+          <span class="sev ${sc}">${sl}</span>
+          <span class="id-alert-title">${inc.title}</span>
+        </div>
+        <div class="id-props">
+          <div class="id-prop"><div class="id-prop-k">Incident ID</div><div class="id-prop-v">${inc.id}</div></div>
+          <div class="id-prop"><div class="id-prop-k">Timestamp</div><div class="id-prop-v">${inc.ts}</div></div>
+          <div class="id-prop"><div class="id-prop-k">Host</div><div class="id-prop-v">${inc.host}</div></div>
+          <div class="id-prop"><div class="id-prop-k">Engine</div><div class="id-prop-v">${inc.engine}</div></div>
+          <div class="id-prop"><div class="id-prop-k">Confidence</div><div class="id-prop-v">${(inc.confidence*100).toFixed(0)}%</div></div>
+          <div class="id-prop"><div class="id-prop-k">MITRE</div><div class="id-prop-v">${inc.mitre.join(', ')}</div></div>
+        </div>
+      </div>
+      <p style="font-family:var(--mono);font-size:9px;color:var(--text-dim);line-height:1.7">${inc.summary}</p>
+    </div>
+    <div class="id-section">
+      <div class="id-section-title">Timeline</div>
+      <div class="timeline">${tlHtml}</div>
+    </div>
+    <div class="id-section">
+      <div class="id-section-title">Evidence</div>
+      <div class="evidence-grid">${evHtml}</div>
+    </div>
+    <div class="id-section">
+      <div class="id-section-title">Response Actions</div>
+      <div class="action-row">
+        <button class="btn btn-danger" onclick="this.textContent='Isolating…';setTimeout(()=>this.textContent='✓ Isolated',1200)">Isolate Host</button>
+        <button class="btn" onclick="this.textContent='Snapshotting…';setTimeout(()=>this.textContent='✓ Captured',1000)">Snapshot Graph</button>
+        <button class="btn" onclick="this.textContent='Opening…';setTimeout(()=>this.textContent='✓ Case #224',900)">Open Case</button>
+        <button class="btn btn-ok">Mark False Positive</button>
+      </div>
+    </div>
+  `;
+}
+
+/* ════════════════════════════════════════════════
+   OIL PLAYGROUND
+════════════════════════════════════════════════ */
+const TEMPLATES={
+webshell:`# Hot-path EPL rule — compiles to .so ~15ns/event
+set shells      = ["bash", "sh", "zsh", "python3", "perl", "ruby"]
+set web_servers = ["nginx", "apache2", "httpd", "gunicorn", "uvicorn"]
+
+meta {
+  severity    = "critical"
+  mitre       = ["T1059", "T1190"]
+  tags        = ["webshell", "epl"]
+}
+
+rule "webshell_spawn_detect" {
+  from endpoint.process
+  match process.exec as p
+  where
+    p.name in shells
+    and p.parent.name in web_servers
+    and p.parent.uid in [33, 48, 1000]
+  score
+    base 70
+    +15 if p.elevated
+    +10 if p.signed == false
+    +10 if p.parent.prevalence.global < 0.05
+    -10 if p.command_line contains "--version"
+  respond {
+    if score >= 85 {
+      alert critical "Web shell spawn detected"
+      isolate network p.host_id
+      snapshot process_tree(p)
+      open_case "Possible webshell compromise"
+    }
+    else if score >= 70 {
+      alert high
+      snapshot p, p.parent
+    }
+    else {
+      alert medium
+    }
+  }
+}`,
+lateral:`# Graph rule — Memgraph AFTER COMMIT trigger
+meta {
+  severity = "critical"
+  mitre    = ["T1021", "T1078"]
+  tags     = ["lateral-movement", "graph"]
+}
+
+rule "lateral_movement_multi_hop" {
+  graph endpoint.activity
+  match
+    node Process as origin
+    -> node Secret as cred
+    -> node Host as target_host
+    -> node Process as remote_proc
+  where
+    origin.uid in [0, 1000]
+    and cred.type in ["ntlm_hash", "ssh_key", "kerberos_ticket"]
+    and target_host.host_id != origin.host_id
+    and remote_proc.name not in ["sshd", "systemd", "kubelet"]
+  score
+    base 80
+    +15 if origin.risk_score > 0.7
+    +10 if cred.type == "ntlm_hash"
+  respond {
+    alert critical "Multi-hop lateral movement via stolen credentials"
+    isolate network target_host.host_id
+    snapshot attack_graph
+    open_case "Lateral movement — credential-based host pivot"
+  }
+}`,
+exfil:`# Temporal correlate rule — Tokio stream operator, 4 streams
+use intel.malicious_domains
+use org.sensitive_credential_paths
+
+predicate unusual_country(user, country) =
+  country not_in user.baseline.countries
+
+meta {
+  severity = "critical"
+  mitre    = ["T1552", "T1041", "T1078"]
+}
+
+rule "credential_access_exfil_chain" {
+  from endpoint.file, endpoint.process, network.flow, identity.session
+  correlate
+    file.read as f by process p
+    with network.connect as n by p
+    with session.use as s by user u on u.id == p.user_id
+  where
+    f.path in sensitive_credential_paths
+    and n.dest.reputation in ["suspicious", "malicious"]
+    and unusual_country(u, s.country)
+  within 15m
+  let
+    rare_binary    = p.prevalence.global < 0.01
+    high_vol_exfil = n.bytes_out > 500_000
+  score
+    base 65
+    +20 if rare_binary
+    +15 if high_vol_exfil
+    +15 if s.mfa_present == false
+  emit
+    fact host.compromised(p.host_id) expires 7d
+  respond {
+    if score >= 90 {
+      alert critical
+      revoke session s
+      isolate host p.host_id
+    }
+    else if score >= 75 {
+      alert high
+      require_reauthentication for u
+    }
+    else {
+      alert medium
+    }
+  }
+}`,
+policy:`# Policy declaration — adaptive enforcement → OPA Rego
+use assets.sensitive_repos
+use org.trusted_browsers
+
+meta {
+  severity = "medium"
+  tags     = ["access-control", "adaptive-policy"]
+}
+
+policy "sensitive_repo_adaptive_access" {
+  from browser, identity, device, network
+  when repo.clone as r
+  where
+    r.repo.name in sensitive_repos
+  evaluate
+    base 0
+    +30 if device.disk_encrypted == false
+    +20 if device.trust < 60
+    +25 if r.country not_in user(r.user_id).baseline.countries
+    +15 if identity.session.mfa_present == false
+    +20 if browser.name not_in trusted_browsers
+    +15 if identity.session.age > 8h
+  enforce
+    allow if risk < 20
+    challenge mfa if risk between 20..49
+    require approval if risk between 50..79
+    block if risk >= 80
+}`,
+dns:`# Around/gather rule — entity-anchored, aggregation-based
+meta {
+  severity = "high"
+  mitre    = ["T1071", "T1048"]
+  tags     = ["dns-tunneling", "c2", "around"]
+}
+
+rule "dns_tunnel_candidate" {
+  from endpoint.dns, endpoint.process, network.flow
+  around host over 5m
+  gather
+    dns.query  as q
+    process.exec as p
+    network.connect as n
+  where
+    q.length > 120
+    and q.entropy > 4.2
+    and q.subdomain.count > 3
+    and q.domain not_in host.baseline.resolved_domains
+    and n.dest.port not in [80, 443, 53, 22]
+    and p.name not in ["systemd-resolved", "dnsmasq", "named"]
+  require
+    count(q) >= 30
+    and count(n) >= 5
+  score
+    base 60
+    +20 if max(q.entropy) > 5.0
+    +15 if count(q) > 100
+    +15 if distinct(q.domain) > 10
+  respond {
+    if score >= 85 {
+      alert critical "DNS tunneling detected"
+      block egress n.dest
+      snapshot host_timeline
+    }
+    else {
+      alert high
+      snapshot q, p, n
+    }
+  }
+}`
+};
+
+function loadTemplate(t){
+  if(!t)return;
+  document.getElementById('oilCode').value=TEMPLATES[t]||'';
+  updateLineCount();
+}
+function clearEditor(){ document.getElementById('oilCode').value=''; updateLineCount(); }
+function updateLineCount(){
+  const lines=document.getElementById('oilCode').value.split('\n').length;
+  document.getElementById('oil-linecount').textContent=lines+' lines';
+}
+
+document.getElementById('oilCode').addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&e.ctrlKey){e.preventDefault();runOilCompile();}
+  if(e.key==='Tab'){e.preventDefault();const t=e.target;const s=t.selectionStart;t.value=t.value.slice(0,s)+'  '+t.value.slice(t.selectionEnd);t.selectionStart=t.selectionEnd=s+2;}
+});
+
+function switchOilTab(name,el){
+  document.querySelectorAll('.oil-tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.oil-out').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('oil-out-'+name).classList.add('active');
+}
+
+function runOilCompile(){
+  const src=document.getElementById('oilCode').value.trim();
+  const statusDot=document.querySelector('#oil-run-status .run-dot');
+  const statusMsg=document.getElementById('oil-run-msg');
+
+  statusDot.style.background='var(--warn)';
+  statusMsg.textContent='lexing…';
+
+  setTimeout(()=>{
+    statusMsg.textContent='parsing…';
+    setTimeout(()=>{
+      statusMsg.textContent='type checking…';
+      setTimeout(()=>{
+        statusMsg.textContent='lowering to MIR…';
+        setTimeout(()=>{
+          statusMsg.textContent='generating output…';
+          setTimeout(()=>{
+            if(!src){
+              outputDiag([{type:'error',code:'OIL-P001',msg:'Empty source. Write a rule first.',loc:'1:1'}]);
+              statusDot.style.background='var(--red)';
+              statusMsg.textContent='compilation failed';
+              return;
+            }
+            const errors=lintOil(src);
+            outputDiag(errors);
+            if(errors.filter(e=>e.type==='error').length===0){
+              outputAST(src);
+              outputMIR(src);
+              outputCodegen(src);
+              statusDot.style.background='var(--ok)';
+              statusMsg.textContent='compilation succeeded · '+new Date().toLocaleTimeString();
+            } else {
+              statusDot.style.background='var(--red)';
+              statusMsg.textContent='compilation failed — '+errors.filter(e=>e.type==='error').length+' error(s)';
+            }
+          },300);
+        },250);
+      },200);
+    },180);
+  },120);
+}
+
+function lintOil(src){
+  const diags=[];
+  if(!src.includes('respond'))
+    diags.push({type:'error',code:'OIL-P003',msg:'respond clause is required but missing.',loc:'?:?'});
+  if(src.includes('correlate')&&!src.includes('within'))
+    diags.push({type:'error',code:'OIL-S001',msg:'Temporal rule missing within clause — unbounded correlation not allowed.',loc:'?:?'});
+  if(src.includes('unusual_for')&&src.includes('graph'))
+    diags.push({type:'error',code:'OIL-C002',msg:'ML operator unusual_for not supported in graph rules.',loc:'?:?'});
+  const unusedAliasMatch=src.match(/as (\w+)\b(?!.*\b\1\b)/);
+  if(unusedAliasMatch&&Math.random()<0.1)
+    diags.push({type:'warning',code:'OIL-W001',msg:`Possible unused alias '${unusedAliasMatch[1]}'.`,loc:'?:?'});
+  if(diags.filter(d=>d.type==='error').length===0)
+    diags.push({type:'ok',msg:'No errors. Compilation successful.'});
+  else
+    diags.unshift({type:'info',msg:'Found '+diags.filter(d=>d.type==='error').length+' error(s).'});
+  return diags;
+}
+
+function outputDiag(diags){
+  const el=document.getElementById('oil-out-diagnostics');
+  el.innerHTML=diags.map(d=>{
+    if(d.type==='ok') return `<div class="oil-ok">✓ ${d.msg}</div>`;
+    if(d.type==='error') return `<div class="oil-err"><b>${d.code}</b> — ${d.msg}<br><span style="opacity:0.7">at ${d.loc}</span></div>`;
+    if(d.type==='warning') return `<div class="oil-warn"><b>${d.code}</b> — ${d.msg}</div>`;
+    return `<div class="oil-info">${d.msg}</div>`;
+  }).join('');
+}
+
+function outputAST(src){
+  const isGraph=src.includes('graph ');
+  const isCorr=src.includes('correlate');
+  const isAround=src.includes('around ');
+  const bodyType=isGraph?'Graph':isCorr?'Correlate':isAround?'Around':'Match';
+  const nameMatch=src.match(/rule "([^"]+)"/)||src.match(/policy "([^"]+)"/);
+  const name=nameMatch?nameMatch[1]:'unnamed';
+  document.getElementById('oil-out-ast').innerHTML=`<div class="ast-tree">
+<span class="ast-node">Program</span>
+  <span class="ast-node">├ RuleDecl</span>
+    <span class="ast-prop">│  ├ name:</span> <span class="ast-val">"${name}"</span>
+    <span class="ast-prop">│  ├ sources:</span> <span class="ast-val">[${(src.match(/from ([^\n]+)/)||['','endpoint.process'])[1].trim()}]</span>
+    <span class="ast-node">│  ├ RuleBody::${bodyType}</span>
+    <span class="ast-prop">│  │  └ steps: [${isAround?'AroundBlock':'MatchStep'}]</span>
+    <span class="ast-node">│  ├ WhereClause</span>
+    <span class="ast-prop">│  │  └ BoolExpr::And([...])</span>
+${src.includes('within')?`    <span class="ast-node">│  ├ WithinClause</span>\n    <span class="ast-prop">│  │  └ Duration(${(src.match(/within (\S+)/)||['','15m'])[1]})</span>`:''}
+    <span class="ast-node">│  ├ ScoreExpr</span>
+    <span class="ast-prop">│  │  ├ base: ${(src.match(/base (\d+)/)||['','50'])[1]}</span>
+    <span class="ast-prop">│  │  └ modifiers: [${(src.match(/[+-]\d+ if/g)||[]).length} conditional]</span>
+    <span class="ast-node">│  └ RespondBlock</span>
+    <span class="ast-prop">       └ arms: [${(src.match(/if score/g)||[]).length} branch(es)]</span>
+</div>`;
+}
+
+function outputMIR(src){
+  const isGraph=src.includes('graph ');
+  const cls=isGraph?'Graph':src.includes('correlate')?'Temporal':src.includes('around')?'Temporal':'HotPath';
+  document.getElementById('oil-out-mir').innerHTML=`
+<div class="mir-block"><div class="mir-label">; MIR — rule class: ${cls}</div></div>
+<div class="mir-block">
+  <div class="mir-label">predicates (cost-ordered):</div>
+  <div class="mir-line">  [0] Constant    event.event_type == Exec          ~0.5ns</div>
+  <div class="mir-line">  [1] SetLookup   comm_id in SHELL_IDS              ~5ns</div>
+  <div class="mir-line">  [2] GraphLookup parent = graph.node(ppid_vertex)  ~10ns</div>
+  <div class="mir-line">  [3] SetLookup   parent.comm_id in WEBSERVER_IDS  ~5ns</div>
+</div>
+<div class="mir-block">
+  <div class="mir-label">score_fn:</div>
+  <div class="mir-line">  base = ${(src.match(/base (\d+)/)||['','50'])[1]}</div>
+${(src.match(/([+-]\d+) if ([^\n]+)/g)||[]).slice(0,4).map(m=>`  <div class="mir-line">  modifier: ${m.trim()}</div>`).join('')}
+</div>
+<div class="mir-block">
+  <div class="mir-label">respond_plan:</div>
+  <div class="mir-line">  branch[0]: if score >= threshold → actions[alert, isolate, snapshot, open_case]</div>
+  <div class="mir-line">  branch[1]: else if … → actions[alert, snapshot]</div>
+  <div class="mir-line">  branch[2]: else → actions[alert]</div>
+</div>
+<div class="mir-block">
+  <div class="mir-label">codegen_target: ${cls==='HotPath'?'EPL → .so':cls==='Graph'?'Cypher → Memgraph trigger':'Stream → Tokio operator'}</div>
+</div>`;
+}
+
+function outputCodegen(src){
+  const isGraph=src.includes('graph ');
+  const nameMatch=src.match(/rule "([^"]+)"/)||['','webshell_spawn_detect'];
+  const safeName=(nameMatch[1]||'rule').toLowerCase().replace(/[^a-z0-9]/g,'_');
+  let code;
+  if(isGraph){
+    code=`<span class="codegen-comment">-- Generated Cypher trigger</span>
+<span class="codegen-output">CREATE TRIGGER ${safeName}_trigger
+ON CREATE TO ()-[:SPAWNED]->(:Process {comm: "bash"})
+AFTER COMMIT
+EXECUTE
+  CALL detect.${safeName}(createdEdges) YIELD alert
+  CALL olopa.emit_alert(alert);
+
+-- Detection procedure:
+MATCH path = (web:Process)-[:SPAWNED*1..3]->(shell:Process)
+             -[:CONNECTED_TO]->(ext:NetworkEndpoint)
+WHERE web.comm IN ["nginx","apache2","httpd","gunicorn"]
+  AND shell.comm IN ["bash","sh","zsh","python3"]
+  AND NOT ext.is_internal
+RETURN web.host_id, shell.comm, ext.ip,
+       length(path) AS depth
+ORDER BY ext.threat_intel_score DESC</span>`;
+  } else {
+    code=`<span class="codegen-comment">// Generated Rust EPL — compiles to .so</span>
+<span class="codegen-comment">// Evaluation budget: ~15ns per event</span>
+
+<span class="codegen-output">use std::collections::HashSet;
+use olopa_runtime::{OlopaEvent, CsrGraph, RuleContext, Alert};
+
+static SHELL_IDS: &[u32]      = &[0x004A, 0x008B, 0x00C1, 0x00D2, 0x00E3];
+static WEBSERVER_IDS: &[u32]  = &[0x0021, 0x0022, 0x0023, 0x0024, 0x0025];
+
+#[no_mangle]
+pub extern "C" fn rule_${safeName}(
+    event: &OlopaEvent,
+    graph: &CsrGraph,
+    ctx:   &RuleContext,
+) -> Option&lt;Alert&gt; {
+    // [0] Constant — event type filter
+    if event.event_type != EventType::Exec { return None; }
+
+    // [1] SetLookup — shell comm_id check
+    if !SHELL_IDS.contains(&event.comm_id) { return None; }
+
+    // [2] GraphLookup — parent node
+    let parent = graph.node_props(event.ppid_vertex)?;
+
+    // [3] SetLookup — webserver parent check
+    if !WEBSERVER_IDS.contains(&parent.comm_id) { return None; }
+
+    // Score computation
+    let mut score: i32 = ${(src.match(/base (\d+)/)||['','70'])[1]};
+    if event.uid == 0 { score += 15; }
+    if !event.signed  { score += 10; }
+
+    Some(Alert {
+        rule_id:   RULE_ID,
+        severity:  severity_from_score(score),
+        ttp:       "T1059",
+        host_id:   event.host_id,
+        ts_ns:     event.ts_ns,
+        confidence: score as f32 / 100.0,
+    })
+}</span>`;
+  }
+  document.getElementById('oil-out-codegen').innerHTML=`<pre>${code}</pre>`;
+}
+
+/* ════════════════════════════════════════════════
+   COMPILER PANEL
+════════════════════════════════════════════════ */
+const PIPELINE_STEPS=[
+  {name:'Lexer',desc:'Tokenise source, classify keywords'},
+  {name:'Parser (LALR(1))',desc:'Build AST, collect parse errors'},
+  {name:'Name Resolution',desc:'Resolve identifiers to declarations'},
+  {name:'Type Checker',desc:'Validate field paths, operator types'},
+  {name:'Semantic Analysis',desc:'Window bounds, join key validity'},
+  {name:'MIR Lowering',desc:'Normalise AST to typed MIR'},
+  {name:'Codegen Routing',desc:'Classify rule → select backend'},
+];
+const OPT_PASSES=[
+  {name:'PredicatePushdown',desc:'Reorder predicates by cost'},
+  {name:'SetInlining',desc:'Replace named sets with integer hash sets'},
+  {name:'ConstantFolding',desc:'Evaluate constant sub-expressions'},
+  {name:'JoinKeyOptimizer',desc:'Hoist join keys out of inner loops'},
+  {name:'DeadCodeElimination',desc:'Remove unreachable branches'},
+  {name:'eBPFEligibilityMark',desc:'Mark predicates for eBPF fast path'},
+  {name:'ScoreFunctionFlatten',desc:'Merge constant score deltas'},
+];
+const TARGETS=[
+  {name:'EPL Compiled (.so)',icon:'⚡',desc:'HotPath rules → Rust shared object'},
+  {name:'Stream Operator',icon:'⟳',desc:'Temporal rules → Tokio async operator'},
+  {name:'Cypher Trigger',icon:'◈',desc:'Graph rules → Memgraph trigger'},
+  {name:'OPA Rego Module',icon:'⊞',desc:'Policy rules → OPA enforcement'},
+];
+
+function initCompilerUI(){
+  const pp=document.getElementById('cp-pipeline');
+  pp.innerHTML=PIPELINE_STEPS.map(s=>`
+    <div class="pipeline-step" id="ps-${s.name.replace(/\W/g,'_')}">
+      <span class="ps-icon t-dim">○</span>
+      <span class="ps-name">${s.name}</span>
+      <span class="ps-time"></span>
+    </div>`).join('');
+  const pass=document.getElementById('cp-passes');
+  pass.innerHTML=OPT_PASSES.map(p=>`
+    <div class="pass-item">
+      <span class="pass-name">${p.name}</span>
+      <span class="pass-result" id="pass-${p.name}" style="color:var(--text-dim);background:var(--border);border:1px solid var(--border2)">pending</span>
+    </div>`).join('');
+  const tgt=document.getElementById('cp-targets');
+  tgt.innerHTML=TARGETS.map(t=>`
+    <div class="target-row">
+      <span class="tr-icon">${t.icon}</span>
+      <span class="tr-name">${t.name}</span>
+      <span class="tr-status" id="tgt-${t.name.replace(/\W/g,'_')}">pending</span>
+      <span class="tr-size"></span>
+    </div>`).join('');
+  document.getElementById('cp-diagnostics').innerHTML=`<div class="oil-info">Run pipeline to see diagnostics.</div>`;
+}
+
+function resetCompiler(){
+  document.getElementById('compiler-progress').style.width='0';
+  document.getElementById('compiler-status-msg').textContent='Awaiting input';
+  document.getElementById('cp-stage-status').textContent='idle';
+  initCompilerUI();
+}
+
+function runFullCompile(){
+  const btn=document.getElementById('compile-btn');
+  btn.textContent='Running…'; btn.disabled=true;
+  const progress=document.getElementById('compiler-progress');
+  const statusMsg=document.getElementById('compiler-status-msg');
+  const stageStatus=document.getElementById('cp-stage-status');
+  stageStatus.textContent='running';
+  stageStatus.style.color='var(--warn)';
+
+  const steps=PIPELINE_STEPS;
+  let i=0;
+  const times=[12,28,8,19,14,22,6];
+
+  function runStep(){
+    if(i>=steps.length){
+      runPasses(); return;
+    }
+    const s=steps[i];
+    const key=s.name.replace(/\W/g,'_');
+    const el=document.getElementById('ps-'+key);
+    if(el){
+      el.classList.add('running');
+      el.querySelector('.ps-icon').textContent='◎';
+      el.querySelector('.ps-icon').style.color='var(--accent)';
+    }
+    statusMsg.textContent=s.name+'…';
+    progress.style.width=((i/steps.length)*60)+'%';
+    setTimeout(()=>{
+      if(el){
+        el.classList.remove('running');
+        el.classList.add('done');
+        el.querySelector('.ps-icon').textContent='✓';
+        el.querySelector('.ps-icon').style.color='var(--ok)';
+        el.querySelector('.ps-time').textContent=times[i]+'ms';
+      }
+      i++; runStep();
+    }, times[i]*6+80);
+  }
+
+  function runPasses(){
+    stageStatus.textContent='optimising';
+    let j=0;
+    function runPass(){
+      if(j>=OPT_PASSES.length){ runTargets(); return; }
+      const p=OPT_PASSES[j];
+      const el=document.getElementById('pass-'+p.name);
+      if(el){ el.textContent='running…'; el.style.color='var(--warn)'; }
+      progress.style.width=(60+(j/OPT_PASSES.length)*25)+'%';
+      setTimeout(()=>{
+        if(el){
+          el.textContent='✓ ok';
+          el.style.color='var(--ok)';
+          el.style.background='rgba(29,185,84,0.08)';
+          el.style.border='1px solid rgba(29,185,84,0.2)';
+        }
+        j++; runPass();
+      }, 60+Math.random()*80);
+    }
+    runPass();
+  }
+
+  function runTargets(){
+    stageStatus.textContent='codegen';
+    const results=[
+      {k:'EPL_Compiled_(_so_)',size:'48 KB',status:'✓ emitted'},
+      {k:'Stream_Operator',size:'n/a',status:'not applicable'},
+      {k:'Cypher_Trigger',size:'1.2 KB',status:'✓ emitted'},
+      {k:'OPA_Rego_Module',size:'n/a',status:'not applicable'},
+    ];
+    results.forEach((r,i)=>{
+      setTimeout(()=>{
+        const el=document.getElementById('tgt-'+r.k);
+        if(el){
+          el.textContent=r.status;
+          el.style.color=r.status.startsWith('✓')?'var(--ok)':'var(--text-dim)';
+        }
+      },i*150);
+    });
+    setTimeout(()=>{
+      progress.style.width='100%';
+      statusMsg.textContent='Compilation complete — 0 errors · 0 warnings · '+new Date().toLocaleTimeString();
+      stageStatus.textContent='done';
+      stageStatus.style.color='var(--ok)';
+      document.getElementById('cp-diag-status').textContent='0 errors';
+      document.getElementById('cp-diag-status').style.color='var(--ok)';
+      document.getElementById('cp-diagnostics').innerHTML=`
+        <div class="oil-ok" style="font-family:var(--mono);font-size:9px">✓ Compilation successful — all stages passed</div>
+        <div class="oil-info" style="margin-top:6px">EPL .so emitted → /etc/olopa/rules/webshell_spawn_detect.so</div>
+        <div class="oil-info">Cypher trigger installed → Memgraph:detect.webshell_spawn_detect</div>
+        <div class="oil-info">Rule engine will hot-reload on next 500ms cycle</div>`;
+      btn.textContent='▶ Run Pipeline'; btn.disabled=false;
+    },results.length*150+200);
+  }
+
+  runStep();
+}
+
+/* ════════════════════════════════════════════════
+   INIT
+════════════════════════════════════════════════ */
+initCompilerUI();
+loadTemplate('webshell');
+setTimeout(liveUpdate,50);
+</script>
+</body>
+</html>

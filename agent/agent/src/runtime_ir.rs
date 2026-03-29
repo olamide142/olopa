@@ -318,6 +318,7 @@ mod tests {
             event_type: 1,
             vertex_id: 42,
             dst_vertex_id: 0,
+            comm: [0; 16],
             comm_id: 0,
             risk_score: 0.1,
         };
@@ -355,6 +356,7 @@ mod tests {
             event_type: 1,
             vertex_id: 42,
             dst_vertex_id: 0,
+            comm: [0; 16],
             comm_id: 0,
             risk_score: 0.1,
         };
@@ -425,6 +427,7 @@ mod tests {
             event_type: 1,
             vertex_id: 0,
             dst_vertex_id: 0,
+            comm: [0; 16],
             comm_id: 0,
             risk_score: 0.0,
         };
@@ -489,6 +492,7 @@ rule "pid_42" {
             event_type: 1,
             vertex_id: 0,
             dst_vertex_id: 0,
+            comm: [0; 16],
             comm_id: 0,
             risk_score: 0.0,
         };
@@ -565,6 +569,7 @@ rule "uid_7" {
             event_type: 1,
             vertex_id: 0,
             dst_vertex_id: 0,
+            comm: [0; 16],
             comm_id: 0,
             risk_score: 0.0,
         };

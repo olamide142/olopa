@@ -30,6 +30,9 @@ use crate::agent::{
 use crate::budget_tracker::{BudgetSnapshot as RuntimeBudgetSnapshot, BudgetTracker};
 use crate::data::csr_graph::{CsrGraph, EdgeKind, EdgeProps, NodeLabel};
 use crate::data::event_store::{ColdEvent, EventStore, HotEvent};
+use crate::data::batcher_compressor::{
+    Batcher as CompressorBatcher, PushResult as CompressorPushResult,
+};
 use crate::data::mdkp_scheduler::{
     BudgetSnapshot as SchedulerBudgetSnapshot, N_RESOURCES, Scheduler, SolverTier, TelemetryItem,
 };
@@ -124,7 +127,7 @@ async fn main() -> Result<()> {
     let mut metric_aggregator = RealMetricAggregator::default();
     let mut rule_engine = ActiveRuleEngine::from_env();
     let mut scheduler = RealScheduler::default();
-    let mut batcher = SimpleBatcher::default();
+    let mut batcher = RealBatcher::default();
     let mut sender = SimpleSender::default();
     let mut budget_tracker = BudgetTracker::new();
 
@@ -448,50 +451,42 @@ impl RuleEngineLike for ActiveRuleEngine {
     }
 }
 
-struct SimpleBatcher {
-    // Accumulated serialized telemetry events.
-    pending: Vec<Vec<u8>>,
-    // Last time a flush happened (used for periodic flush trigger).
-    last_flush: Instant,
+struct RealBatcher {
+    inner: CompressorBatcher,
 }
-impl Default for SimpleBatcher {
+impl Default for RealBatcher {
     fn default() -> Self {
+        let agent_id = std::env::var("OLOPA_AGENT_ID")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(1);
         Self {
-            pending: Vec::new(),
-            last_flush: Instant::now(),
+            inner: CompressorBatcher::new(agent_id, 4_096),
         }
     }
 }
-impl BatcherLike for SimpleBatcher {
+impl BatcherLike for RealBatcher {
     fn push(&mut self, serialized_event: &[u8], _budget: &RuntimeBudgetSnapshot) -> BatcherPush {
-        // Bootstrap threshold-only batching policy.
-        self.pending.push(serialized_event.to_vec());
-        if self.pending.len() >= 64 {
-            BatcherPush::FlushNeeded
-        } else {
-            BatcherPush::Ok
+        let budget = SchedulerBudgetSnapshot {
+            total: _budget.total,
+            remaining: _budget.remaining,
+            weights: _budget.weights,
+        };
+
+        match self.inner.push(serialized_event, &budget) {
+            CompressorPushResult::Ok => BatcherPush::Ok,
+            CompressorPushResult::FlushNeeded | CompressorPushResult::QueueFull => {
+                BatcherPush::FlushNeeded
+            }
         }
     }
 
     fn flush(&mut self) -> Option<Vec<u8>> {
-        if self.pending.is_empty() {
-            return None;
-        }
-        let mut out = Vec::new();
-        for item in self.pending.drain(..) {
-            out.extend_from_slice(&item);
-            out.push(b'\n');
-        }
-        self.last_flush = Instant::now();
-        Some(out)
+        self.inner.flush().map(|batch| batch.payload.to_vec())
     }
 
     fn flush_if_time_triggered(&mut self) -> Option<Vec<u8>> {
-        if self.last_flush.elapsed() >= Duration::from_millis(500) {
-            self.flush()
-        } else {
-            None
-        }
+        self.inner.flush_if_ready().map(|batch| batch.payload.to_vec())
     }
 }
 

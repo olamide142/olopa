@@ -450,9 +450,12 @@ mod tests {
 
     #[test]
     fn aggregator_no_false_sharing() {
-        // Verify CachePadded actually pads to 64 bytes
+        // crossbeam may pad to 64 or 128 bytes depending on target.
         use std::mem::size_of;
-        assert_eq!(size_of::<CachePadded<AtomicU64>>(), 64);
+        assert!(
+            size_of::<CachePadded<AtomicU64>>() >= 64,
+            "CachePadded<AtomicU64> should be cache-line sized or larger"
+        );
     }
 
     #[test]

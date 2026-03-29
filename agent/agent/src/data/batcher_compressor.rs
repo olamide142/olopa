@@ -26,37 +26,38 @@
 // ============================================================
 
 use std::collections::VecDeque;
+use std::io;
 use std::time::{Duration, Instant};
 use bytes::{Bytes, BytesMut, BufMut};
 use crossbeam_utils::CachePadded;
 use std::sync::atomic::{AtomicU64, Ordering};
 use zstd::bulk::{Compressor, Decompressor};
-use zstd::dict::EncoderDictionary;
 
-// ── Flush thresholds ─────────────────────────────────────────
+// -- Flush thresholds -----------------------------------------
 const MAX_BATCH_BYTES:   usize    = 4 * 1024 * 1024;  // 4 MB
 const MAX_FRAME_COUNT:   usize    = 1_000;             // frames per batch
 const FLUSH_INTERVAL:    Duration = Duration::from_millis(500);
 
-// ── Compression level thresholds ────────────────────────────
+// -- Compression level thresholds ----------------------------
 // Keyed on BudgetSnapshot utilization fractions.
 const LEVEL_FAST:     i32 = 1; // CPU < 30% remaining
 const LEVEL_DEFAULT:  i32 = 3; // normal
 const LEVEL_BALANCED: i32 = 6; // BW < 40% remaining
 const LEVEL_MAX:      i32 = 9; // BW critically constrained
 
-// ── Embedded zstd dictionary ─────────────────────────────────
+// -- Embedded zstd dictionary ---------------------------------
 // In production: generated offline by running:
 //   zstd --train /var/lib/olopa/samples/*.bin -o olopa.dict
 // Then embedded here. 112 KB is the recommended dict size.
 // This is a placeholder — replace with real trained dictionary.
 // The dict_id is embedded in the zstd frame header automatically.
 // Backend Decompressor must load the same bytes.
-static OLOPA_DICT: &[u8] = include_bytes!("../dicts/olopa_events.dict");
-// Fallback for tests when the dict file is not present:
-// static OLOPA_DICT: &[u8] = &[];
+//
+// Bootstrap runtime currently ships without a checked-in dictionary asset.
+// Keep dictionary disabled until artifact management is wired.
+static OLOPA_DICT: &[u8] = &[];
 
-// ── Frame — one compressed telemetry unit ────────────────────
+// -- Frame — one compressed telemetry unit --------------------
 // A frame wraps one or more serialized TelemetryItems.
 // Frames accumulate in the VecDeque until a flush trigger fires.
 #[derive(Debug)]
@@ -67,7 +68,7 @@ pub struct Frame {
     pub level:       i32,     // compression level used
 }
 
-// ── BatchHeader — prepended to every flushed batch ───────────
+// -- BatchHeader — prepended to every flushed batch -----------
 // Fixed-size, repr(C), sent over the wire before the frames.
 // Backend uses this to validate schema, decompress, and route.
 #[repr(C)]
@@ -85,7 +86,7 @@ pub struct BatchHeader {
 }
 const _: () = assert!(std::mem::size_of::<BatchHeader>() == 40);
 
-// ── Batcher ──────────────────────────────────────────────────
+// -- Batcher --------------------------------------------------
 pub struct Batcher {
     // Pending compressed frames — bounded to prevent unbounded growth
     // under backpressure. When full, new frames are dropped (counted).
@@ -132,7 +133,7 @@ impl Batcher {
         }
     }
 
-    // ── Push serialized event bytes into the batcher ─────────
+    // -- Push serialized event bytes into the batcher ---------
     // `raw` is a protobuf-serialized TelemetryItem (or batch of items).
     // This is called by the scheduler output handler after solve().
     // Compresses immediately — the VecDeque holds compressed frames.
@@ -190,7 +191,7 @@ impl Batcher {
         }
     }
 
-    // ── Flush: drain queue → one BatchOutput ─────────────────
+    // -- Flush: drain queue → one BatchOutput -----------------
     // Assembles all pending frames into a single contiguous buffer
     // ready for the gRPC sender. Clears the queue.
     // Returns None if nothing is pending.
@@ -257,12 +258,12 @@ impl Batcher {
         })
     }
 
-    // ── Flush if any trigger is satisfied ────────────────────
+    // -- Flush if any trigger is satisfied --------------------
     pub fn flush_if_ready(&mut self) -> Option<BatchOutput> {
         if self.should_flush() { self.flush() } else { None }
     }
 
-    // ── Three flush triggers ──────────────────────────────────
+    // -- Three flush triggers ----------------------------------
     #[inline(always)]
     fn should_flush(&self) -> bool {
         self.wire_bytes  >= MAX_BATCH_BYTES       // size trigger
@@ -270,7 +271,7 @@ impl Batcher {
         || self.last_flush.elapsed() >= FLUSH_INTERVAL // time trigger
     }
 
-    // ── Adaptive level selection ─────────────────────────────
+    // -- Adaptive level selection -----------------------------
     // CPU remaining < 30% → level 1 (fastest, ~0.2 µs/KB)
     // BW remaining  < 15% → level 9 (max ratio, ~4.0 µs/KB)
     // BW remaining  < 40% → level 6 (balanced, ~1.2 µs/KB)
@@ -307,7 +308,7 @@ impl Batcher {
     }
 }
 
-// ── DictCompressor — zstd compressor with domain dictionary ──
+// -- DictCompressor — zstd compressor with domain dictionary --
 // The dictionary is loaded once at startup and reused.
 // Reusing the same Compressor across frames avoids re-initialising
 // the zstd context (which allocates ~100KB of internal state).
@@ -322,22 +323,19 @@ impl DictCompressor {
     fn new(level: i32) -> Self {
         // If OLOPA_DICT is empty (test mode), fall back to no dictionary
         if OLOPA_DICT.is_empty() {
-            let mut c = Compressor::new(level).expect("zstd compressor init");
+            let c = Compressor::new(level).expect("zstd compressor init");
             return Self { inner: c, level, dict_id: 0 };
         }
-
-        // Load the domain dictionary. The encoder dictionary pre-computes
-        // internal tables so each subsequent compress() call is faster.
-        let dict   = EncoderDictionary::copy(OLOPA_DICT, level);
-        let dict_id = dict.id(); // stable u32 from the dict file header
 
         let compressor = Compressor::with_dictionary(level, OLOPA_DICT)
             .expect("zstd dict compressor init");
 
-        Self { inner: compressor, level, dict_id }
+        // The runtime currently does not ship with a trained dictionary artifact.
+        // Keep dict_id at 0 until dictionary plumbing is enabled end-to-end.
+        Self { inner: compressor, level, dict_id: 0 }
     }
 
-    fn compress(&mut self, src: &[u8]) -> Result<Vec<u8>, zstd::Error> {
+    fn compress(&mut self, src: &[u8]) -> io::Result<Vec<u8>> {
         self.inner.compress(src)
     }
 
@@ -355,7 +353,7 @@ impl DictCompressor {
     }
 }
 
-// ── BatchOutput — what the gRPC sender receives ──────────────
+// -- BatchOutput — what the gRPC sender receives --------------
 pub struct BatchOutput {
     pub payload:           Bytes,  // ready-to-send wire bytes (header + frames)
     pub n_frames:          usize,
@@ -365,7 +363,7 @@ pub struct BatchOutput {
     pub compression_ratio: f32,    // raw/wire — e.g. 4.2x = 76% reduction
 }
 
-// ── Decompressor — used by backend and tests ──────────────────
+// -- Decompressor — used by backend and tests ------------------
 // Symmetric to DictCompressor. Backend must load identical dict bytes.
 pub struct DictDecompressor {
     inner: Decompressor<'static>,
@@ -384,12 +382,12 @@ impl DictDecompressor {
         }
     }
 
-    pub fn decompress(&mut self, src: &[u8], capacity: usize) -> Result<Vec<u8>, zstd::Error> {
+    pub fn decompress(&mut self, src: &[u8], capacity: usize) -> io::Result<Vec<u8>> {
         self.inner.decompress(src, capacity)
     }
 }
 
-// ── BatchParser — parse a BatchOutput on the backend ─────────
+// -- BatchParser — parse a BatchOutput on the backend ---------
 // Reads the BatchHeader then iterates over [len][frame] pairs.
 pub struct BatchParser<'a> {
     data:   &'a [u8],
@@ -435,7 +433,7 @@ impl<'a> BatchParser<'a> {
 #[derive(Debug)]
 pub enum ParseError { TooShort, BadMagic }
 
-// ── PushResult — returned by Batcher::push() ─────────────────
+// -- PushResult — returned by Batcher::push() -----------------
 #[derive(Debug, PartialEq)]
 pub enum PushResult {
     Ok,          // enqueued, no flush needed yet
@@ -443,9 +441,9 @@ pub enum PushResult {
     QueueFull,   // backpressure — frame was dropped
 }
 
-// ── Budget type alias (from mdkp_scheduler.rs) ───────────────
+// -- Budget type alias (from mdkp_scheduler.rs) ---------------
 // Repeated here to keep this file self-contained.
-pub use crate::mdkp_scheduler::{BudgetSnapshot, CPU, BW};
+pub use crate::data::mdkp_scheduler::{BudgetSnapshot, CPU, BW};
 
 #[derive(Debug)]
 pub struct BatcherStats {
@@ -468,10 +466,23 @@ fn now_ns() -> u64 {
         .unwrap_or(0)
 }
 
-// ── Tests ─────────────────────────────────────────────────────
+// -- Tests 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn incompressible_bytes(len: usize, mut seed: u64) -> Vec<u8> {
+        let mut out = vec![0u8; len];
+        for b in &mut out {
+            // xorshift64* for deterministic pseudo-random test data.
+            seed ^= seed >> 12;
+            seed ^= seed << 25;
+            seed ^= seed >> 27;
+            seed = seed.wrapping_mul(0x2545_F491_4F6C_DD1D);
+            *b = (seed & 0xFF) as u8;
+        }
+        out
+    }
 
     fn default_budget() -> BudgetSnapshot {
         BudgetSnapshot::default_budgets()
@@ -542,10 +553,17 @@ mod tests {
     #[test]
     fn size_trigger_fires_on_large_payload() {
         let mut batcher = Batcher::new(1, 1024);
-        // One push that exceeds MAX_BATCH_BYTES
-        let big = vec![0xAAu8; MAX_BATCH_BYTES + 1];
-        let r = batcher.push(&big, &default_budget());
-        assert_eq!(r, PushResult::FlushNeeded, "size trigger should fire");
+        // Push incompressible chunks until compressed bytes cross threshold.
+        let mut flush_signalled = false;
+        for i in 0..512u64 {
+            let chunk = incompressible_bytes(32 * 1024, i + 1);
+            let r = batcher.push(&chunk, &default_budget());
+            if r == PushResult::FlushNeeded {
+                flush_signalled = true;
+                break;
+            }
+        }
+        assert!(flush_signalled, "size trigger should fire");
     }
 
     #[test]
@@ -573,9 +591,7 @@ mod tests {
         // Third push should be dropped
         let r = batcher.push(payload, &default_budget());
         assert_eq!(r, PushResult::QueueFull);
-        assert_eq!(batcher.stats().total_dropped.load(Ordering::Relaxed)
-                   // accessed via stats struct
-                   , 0); // actual counter on batcher.total_dropped
+        assert_eq!(batcher.total_dropped.load(Ordering::Relaxed), 1);
     }
 
     #[test]

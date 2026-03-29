@@ -717,6 +717,7 @@ mod tests {
             event_type: 1,
             vertex_id: 42,
             dst_vertex_id: 1,
+            comm: [0; 16],
             comm_id: 123,
             risk_score: 0.9,
         };
@@ -830,6 +831,7 @@ mod tests {
             event_type: 1,
             vertex_id: 123,
             dst_vertex_id: 7,
+            comm: [0; 16],
             comm_id: 9,
             risk_score: 0.8,
         };
@@ -922,6 +924,7 @@ rule "critical_pid_4242" {
             event_type: 1,
             vertex_id: 4242,
             dst_vertex_id: 1,
+            comm: [0; 16],
             comm_id: 7,
             risk_score: 0.85,
         };

@@ -15,7 +15,7 @@
 // pre-tags onto every packet. Graph lookup = one array read. O(1).
 // ============================================================
 
-use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use crossbeam_utils::CachePadded;
 use log::warn;
@@ -378,17 +378,24 @@ impl CsrGraph {
 // making offsets[] trivial to compute in one linear pass.
 fn rebuild_csr(base: &CsrSnapshot, delta: DeltaBuffer) -> CsrSnapshot {
     let num_nodes = base.num_nodes as usize;
+    let DeltaBuffer {
+        new_nodes,
+        new_edges,
+        risk_updates,
+    } = delta;
 
     // Merge base edges + delta edges into one sorted edge list
-    //
-    // NOTE:
-    // This bootstrap implementation currently rebuilds from delta edges only.
-    // `base` is used for node metadata continuity, not edge replay.
-    // Keep capacities bounded by actual vector lengths to avoid stale-count panics.
     let mut all_edges: Vec<(u32, u32, EdgeProps)> = Vec::with_capacity(
-        base.adjacency.len() + delta.new_edges.len(),
+        base.adjacency.len() + new_edges.len(),
     );
-    all_edges.extend(delta.new_edges);
+    for src in 0..base.num_nodes {
+        let neighbors = base.neighbors(src);
+        let props = base.neighbor_props(src);
+        for (i, &dst) in neighbors.iter().enumerate() {
+            all_edges.push((src, dst, props[i]));
+        }
+    }
+    all_edges.extend(new_edges);
 
     // Sort by src so all edges from the same source are contiguous
     // Radix sort is O(n) for u32 keys — faster than comparison sort
@@ -426,14 +433,14 @@ fn rebuild_csr(base: &CsrSnapshot, delta: DeltaBuffer) -> CsrSnapshot {
 
     // Apply risk updates to node_props
     let mut node_props = base.node_props.clone();
-    for (id, risk) in delta.risk_updates {
+    for (id, risk) in risk_updates {
         if let Some(n) = node_props.get_mut(id as usize) {
             n.risk_score = risk;
             n.last_seen_ns = 0; // would be set from event ts_ns in production
         }
     }
     // Merge new nodes
-    for (id, props) in delta.new_nodes {
+    for (id, props) in new_nodes {
         if let Some(n) = node_props.get_mut(id as usize) {
             *n = props;
         }
@@ -559,5 +566,22 @@ mod tests {
         assert_eq!(ep.kind, EdgeKind::Spawned);
         assert_eq!(ep.ts_ns, 1_000);
         assert!(g.find_edge(0, 2).is_none()); // no direct edge 0→2
+    }
+
+    #[test]
+    fn merge_preserves_existing_edges_and_adds_new_delta_edges() {
+        let g = CsrGraph::new(8, 16);
+
+        g.write_edge(1, 2, make_props(EdgeKind::ConnectedTo, 1_000));
+        g.merge_deltas();
+        let first = g.snapshot();
+        assert_eq!(first.neighbors(1), &[2]);
+        assert_eq!(first.num_edges, 1);
+
+        g.write_edge(1, 3, make_props(EdgeKind::ReadFile, 2_000));
+        g.merge_deltas();
+        let second = g.snapshot();
+        assert_eq!(second.neighbors(1), &[2, 3]);
+        assert_eq!(second.num_edges, 2);
     }
 }

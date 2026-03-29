@@ -19,3 +19,4 @@ pub mod relevance_scorer;
 pub mod mdkp_scheduler;
 pub mod metric_aggregator;
 pub mod csr_graph;
+pub mod batcher_compressor;
