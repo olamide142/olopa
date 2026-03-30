@@ -155,11 +155,13 @@ struct RealRelevanceScorer {
     // Monotonic synthetic event id passed into scorer state machine.
     next_event_id: usize,
 }
+
 impl Default for RelevanceScorer {
     fn default() -> Self {
         RelevanceScorer::with_default_epsilon()
     }
 }
+
 impl RelevanceScorerLike for RealRelevanceScorer {
     fn score(&mut self, event: &mut IngestEvent) {
         // Current bridge passes core numeric fields only; richer context wiring
@@ -181,6 +183,7 @@ impl RelevanceScorerLike for RealRelevanceScorer {
 struct RealEventStore {
     inner: EventStore,
 }
+
 impl Default for RealEventStore {
     fn default() -> Self {
         Self {
@@ -188,6 +191,7 @@ impl Default for RealEventStore {
         }
     }
 }
+
 impl EventStoreLike for RealEventStore {
     fn push(&mut self, event: IngestEvent) -> Option<usize> {
         // Split event into hot/cold representations expected by EventStore.
@@ -244,6 +248,7 @@ struct RealGraph {
     last_span_by_pid: HashMap<u32, u64>,
     next_span_id: u64,
 }
+
 impl Default for RealGraph {
     fn default() -> Self {
         Self {
@@ -255,6 +260,7 @@ impl Default for RealGraph {
         }
     }
 }
+
 impl RealGraph {
     fn with_dump(path: PathBuf, min_interval: Duration) -> Self {
         Self {
@@ -297,6 +303,7 @@ impl RealGraph {
         }
     }
 }
+
 impl GraphLike for RealGraph {
     fn write_edge(&mut self, event: &IngestEvent) {
         // Map lightweight event discriminator to graph edge kind.
@@ -342,6 +349,7 @@ impl GraphLike for RealGraph {
 struct RealMetricAggregator {
     inner: MetricAggregator,
 }
+
 impl Default for RealMetricAggregator {
     fn default() -> Self {
         Self {
@@ -349,6 +357,7 @@ impl Default for RealMetricAggregator {
         }
     }
 }
+
 impl MetricAggregatorLike for RealMetricAggregator {
     fn record(&mut self, event: &IngestEvent) {
         // Risk metric keyed by comm_id to preserve low cardinality.
@@ -367,6 +376,7 @@ impl MetricAggregatorLike for RealMetricAggregator {
 struct RealScheduler {
     inner: Scheduler,
 }
+
 impl Default for RealScheduler {
     fn default() -> Self {
         Self {
@@ -374,6 +384,7 @@ impl Default for RealScheduler {
         }
     }
 }
+
 impl SchedulerLike for RealScheduler {
     fn update_budget(&mut self, snapshot: RuntimeBudgetSnapshot) {
         // Convert runtime tracker snapshot into scheduler-local budget type.
@@ -401,6 +412,7 @@ impl SchedulerLike for RealScheduler {
 // --- Bootstrap components for rule engine, batching, and transport ---
 
 struct SimpleRuleEngine;
+
 impl RuleEngineLike for SimpleRuleEngine {
     fn evaluate(&mut self, event: &IngestEvent) -> Vec<RuleMatch> {
         if event.risk_score >= 0.95 {
@@ -459,6 +471,7 @@ impl RuleEngineLike for ActiveRuleEngine {
 struct RealBatcher {
     inner: CompressorBatcher,
 }
+
 impl Default for RealBatcher {
     fn default() -> Self {
         let agent_id = std::env::var("OLOPA_AGENT_ID")
@@ -470,6 +483,7 @@ impl Default for RealBatcher {
         }
     }
 }
+
 impl BatcherLike for RealBatcher {
     fn push(&mut self, serialized_event: &[u8], _budget: &RuntimeBudgetSnapshot) -> BatcherPush {
         let budget = SchedulerBudgetSnapshot {
@@ -506,6 +520,7 @@ struct SimpleSender {
     // Toggle for degraded transport mode.
     spooling: bool,
 }
+
 impl SenderLike for SimpleSender {
     fn send_or_spool(&mut self, payload: Vec<u8>) -> Result<()> {
         if self.spooling {

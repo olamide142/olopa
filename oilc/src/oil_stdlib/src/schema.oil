@@ -18,10 +18,23 @@ root workload: WorkloadInfo
 root network: NetworkFlow
 root file: FileEvent
 root dns: DnsQuery
+root time: TimeContext
 
 // --------------------------------------------------------------------------
 // Core entities
 // --------------------------------------------------------------------------
+
+// Virtual wall-clock context derived from event timestamp.
+entity TimeContext {
+    // Lower-case names: monday..sunday
+    weekday: Str,
+    // Local hour [0, 23]
+    hour: Int,
+    // Local minute [0, 59]
+    minute: Int,
+    // Monday-Friday and hour in [9,17]
+    is_business_hour: Bool,
+}
 
 // Process and execution context.
 entity Process {

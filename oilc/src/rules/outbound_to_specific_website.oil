@@ -7,7 +7,7 @@ rule "outbound_to_specific_website" {
 
   where
     n.direction == "outbound"
-    and n.dest.domain in ["olopa.io"]
+    and n.dest.domain in ["apple.com"]
 
   respond
     alert critical

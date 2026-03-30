@@ -1,0 +1,22 @@
+rule "outbound_to_specific_website_business_hours" {
+  from endpoint.process, network.flow
+
+  correlate
+    process.spawn as p
+    with network.connect as n on n.process_id == p.id
+
+  where
+    n.direction == "outbound"
+    and n.dest.domain in ["linkedin.com"]
+    and time.weekday == "tuesday"
+    and time.hour >= 9
+    and time.hour < 17
+    // Replace with your org's developer UID set.
+    // and p.uid in [1000, 1001, 1002]
+
+  respond
+    alert critical
+    block egress n.dest.domain
+    snapshot p, n
+    open case "Blocked outbound to protected website during business hours"
+}
