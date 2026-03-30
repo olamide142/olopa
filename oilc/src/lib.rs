@@ -1,22 +1,29 @@
 // Pipeline entrypoint
 // Top-level compilation pipeline
+pub mod ast;
+mod codegen;
+pub mod diagnostics;
 mod lexer;
+pub mod mid;
 mod parser;
 mod prelude;
 mod resolver;
+mod runtime_ir;
 mod schema;
 mod typecheck;
-mod codegen;
-mod runtime_ir;
-pub mod mid;
-pub mod ast;
-pub mod diagnostics;
 
 use lexer::Lexer;
 use std::collections::HashMap;
 use std::ops::Range;
 
 // Public exports for downstream consumers/tests.
+pub use codegen::{
+    generate_backends, CodegenOutput, CypherArtifact, CypherProgram, EplArtifact, EplProgram,
+};
+pub use mid::{
+    lower_program, validate_program, MirProgram, MirValidationDiagnostic, MirValidationKind,
+    MirValidationSeverity,
+};
 pub use parser::{ParseError, Parser};
 pub use prelude::{
     parse_builtin_callable_signatures, parse_builtin_callables, parse_builtin_predicates,
@@ -24,18 +31,13 @@ pub use prelude::{
     PreludeError,
 };
 pub use resolver::{
-    resolve_program, resolve_program_with_globals, resolve_program_with_schema, ExternalRef, ExternalSymbolSource,
-    ResolveOutput, ResolvedCall, ResolvedCallKind, SymbolTable,
-};
-pub use schema::{parse_schema, EntitySchema, FieldSchema, FieldType, PrimitiveType, RootSchema, SchemaRegistry};
-pub use mid::{
-    lower_program, validate_program, MirProgram, MirValidationDiagnostic, MirValidationKind,
-    MirValidationSeverity,
-};
-pub use codegen::{
-    generate_backends, CodegenOutput, CypherArtifact, CypherProgram, EplArtifact, EplProgram,
+    resolve_program, resolve_program_with_globals, resolve_program_with_schema, ExternalRef,
+    ExternalSymbolSource, ResolveOutput, ResolvedCall, ResolvedCallKind, SymbolTable,
 };
 pub use runtime_ir::{lower_runtime_program, RuntimeExpr, RuntimeProgram, RuntimeRule};
+pub use schema::{
+    parse_schema, EntitySchema, FieldSchema, FieldType, PrimitiveType, RootSchema, SchemaRegistry,
+};
 pub use typecheck::{typecheck_program, TypeDiagnostic, TypecheckOutput};
 pub use typecheck::{TypeDiagnosticKind, TypeDiagnosticSeverity};
 
@@ -121,7 +123,9 @@ pub struct CompileManyOutput {
 pub fn compile(source: &str, config: &CompilerConfig) -> Result<CompileOutput, Vec<Diagnostic>> {
     let (schema, prelude) = load_stage0(config)?;
     let (tokens, program) = lex_and_parse(source)?;
-    Ok(finalize_unit(tokens, program, schema, prelude, None, config))
+    Ok(finalize_unit(
+        tokens, program, schema, prelude, None, config,
+    ))
 }
 
 pub fn compile_many(inputs: Vec<CompileUnitInput>, config: &CompilerConfig) -> CompileManyOutput {
@@ -195,7 +199,9 @@ pub fn compile_many(inputs: Vec<CompileUnitInput>, config: &CompilerConfig) -> C
     }
 }
 
-fn load_stage0(_config: &CompilerConfig) -> Result<(SchemaRegistry, PreludeContext), Vec<Diagnostic>> {
+fn load_stage0(
+    _config: &CompilerConfig,
+) -> Result<(SchemaRegistry, PreludeContext), Vec<Diagnostic>> {
     // Stage 0A: Load and parse stdlib schema prelude.
     let schema_src = include_str!("oil_stdlib/src/schema.oil");
     let schema = parse_schema(schema_src).map_err(|errs| {
@@ -246,17 +252,17 @@ fn load_stage0(_config: &CompilerConfig) -> Result<(SchemaRegistry, PreludeConte
             })
             .collect::<Vec<_>>()
     })?;
-    let builtin_callable_signatures =
-        parse_builtin_callable_signatures(builtin_callables_src).map_err(|errs| {
-        errs.into_iter()
-            .map(|e| Diagnostic {
-                stage: "prelude",
-                is_error: true,
-                message: format!("callables.oil:{}:{}: {}", e.line, e.col, e.message),
-                span: None,
-            })
-            .collect::<Vec<_>>()
-    })?;
+    let builtin_callable_signatures = parse_builtin_callable_signatures(builtin_callables_src)
+        .map_err(|errs| {
+            errs.into_iter()
+                .map(|e| Diagnostic {
+                    stage: "prelude",
+                    is_error: true,
+                    message: format!("callables.oil:{}:{}: {}", e.line, e.col, e.message),
+                    span: None,
+                })
+                .collect::<Vec<_>>()
+        })?;
 
     Ok((
         schema,
@@ -374,8 +380,7 @@ fn finalize_unit(
     }
     diagnostics.extend(mir_diagnostics.iter().map(|d| Diagnostic {
         stage: "mir",
-        is_error: matches!(d.severity, MirValidationSeverity::Error)
-            || config.fail_on_mir_warning,
+        is_error: matches!(d.severity, MirValidationSeverity::Error) || config.fail_on_mir_warning,
         message: d.message.clone(),
         span: None,
     }));

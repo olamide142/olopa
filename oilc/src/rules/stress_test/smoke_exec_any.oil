@@ -1,0 +1,6 @@
+rule "smoke_exec_any" {
+  from endpoint.process
+  correlate process.exec as p
+  where p.pid > 0
+  respond alert low
+}

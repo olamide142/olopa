@@ -118,9 +118,15 @@ impl<'a> SchemaParser<'a> {
                 if trimmed == "}" {
                     let completed = current_entity.take().expect("entity exists");
                     if self.registry.entities.contains_key(&completed.name) {
-                        self.error(line_no, col_offset + 1, format!("duplicate entity '{}'", completed.name));
+                        self.error(
+                            line_no,
+                            col_offset + 1,
+                            format!("duplicate entity '{}'", completed.name),
+                        );
                     } else {
-                        self.registry.entities.insert(completed.name.clone(), completed);
+                        self.registry
+                            .entities
+                            .insert(completed.name.clone(), completed);
                     }
                     continue;
                 }
@@ -131,7 +137,10 @@ impl<'a> SchemaParser<'a> {
                             self.error(
                                 line_no,
                                 col_offset + 1,
-                                format!("duplicate field '{}' in entity '{}'", field_name, entity.name),
+                                format!(
+                                    "duplicate field '{}' in entity '{}'",
+                                    field_name, entity.name
+                                ),
                             );
                         } else {
                             entity.fields.insert(
@@ -153,12 +162,15 @@ impl<'a> SchemaParser<'a> {
                 match parse_root_decl(rest) {
                     Ok((name, entity)) => {
                         if self.registry.roots.contains_key(&name) {
-                            self.error(line_no, col_offset + 1, format!("duplicate root '{}'", name));
-                        } else {
-                            self.registry.roots.insert(
-                                name.clone(),
-                                RootSchema { name, entity },
+                            self.error(
+                                line_no,
+                                col_offset + 1,
+                                format!("duplicate root '{}'", name),
                             );
+                        } else {
+                            self.registry
+                                .roots
+                                .insert(name.clone(), RootSchema { name, entity });
                         }
                     }
                     Err(msg) => self.error(line_no, col_offset + 1, msg),
@@ -180,7 +192,11 @@ impl<'a> SchemaParser<'a> {
                 continue;
             }
 
-            self.error(line_no, col_offset + 1, "unexpected top-level schema token".to_string());
+            self.error(
+                line_no,
+                col_offset + 1,
+                "unexpected top-level schema token".to_string(),
+            );
         }
 
         // EOF reached while still inside an entity block.
@@ -260,7 +276,9 @@ fn parse_field_type(raw: &str) -> Result<FieldType, String> {
     let ty = raw.trim();
 
     if let Some(inner) = ty.strip_suffix('?') {
-        return Ok(FieldType::Nullable(Box::new(parse_field_type(inner.trim())?)));
+        return Ok(FieldType::Nullable(Box::new(parse_field_type(
+            inner.trim(),
+        )?)));
     }
 
     if let Some(inner) = ty.strip_prefix("Set<") {
@@ -307,9 +325,6 @@ entity Host {
         assert!(reg.is_root("host"));
         let host = reg.entities.get("Host").expect("Host entity");
         assert!(host.fields.contains_key("id"));
-        assert!(matches!(
-            host.fields["tags"].ty,
-            FieldType::Set(_)
-        ));
+        assert!(matches!(host.fields["tags"].ty, FieldType::Set(_)));
     }
 }

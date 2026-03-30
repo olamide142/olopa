@@ -190,7 +190,11 @@ impl<'a> Typechecker<'a> {
                 if !is_numeric(&t) && t != Ty::Unknown {
                     self.diag("unary '-' expects numeric operand", expr.span.clone());
                 }
-                if t == Ty::Float { Ty::Float } else { Ty::Int }
+                if t == Ty::Float {
+                    Ty::Float
+                } else {
+                    Ty::Int
+                }
             }
             Expr::Not(inner) => {
                 let t = self.infer_expr(inner, alias_entity, value_scope);
@@ -258,7 +262,10 @@ impl<'a> Typechecker<'a> {
                 let pr = self.infer_expr(prefix, alias_entity, value_scope);
                 self.expect_path_like(&pt, path.span.clone(), "under lhs");
                 if !(is_path_like(&pr) || matches!(pr, Ty::Set(_) | Ty::List(_) | Ty::Unknown)) {
-                    self.diag("under rhs expects path/string/list/set", prefix.span.clone());
+                    self.diag(
+                        "under rhs expects path/string/list/set",
+                        prefix.span.clone(),
+                    );
                 }
                 Ty::Bool
             }
@@ -371,8 +378,7 @@ impl<'a> Typechecker<'a> {
                         self.diag(
                             format!(
                                 "callable '{}' missing argument(s) for parameter(s): {}",
-                                name,
-                                missing
+                                name, missing
                             ),
                             expr.span.clone(),
                         );
@@ -414,7 +420,8 @@ impl<'a> Typechecker<'a> {
                     }
 
                     if let Some(ret_ty) = &sig.returns {
-                        if let Some(entity) = unknown_entity_in_callable_type_ref(ret_ty, self.schema)
+                        if let Some(entity) =
+                            unknown_entity_in_callable_type_ref(ret_ty, self.schema)
                         {
                             self.diag(
                                 format!(
@@ -441,7 +448,8 @@ impl<'a> Typechecker<'a> {
                     let first = self.infer_expr(&items[0], alias_entity, value_scope);
                     for item in &items[1..] {
                         let t = self.infer_expr(item, alias_entity, value_scope);
-                        if !type_compatible(&first, &t) && t != Ty::Unknown && first != Ty::Unknown {
+                        if !type_compatible(&first, &t) && t != Ty::Unknown && first != Ty::Unknown
+                        {
                             self.diag("list elements have incompatible types", item.span.clone());
                         }
                     }
@@ -451,7 +459,8 @@ impl<'a> Typechecker<'a> {
             Expr::BinOp { lhs, rhs, .. } => {
                 let lt = self.infer_expr(lhs, alias_entity, value_scope);
                 let rt = self.infer_expr(rhs, alias_entity, value_scope);
-                if (!is_numeric(&lt) && lt != Ty::Unknown) || (!is_numeric(&rt) && rt != Ty::Unknown)
+                if (!is_numeric(&lt) && lt != Ty::Unknown)
+                    || (!is_numeric(&rt) && rt != Ty::Unknown)
                 {
                     self.diag("arithmetic operands must be numeric", expr.span.clone());
                 }
@@ -857,9 +866,9 @@ rule "r" {
         );
 
         assert!(
-            out.diagnostics
-                .iter()
-                .any(|d| d.message.contains("root callable 'host' expects exactly 1 argument")),
+            out.diagnostics.iter().any(|d| d
+                .message
+                .contains("root callable 'host' expects exactly 1 argument")),
             "expected root callable arity diagnostic, got: {:?}",
             out.diagnostics
         );
@@ -891,9 +900,9 @@ rule "r" {
         );
 
         assert!(
-            out.diagnostics
-                .iter()
-                .any(|d| d.message.contains("returns unknown entity type 'NotAnEntity'")),
+            out.diagnostics.iter().any(|d| d
+                .message
+                .contains("returns unknown entity type 'NotAnEntity'")),
             "expected callable return-type diagnostic, got: {:?}",
             out.diagnostics
         );
@@ -1092,10 +1101,9 @@ rule "r1" {
             callables.clone(),
         );
         assert!(
-            out_missing
-                .diagnostics
-                .iter()
-                .any(|d| d.message.contains("missing argument(s) for parameter(s): name")),
+            out_missing.diagnostics.iter().any(|d| d
+                .message
+                .contains("missing argument(s) for parameter(s): name")),
             "expected missing-parameter diagnostic, got: {:?}",
             out_missing.diagnostics
         );

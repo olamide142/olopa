@@ -205,7 +205,11 @@ pub fn parse_builtin_callable_signatures(
         }
     }
 
-    if errs.is_empty() { Ok(out) } else { Err(errs) }
+    if errs.is_empty() {
+        Ok(out)
+    } else {
+        Err(errs)
+    }
 }
 
 // Keep identifier policy simple and ASCII for stdlib symbol names.
@@ -245,13 +249,7 @@ fn parse_callable_decl(rest: &str) -> Result<(String, CallableSignature), String
         None
     };
 
-    Ok((
-        name.to_string(),
-        CallableSignature {
-            params,
-            returns,
-        },
-    ))
+    Ok((name.to_string(), CallableSignature { params, returns }))
 }
 
 fn parse_callable_header(header: &str) -> Result<(&str, Vec<CallableParam>), String> {

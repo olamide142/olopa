@@ -89,7 +89,11 @@ fn emit_rule_source(eval_fn_name: &str, ffi_fn_name: &str, rule: &crate::mid::Mi
     source
 }
 
-fn compile_shared_object(slug: &str, source: &str, function_name: &str) -> (Option<String>, Option<String>) {
+fn compile_shared_object(
+    slug: &str,
+    source: &str,
+    function_name: &str,
+) -> (Option<String>, Option<String>) {
     let base_dir = std::env::temp_dir().join("oilc_epl_backend");
     if let Err(e) = fs::create_dir_all(&base_dir) {
         return (None, Some(format!("failed to create backend dir: {e}")));
@@ -119,10 +123,8 @@ fn compile_shared_object(slug: &str, source: &str, function_name: &str) -> (Opti
             // Retry with an explicit linker override. Some environments have
             // rust-lld instability for ad-hoc cdylib linking.
             let mut fallback_args = default_args;
-            fallback_args.extend_from_slice(&[
-                "-C".to_string(),
-                "link-arg=-fuse-ld=bfd".to_string(),
-            ]);
+            fallback_args
+                .extend_from_slice(&["-C".to_string(), "link-arg=-fuse-ld=bfd".to_string()]);
 
             match run_rustc(&fallback_args) {
                 Ok(()) => (Some(path_to_string(so_path)), None),
@@ -159,7 +161,11 @@ fn emit_expr(expr: &MirExpr) -> String {
 fn emit_bool_expr(expr: &Expr) -> String {
     match expr {
         Expr::BoolLit(v) => {
-            if *v { "true".to_string() } else { "false".to_string() }
+            if *v {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
         }
         Expr::And(lhs, rhs) => {
             format!(
@@ -204,10 +210,13 @@ fn emit_bool_expr(expr: &Expr) -> String {
                 "false".to_string()
             }
         }
-        Expr::NotIn { lhs, rhs } => format!("!({})", emit_bool_expr(&Expr::In {
-            lhs: lhs.clone(),
-            rhs: rhs.clone(),
-        })),
+        Expr::NotIn { lhs, rhs } => format!(
+            "!({})",
+            emit_bool_expr(&Expr::In {
+                lhs: lhs.clone(),
+                rhs: rhs.clone(),
+            })
+        ),
         Expr::StartsWith { lhs, rhs } => {
             format!(
                 "{}.starts_with(&{})",
@@ -254,7 +263,11 @@ fn emit_value_expr(expr: &Expr) -> String {
         Expr::IntLit(n) => format!("{n}.to_string()"),
         Expr::FloatLit(n) => format!("{n}.to_string()"),
         Expr::BoolLit(v) => {
-            if *v { "\"true\".to_string()".to_string() } else { "\"false\".to_string()".to_string() }
+            if *v {
+                "\"true\".to_string()".to_string()
+            } else {
+                "\"false\".to_string()".to_string()
+            }
         }
         Expr::Path(parts) => format!("field(event, \"{}\")", parts.join(".")),
         Expr::Ident(name) => format!("field(event, \"{name}\")"),
@@ -279,7 +292,9 @@ fn emit_value_expr(expr: &Expr) -> String {
         Expr::Call { .. } => "\"\".to_string()".to_string(),
         Expr::List(_) => "\"\".to_string()".to_string(),
         Expr::Null => "\"\".to_string()".to_string(),
-        Expr::UnaryMinus(inner) => format!("(-to_f64(&{})).to_string()", emit_value_expr(&inner.node)),
+        Expr::UnaryMinus(inner) => {
+            format!("(-to_f64(&{})).to_string()", emit_value_expr(&inner.node))
+        }
         Expr::And(_, _)
         | Expr::Or(_, _)
         | Expr::Not(_)
@@ -325,10 +340,10 @@ fn sanitize_name(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{compile, CompilerConfig};
     use crate::lexer::Lexer;
     use crate::mid::lower_program;
     use crate::parser::Parser;
+    use crate::{compile, CompilerConfig};
 
     #[test]
     fn emits_artifact_per_rule() {
@@ -389,9 +404,9 @@ rule "r" {
             artifact.source
         );
         assert!(
-            artifact
-                .source
-                .contains("if !(field(event, \"p.binary.path\").starts_with(&\"/tmp\".to_string()))"),
+            artifact.source.contains(
+                "if !(field(event, \"p.binary.path\").starts_with(&\"/tmp\".to_string()))"
+            ),
             "snapshot mismatch (predicate emission): {}",
             artifact.source
         );

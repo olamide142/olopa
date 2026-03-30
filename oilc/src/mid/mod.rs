@@ -238,10 +238,7 @@ pub fn validate_program(program: &MirProgram) -> Vec<MirValidationDiagnostic> {
                     kind: MirValidationKind::JoinMalformed,
                     severity: MirValidationSeverity::Error,
                     rule: rule_name.clone(),
-                    message: format!(
-                        "MIR join aliases must differ (got '{}')",
-                        join.left_alias
-                    ),
+                    message: format!("MIR join aliases must differ (got '{}')", join.left_alias),
                 });
             }
         }
@@ -253,12 +250,7 @@ pub fn validate_program(program: &MirProgram) -> Vec<MirValidationDiagnostic> {
                 rule: rule_name.clone(),
                 message: "MIR respond plan must contain at least one branch".to_string(),
             });
-        } else if rule
-            .respond
-            .branches
-            .iter()
-            .any(|b| b.actions.is_empty())
-        {
+        } else if rule.respond.branches.iter().any(|b| b.actions.is_empty()) {
             diagnostics.push(MirValidationDiagnostic {
                 kind: MirValidationKind::RespondMalformed,
                 severity: MirValidationSeverity::Error,
@@ -382,7 +374,11 @@ fn lower_rule(rule: &RuleDecl, idx: usize) -> MirRule {
             .iter()
             .map(|e| MirEmit {
                 fact_name: e.fact_name.node.clone(),
-                args: e.args.iter().map(|a| MirExpr::Raw(a.node.clone())).collect(),
+                args: e
+                    .args
+                    .iter()
+                    .map(|a| MirExpr::Raw(a.node.clone()))
+                    .collect(),
                 expires: e.expires.as_ref().map(|x| x.node),
             })
             .collect(),
@@ -415,7 +411,9 @@ fn lower_body(body: &RuleBody, within: Option<OilDuration>) -> (Vec<MirJoin>, Op
                     let right = &c.arms[idx];
                     let on = match &right.join {
                         CorrelateJoin::OnPredicate(expr) => Some(MirExpr::Raw(expr.node.clone())),
-                        CorrelateJoin::ByVariable(v) => Some(MirExpr::Raw(Expr::Ident(v.node.clone()))),
+                        CorrelateJoin::ByVariable(v) => {
+                            Some(MirExpr::Raw(Expr::Ident(v.node.clone())))
+                        }
                         CorrelateJoin::None => None,
                     };
                     joins.push(MirJoin {
@@ -431,13 +429,11 @@ fn lower_body(body: &RuleBody, within: Option<OilDuration>) -> (Vec<MirJoin>, Op
             let mut joins = Vec::new();
             if m.steps.len() >= 2 {
                 for idx in 1..m.steps.len() {
-                    let Some(right_alias) = m.steps[idx].alias.as_ref().map(|a| a.node.clone()) else {
+                    let Some(right_alias) = m.steps[idx].alias.as_ref().map(|a| a.node.clone())
+                    else {
                         continue;
                     };
-                    let Some(left_alias) = m.steps[idx - 1]
-                        .alias
-                        .as_ref()
-                        .map(|a| a.node.clone())
+                    let Some(left_alias) = m.steps[idx - 1].alias.as_ref().map(|a| a.node.clone())
                     else {
                         continue;
                     };
@@ -566,10 +562,7 @@ rule "r" {
             score: None,
             verify: None,
             emit: vec![],
-            respond: crate::ast::Spanned::new(
-                crate::ast::RespondBlock { arms: vec![] },
-                0..1,
-            ),
+            respond: crate::ast::Spanned::new(crate::ast::RespondBlock { arms: vec![] }, 0..1),
         };
         let program = Program {
             rules: vec![rule],

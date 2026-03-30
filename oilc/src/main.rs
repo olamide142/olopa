@@ -1,10 +1,12 @@
-use std::fs;
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use oilc::{compile_many, diagnostics::format_diagnostic, CompileUnitInput, CompilerConfig, Diagnostic};
+use oilc::{
+    compile_many, diagnostics::format_diagnostic, CompileUnitInput, CompilerConfig, Diagnostic,
+};
 use serde_json::json;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -87,14 +89,17 @@ struct OilCompilerArgs {
     emit_runtime_ir: Option<PathBuf>,
 }
 
-
 fn main() -> Result<()> {
     let args = OilCompilerArgs::parse();
     let emit_runtime_ir_requested = args.emit_runtime_ir.is_some();
     let json_diagnostics = matches!(args.diagnostics_format, DiagnosticsFormat::Json);
     let mode_requires_mir = matches!(
         args.mode,
-        OutputMode::Mir | OutputMode::RuntimeIr | OutputMode::Cypher | OutputMode::Epl | OutputMode::Codegen
+        OutputMode::Mir
+            | OutputMode::RuntimeIr
+            | OutputMode::Cypher
+            | OutputMode::Epl
+            | OutputMode::Codegen
     ) || emit_runtime_ir_requested;
     let mode_requires_codegen = matches!(
         args.mode,
@@ -334,10 +339,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn write_runtime_ir_artifact(
-    path: &Path,
-    units: &[(String, oilc::RuntimeProgram)],
-) -> Result<()> {
+fn write_runtime_ir_artifact(path: &Path, units: &[(String, oilc::RuntimeProgram)]) -> Result<()> {
     let payload = if units.len() == 1 {
         serde_json::to_value(&units[0].1)?
     } else {
@@ -483,8 +485,8 @@ fn collect_oil_files(inputs: &[String]) -> Result<Vec<PathBuf>> {
 
 // Depth-first recursive directory walk.
 fn collect_from_dir(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir)
-        .with_context(|| format!("failed to read directory: {}", dir.display()))?
+    for entry in
+        fs::read_dir(dir).with_context(|| format!("failed to read directory: {}", dir.display()))?
     {
         let entry = entry.with_context(|| format!("failed to read entry in {}", dir.display()))?;
         let path = entry.path();

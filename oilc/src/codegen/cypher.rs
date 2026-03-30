@@ -60,7 +60,11 @@ fn emit_expr(expr: &MirExpr) -> String {
 fn emit_bool_expr(expr: &Expr) -> String {
     match expr {
         Expr::BoolLit(v) => {
-            if *v { "true".to_string() } else { "false".to_string() }
+            if *v {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
         }
         Expr::And(lhs, rhs) => {
             format!(
@@ -170,7 +174,11 @@ fn emit_value_expr(expr: &Expr) -> String {
         Expr::IntLit(n) => n.to_string(),
         Expr::FloatLit(n) => n.to_string(),
         Expr::BoolLit(v) => {
-            if *v { "true".to_string() } else { "false".to_string() }
+            if *v {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
         }
         Expr::Null => "null".to_string(),
         Expr::Path(parts) => format!("e.{}", parts.join("_")),
@@ -192,7 +200,12 @@ fn emit_value_expr(expr: &Expr) -> String {
                 ArithOp::Mul => "*",
                 ArithOp::Div => "/",
             };
-            format!("({} {} {})", emit_value_expr(&lhs.node), op, emit_value_expr(&rhs.node))
+            format!(
+                "({} {} {})",
+                emit_value_expr(&lhs.node),
+                op,
+                emit_value_expr(&rhs.node)
+            )
         }
         Expr::DurationLit(d) => d.value.to_string(),
         Expr::UnaryMinus(inner) => format!("(-{})", emit_value_expr(&inner.node)),
@@ -242,10 +255,10 @@ fn sanitize_name(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{compile, CompilerConfig};
     use crate::lexer::Lexer;
     use crate::mid::lower_program;
     use crate::parser::Parser;
+    use crate::{compile, CompilerConfig};
 
     #[test]
     fn emits_artifact_per_rule() {
@@ -311,7 +324,9 @@ rule "r" {
             artifact.cypher
         );
         assert!(
-            artifact.cypher.contains("WHERE (e.p_binary_path STARTS WITH '/tmp')"),
+            artifact
+                .cypher
+                .contains("WHERE (e.p_binary_path STARTS WITH '/tmp')"),
             "snapshot mismatch (where clause): {}",
             artifact.cypher
         );
@@ -333,15 +348,18 @@ rule "r" {
             .first()
             .expect("cypher artifact for showcase");
 
-        assert_eq!(artifact.rule_name, "container_shell_credential_access_and_egress");
+        assert_eq!(
+            artifact.rule_name,
+            "container_shell_credential_access_and_egress"
+        );
         assert_eq!(
             artifact.trigger_name,
             "oilc_container_shell_credential_access_and_egress_trigger"
         );
         assert!(
-            artifact
-                .cypher
-                .contains("CREATE TRIGGER oilc_container_shell_credential_access_and_egress_trigger"),
+            artifact.cypher.contains(
+                "CREATE TRIGGER oilc_container_shell_credential_access_and_egress_trigger"
+            ),
             "snapshot mismatch (trigger header): {}",
             artifact.cypher
         );

@@ -1,11 +1,7 @@
 use std::collections::HashSet;
 use std::ops::Range;
 
-use crate::ast::{
-    ActionStmt, 
-    Expr, 
-    MatchBlock, Program, RuleBody, RuleDecl, Spanned,
-};
+use crate::ast::{ActionStmt, Expr, MatchBlock, Program, RuleBody, RuleDecl, Spanned};
 use crate::schema::{FieldType, SchemaRegistry};
 
 type Span = Range<usize>;
@@ -245,7 +241,9 @@ impl<'a> Resolver<'a> {
         // collection so they do not trigger local duplicate diagnostics.
         if let Some(global) = self.global_symbols {
             self.symbols.sets.extend(global.sets.iter().cloned());
-            self.symbols.predicates.extend(global.predicates.iter().cloned());
+            self.symbols
+                .predicates
+                .extend(global.predicates.iter().cloned());
             self.symbols.facts.extend(global.facts.iter().cloned());
         }
     }
@@ -272,7 +270,8 @@ impl<'a> Resolver<'a> {
                 for step in steps {
                     if let Some(alias) = &step.alias {
                         scope.insert(alias.node.clone());
-                        if let Some(entity) = map_event_to_entity(&step.event.node.domain, &step.event.node.kind)
+                        if let Some(entity) =
+                            map_event_to_entity(&step.event.node.domain, &step.event.node.kind)
                         {
                             alias_entity.insert(alias.node.clone(), entity.to_string());
                         }
@@ -386,13 +385,30 @@ impl<'a> Resolver<'a> {
             | ActionStmt::Quarantine { path: target }
             | ActionStmt::BlockEgress { target }
             | ActionStmt::Throttle { target } => {
-                self.resolve_name_like(&target.node, target.span.clone(), scope, alias_entity);
+                self.resolve_action_target(target, scope, alias_entity);
             }
             ActionStmt::Alert { .. }
             | ActionStmt::OpenCase { .. }
             | ActionStmt::Challenge { .. }
             | ActionStmt::Notify { .. } => {}
         }
+    }
+
+    fn resolve_action_target(
+        &mut self,
+        target: &Spanned<String>,
+        scope: &HashSet<String>,
+        alias_entity: &std::collections::BTreeMap<String, String>,
+    ) {
+        // Action targets are parsed as dotted-name strings. When dotted, resolve
+        // them with the same root/path semantics as expression paths.
+        if target.node.contains('.') {
+            let parts: Vec<String> = target.node.split('.').map(|s| s.to_string()).collect();
+            self.resolve_path_expr(&parts, target.span.clone(), scope, alias_entity);
+            return;
+        }
+
+        self.resolve_name_like(&target.node, target.span.clone(), scope, alias_entity);
     }
 
     fn resolve_expr(
@@ -405,8 +421,12 @@ impl<'a> Resolver<'a> {
             // Ident and Path are resolved differently:
             // - Ident: variable/set/external/root/builtin name lookup
             // - Path: schema-aware chain validation where possible
-            Expr::Ident(name) => self.resolve_name_like(name, expr.span.clone(), scope, alias_entity),
-            Expr::Path(parts) => self.resolve_path_expr(parts, expr.span.clone(), scope, alias_entity),
+            Expr::Ident(name) => {
+                self.resolve_name_like(name, expr.span.clone(), scope, alias_entity)
+            }
+            Expr::Path(parts) => {
+                self.resolve_path_expr(parts, expr.span.clone(), scope, alias_entity)
+            }
             // Member is currently produced for post-call chains
             // (e.g. host(id).baseline.domains). We recurse into base so call
             // resolution still runs; deeper member typing is handled in typecheck.
@@ -429,7 +449,10 @@ impl<'a> Resolver<'a> {
             | Expr::StartsWith { lhs, rhs }
             | Expr::EndsWith { lhs, rhs }
             | Expr::Contains { lhs, rhs }
-            | Expr::Under { path: lhs, prefix: rhs } => {
+            | Expr::Under {
+                path: lhs,
+                prefix: rhs,
+            } => {
                 self.resolve_expr(lhs, scope, alias_entity);
                 self.resolve_expr(rhs, scope, alias_entity);
             }
@@ -673,11 +696,10 @@ rule "r" {
             &HashSet::new(),
             &HashSet::new(),
         );
-        assert!(
-            !out.diagnostics
-                .iter()
-                .any(|d| d.message.contains("unknown identifier 'malicious_domains'"))
-        );
+        assert!(!out
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("unknown identifier 'malicious_domains'")));
     }
 
     #[test]
@@ -700,11 +722,9 @@ rule "r" {
             &HashSet::new(),
             &HashSet::new(),
         );
-        assert!(
-            out.diagnostics
-                .iter()
-                .any(|d| d.message.contains("unknown field 'nope' on entity 'Process'"))
-        );
+        assert!(out.diagnostics.iter().any(|d| d
+            .message
+            .contains("unknown field 'nope' on entity 'Process'")));
     }
 
     #[test]

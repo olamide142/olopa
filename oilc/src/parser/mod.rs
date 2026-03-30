@@ -649,7 +649,10 @@ impl Parser {
                 }
             };
 
-            if self.expect(&TokenKind::Assign, "expected '=' in let binding").is_none() {
+            if self
+                .expect(&TokenKind::Assign, "expected '=' in let binding")
+                .is_none()
+            {
                 self.synchronize_rule_line();
                 continue;
             }
@@ -664,7 +667,10 @@ impl Parser {
             };
 
             bindings.push(LetBinding {
-                name: Spanned::new(self.ident_text(&name_tok).unwrap_or_default(), name_tok.span),
+                name: Spanned::new(
+                    self.ident_text(&name_tok).unwrap_or_default(),
+                    name_tok.span,
+                ),
                 value,
             });
             // If expression parsing stopped before line end (for syntax we do not
@@ -759,7 +765,10 @@ impl Parser {
         let mut requirements = Vec::new();
 
         while !self.is_at_end() && !self.check(&TokenKind::RBrace) {
-            if self.at_line_start() && self.is_rule_clause_start() && !self.peek_keyword(Keyword::Score) {
+            if self.at_line_start()
+                && self.is_rule_clause_start()
+                && !self.peek_keyword(Keyword::Score)
+            {
                 break;
             }
 
@@ -801,7 +810,10 @@ impl Parser {
         let mut requirements = Vec::new();
 
         while !self.is_at_end() && !self.check(&TokenKind::RBrace) {
-            if self.at_line_start() && self.is_rule_clause_start() && !self.peek_keyword(Keyword::Require) {
+            if self.at_line_start()
+                && self.is_rule_clause_start()
+                && !self.peek_keyword(Keyword::Require)
+            {
                 break;
             }
 
@@ -818,7 +830,9 @@ impl Parser {
             }
 
             self.advance(); // require
-            if let Some(path) = self.parse_dotted_name("expected path after 'require' in verify clause") {
+            if let Some(path) =
+                self.parse_dotted_name("expected path after 'require' in verify clause")
+            {
                 requirements.push(path);
             } else {
                 self.synchronize_rule_line();
@@ -848,17 +862,20 @@ impl Parser {
                 if self.peek_keyword(Keyword::If) {
                     self.advance();
                     let condition = self.parse_expr();
-                    let actions = if self.expect(&TokenKind::LBrace, "expected '{' after respond if condition").is_some() {
+                    let actions = if self
+                        .expect(
+                            &TokenKind::LBrace,
+                            "expected '{' after respond if condition",
+                        )
+                        .is_some()
+                    {
                         self.parse_actions_block()
                     } else {
                         self.synchronize_rule_line();
                         Vec::new()
                     };
 
-                    arms.push(RespondArm {
-                        condition,
-                        actions,
-                    });
+                    arms.push(RespondArm { condition, actions });
 
                     self.consume_newlines();
                     if self.peek_keyword(Keyword::Else) {
@@ -869,7 +886,10 @@ impl Parser {
                         }
 
                         // else { ... }
-                        let actions = if self.expect(&TokenKind::LBrace, "expected '{' after else").is_some() {
+                        let actions = if self
+                            .expect(&TokenKind::LBrace, "expected '{' after else")
+                            .is_some()
+                        {
                             self.parse_actions_block()
                         } else {
                             self.synchronize_rule_line();
@@ -1240,7 +1260,10 @@ impl Parser {
         }
 
         let end_tok = self
-            .expect(&TokenKind::RParen, "expected ')' after snapshot target call")?
+            .expect(
+                &TokenKind::RParen,
+                "expected ')' after snapshot target call",
+            )?
             .clone();
         let text = format!("{}({})", base.node, args.join(", "));
         Some(Spanned::new(text, call_start..end_tok.span.end))
@@ -1333,10 +1356,7 @@ impl Parser {
 
         let target = self.parse_dotted_name("expected block egress target")?;
         let end = target.span.end;
-        Some(Spanned::new(
-            ActionStmt::BlockEgress { target },
-            start..end,
-        ))
+        Some(Spanned::new(ActionStmt::BlockEgress { target }, start..end))
     }
 
     fn parse_notify_action(&mut self) -> Option<Spanned<ActionStmt>> {
@@ -1362,10 +1382,7 @@ impl Parser {
         let start = self.advance().span.start; // throttle
         let target = self.parse_dotted_name("expected throttle target")?;
         let end = target.span.end;
-        Some(Spanned::new(
-            ActionStmt::Throttle { target },
-            start..end,
-        ))
+        Some(Spanned::new(ActionStmt::Throttle { target }, start..end))
     }
 
     // ---------------------------------------------------------------------
@@ -1580,7 +1597,9 @@ impl Parser {
                 self.synchronize_expr();
             }
 
-            let end_tok = self.expect(&TokenKind::RParen, "expected ')' to close call")?.clone();
+            let end_tok = self
+                .expect(&TokenKind::RParen, "expected ')' to close call")?
+                .clone();
             let mut expr = Spanned::new(
                 Expr::Call {
                     name: parts.join("."),
@@ -1641,14 +1660,18 @@ impl Parser {
             self.synchronize_expr();
         }
 
-        let end = self.expect(&TokenKind::RBracket, "expected ']' to close list")?.span.end;
+        let end = self
+            .expect(&TokenKind::RBracket, "expected ']' to close list")?
+            .span
+            .end;
         Some(Spanned::new(Expr::List(items), start..end))
     }
 
     fn peek_infix_op(&self) -> Option<(InfixOp, u8, u8)> {
         // two-token operator: `not in`
         if self.peek_keyword(Keyword::Not)
-            && self.peek_n(1)
+            && self
+                .peek_n(1)
                 .map(|t| matches!(t.kind, TokenKind::Kw(Keyword::In)))
                 .unwrap_or(false)
         {
@@ -1861,7 +1884,10 @@ impl Parser {
     }
 
     fn expect_name_atom(&mut self, message: impl Into<String>) -> Option<&Token> {
-        if matches!(self.peek().kind, TokenKind::Ident(_) | TokenKind::Kw(Keyword::Use)) {
+        if matches!(
+            self.peek().kind,
+            TokenKind::Ident(_) | TokenKind::Kw(Keyword::Use)
+        ) {
             Some(self.advance())
         } else {
             self.error_here(message);
@@ -1901,7 +1927,9 @@ impl Parser {
     }
 
     fn parse_dotted_path(&mut self) -> Option<Spanned<Vec<String>>> {
-        let first = self.expect_ident("expected identifier in dotted path")?.clone();
+        let first = self
+            .expect_ident("expected identifier in dotted path")?
+            .clone();
         let mut parts = vec![self.ident_text(&first)?];
         let start = first.span.start;
         let mut end = first.span.end;
@@ -2033,11 +2061,7 @@ impl Parser {
     }
 
     pub fn error_at_end(&mut self, message: impl Into<String>) {
-        let span = self
-            .tokens
-            .last()
-            .map(|t| t.span.clone())
-            .unwrap_or(0..0);
+        let span = self.tokens.last().map(|t| t.span.clone()).unwrap_or(0..0);
         self.push_error(message, span);
     }
 
@@ -2099,8 +2123,7 @@ fn regex_escape_literal(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
         match ch {
-            '\\' | '.' | '+' | '*' | '?' | '^' | '$' | '(' | ')' | '[' | ']' | '{' | '}' | '|'
-            => {
+            '\\' | '.' | '+' | '*' | '?' | '^' | '$' | '(' | ')' | '[' | ']' | '{' | '}' | '|' => {
                 out.push('\\');
                 out.push(ch);
             }
@@ -2156,18 +2179,14 @@ set shells = [
         assert_eq!(rule.emit.len(), 1);
         assert_eq!(rule.emit[0].fact_name.node, "container.interactive_shell");
         assert_eq!(rule.respond.node.arms.len(), 2);
-        assert!(
-            rule.respond.node.arms[0]
-                .actions
-                .iter()
-                .any(|a| matches!(a.node, ActionStmt::Snapshot { .. }))
-        );
-        assert!(
-            rule.respond.node.arms[0]
-                .actions
-                .iter()
-                .any(|a| matches!(a.node, ActionStmt::OpenCase { .. }))
-        );
+        assert!(rule.respond.node.arms[0]
+            .actions
+            .iter()
+            .any(|a| matches!(a.node, ActionStmt::Snapshot { .. })));
+        assert!(rule.respond.node.arms[0]
+            .actions
+            .iter()
+            .any(|a| matches!(a.node, ActionStmt::OpenCase { .. })));
     }
 
     #[test]
@@ -2177,13 +2196,14 @@ set shells = [
         assert_eq!(program.rules.len(), 1);
         let rule = &program.rules[0];
         assert_eq!(rule.emit.len(), 1);
-        assert_eq!(rule.emit[0].fact_name.node, "host.possible_credential_exfil");
-        assert!(
-            rule.respond.node.arms[0]
-                .actions
-                .iter()
-                .any(|a| matches!(a.node, ActionStmt::Isolate { .. }))
+        assert_eq!(
+            rule.emit[0].fact_name.node,
+            "host.possible_credential_exfil"
         );
+        assert!(rule.respond.node.arms[0]
+            .actions
+            .iter()
+            .any(|a| matches!(a.node, ActionStmt::Isolate { .. })));
     }
 
     #[test]
@@ -2387,8 +2407,9 @@ rule "r" {
 
         let errs = parse_errs(src);
         assert!(
-            errs.iter()
-                .any(|e| e.message.contains("unexpected continuation in where clause")),
+            errs.iter().any(|e| e
+                .message
+                .contains("unexpected continuation in where clause")),
             "expected where-continuation diagnostic, got: {:?}",
             errs
         );
@@ -2445,8 +2466,9 @@ rule "r" {
 
         let errs = parse_errs(src);
         assert!(
-            errs.iter()
-                .any(|e| e.message.contains("expected 'require <path>' in verify clause")),
+            errs.iter().any(|e| e
+                .message
+                .contains("expected 'require <path>' in verify clause")),
             "expected verify-entry diagnostic, got: {:?}",
             errs
         );
@@ -2474,7 +2496,8 @@ rule "r" {
 
         let errs = parse_errs(src);
         assert!(
-            errs.iter().any(|e| e.message.contains("expected expression")),
+            errs.iter()
+                .any(|e| e.message.contains("expected expression")),
             "expected require-entry expression diagnostic, got: {:?}",
             errs
         );

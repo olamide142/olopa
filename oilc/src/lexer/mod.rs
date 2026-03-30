@@ -409,7 +409,10 @@ impl<'src> Lexer<'src> {
 
     // Read an identifier-like sequence and classify it as keyword or identifier.
     fn lex_ident_or_keyword(&mut self, start: usize) -> Token {
-        while matches!(self.current_char(), Some('a'..='z' | 'A'..='Z' | '0'..='9' | '_')) {
+        while matches!(
+            self.current_char(),
+            Some('a'..='z' | 'A'..='Z' | '0'..='9' | '_')
+        ) {
             self.advance_char();
         }
 
