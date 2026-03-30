@@ -4,6 +4,7 @@ Current bootstrap status:
 - `src/main.rs` reads an `.oil` source file and runs lexical analysis.
 - `src/lexer/mod.rs` emits tokens (including durations like `15m`) plus spans.
 - Parser/type/MIR/codegen layers are still in-progress.
+- Implemented grammar reference: `docs/grammar.md` (tracks parser behavior in code).
 
 
 

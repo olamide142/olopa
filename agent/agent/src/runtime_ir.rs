@@ -10,23 +10,30 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use log::{debug, log_enabled, Level};
 use serde::Deserialize;
 
 use crate::agent::{IngestEvent, RuleMatch};
 
 const DNS_CACHE_TTL: Duration = Duration::from_secs(60);
+/// Cached DNS lookup map: domain -> (fetch_time, resolved_ipv4s).
 type DnsCache = HashMap<String, (Instant, Vec<u32>)>;
+/// Global DNS cache used by domain/IP comparison helpers.
 static DOMAIN_IP_CACHE: OnceLock<Mutex<DnsCache>> = OnceLock::new();
+/// Lower-bound heuristic for "looks like realtime epoch ns" timestamps.
 const EPOCH_NS_MIN_2000: u64 = 946_684_800_000_000_000; // 2000-01-01T00:00:00Z
 
+/// Startup wall-clock anchor used to map monotonic kernel time into realtime.
 #[derive(Debug, Clone, Copy)]
 struct ClockAnchor {
+    /// Monotonic nanoseconds sampled at startup.
     monotonic_ns: u64,
+    /// Realtime nanoseconds sampled at startup.
     realtime_ns: u64,
 }
 
+/// Optional global clock anchor cached on first use.
 static CLOCK_ANCHOR: OnceLock<Option<ClockAnchor>> = OnceLock::new();
 
 #[derive(Debug, Clone, Deserialize)]
@@ -148,19 +155,176 @@ pub enum RuntimeExpr {
     Unsupported { kind: String },
 }
 
+/// Runtime value type used during expression evaluation.
 #[derive(Debug, Clone, PartialEq)]
 enum Value {
+    /// Boolean value.
     Bool(bool),
+    /// Numeric value (all ints/floats normalized to f64).
     Number(f64),
+    /// String value.
     String(String),
+    /// IPv4 value encoded as host-endian `u32`.
     Ip(u32),
+    /// Missing/unknown value.
     Null,
 }
 
+/// Stable value-type tag attached to field metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FieldSemantic {
-    Domain,
+enum FieldType {
+    Bool,
+    Number,
+    String,
+    Ip,
 }
+
+/// Field lookup descriptor used by runtime evaluator.
+///
+/// Instead of hardcoding path aliasing in one giant `match`, we keep
+/// canonical/suffix names and extraction behavior here.
+struct FieldSpec {
+    /// Canonical schema-style field path (for diagnostics/docs).
+    canonical: &'static str,
+    /// Value type expected for this field.
+    value_type: FieldType,
+    /// Allowed suffix aliases (matched on segment boundary).
+    aliases: &'static [&'static str],
+    /// Marks fields derived from wall-clock context.
+    is_time_context: bool,
+    /// Extract value from event.
+    extract: fn(&IngestEvent) -> Value,
+}
+
+/// Declarative field registry consumed by runtime lookup.
+const FIELD_SPECS: &[FieldSpec] = &[
+    // --- Time context -----------------------------------------------------
+    FieldSpec {
+        canonical: "time.weekday",
+        value_type: FieldType::String,
+        aliases: &["weekday", "day_of_week", "time.day_of_week"],
+        is_time_context: true,
+        extract: field_time_weekday,
+    },
+    FieldSpec {
+        canonical: "time.hour",
+        value_type: FieldType::Number,
+        aliases: &["hour"],
+        is_time_context: true,
+        extract: field_time_hour,
+    },
+    FieldSpec {
+        canonical: "time.minute",
+        value_type: FieldType::Number,
+        aliases: &["minute"],
+        is_time_context: true,
+        extract: field_time_minute,
+    },
+    FieldSpec {
+        canonical: "time.is_business_hour",
+        value_type: FieldType::Bool,
+        aliases: &[
+            "is_business_hour",
+            "business_hours",
+            "time.business_hours",
+        ],
+        is_time_context: true,
+        extract: field_time_business_hour,
+    },
+    // --- Core event/process fields ---------------------------------------
+    FieldSpec {
+        canonical: "event.ts_ns",
+        value_type: FieldType::Number,
+        aliases: &["ts_ns"],
+        is_time_context: false,
+        extract: field_ts_ns,
+    },
+    FieldSpec {
+        canonical: "process.pid",
+        value_type: FieldType::Number,
+        aliases: &["pid", "process_id", "process.id"],
+        is_time_context: false,
+        extract: field_pid,
+    },
+    FieldSpec {
+        canonical: "process.uid",
+        value_type: FieldType::Number,
+        aliases: &["uid", "user.uid"],
+        is_time_context: false,
+        extract: field_uid,
+    },
+    FieldSpec {
+        canonical: "event.event_type",
+        value_type: FieldType::Number,
+        aliases: &["event_type", "event.type"],
+        is_time_context: false,
+        extract: field_event_type,
+    },
+    FieldSpec {
+        canonical: "event.vertex_id",
+        value_type: FieldType::Number,
+        aliases: &["vertex_id", "event.src_vertex_id"],
+        is_time_context: false,
+        extract: field_vertex_id,
+    },
+    FieldSpec {
+        canonical: "event.dst_vertex_id",
+        value_type: FieldType::Number,
+        aliases: &["dst_vertex_id", "event.dst_vertex_id"],
+        is_time_context: false,
+        extract: field_dst_vertex_id,
+    },
+    FieldSpec {
+        canonical: "process.name",
+        value_type: FieldType::String,
+        aliases: &["name", "comm", "process.comm"],
+        is_time_context: false,
+        extract: field_process_name,
+    },
+    FieldSpec {
+        canonical: "event.comm_id",
+        value_type: FieldType::Number,
+        aliases: &["comm_id", "process.comm_id"],
+        is_time_context: false,
+        extract: field_comm_id,
+    },
+    FieldSpec {
+        canonical: "event.risk_score",
+        value_type: FieldType::Number,
+        aliases: &["risk_score", "score"],
+        is_time_context: false,
+        extract: field_risk_score,
+    },
+    // --- Network fields ---------------------------------------------------
+    FieldSpec {
+        canonical: "network.direction",
+        value_type: FieldType::String,
+        aliases: &["direction"],
+        is_time_context: false,
+        extract: field_network_direction,
+    },
+    FieldSpec {
+        canonical: "network.dest.domain",
+        value_type: FieldType::Ip,
+        aliases: &["domain", "dest.domain"],
+        is_time_context: false,
+        extract: field_network_dest_ip,
+    },
+    FieldSpec {
+        canonical: "network.dest.ip",
+        value_type: FieldType::Ip,
+        aliases: &["dst_ip", "ip", "dest.ip"],
+        is_time_context: false,
+        extract: field_network_dest_ip,
+    },
+    FieldSpec {
+        canonical: "network.dest.port",
+        value_type: FieldType::Number,
+        aliases: &["dst_port", "port", "dest.port"],
+        is_time_context: false,
+        extract: field_network_dest_port,
+    },
+];
 
 #[derive(Debug, Clone)]
 pub struct RuntimeIrRuleEngine {
@@ -168,15 +332,21 @@ pub struct RuntimeIrRuleEngine {
     program: RuntimeProgram,
 }
 
+/// Multi-unit runtime artifact wrapper emitted by compiler in bundled mode.
 #[derive(Debug, Clone, Deserialize)]
 struct RuntimeArtifactMultiUnit {
+    /// Artifact format version.
     version: u32,
+    /// Unit list to merge.
     units: Vec<RuntimeArtifactUnit>,
 }
 
+/// One named rule unit in a multi-unit runtime artifact.
 #[derive(Debug, Clone, Deserialize)]
 struct RuntimeArtifactUnit {
+    /// Unit id/name.
     id: String,
+    /// Unit-local runtime program.
     program: RuntimeProgram,
 }
 
@@ -191,6 +361,13 @@ impl RuntimeIrRuleEngine {
                 path.display()
             )
         })?;
+        if program.version != 1 {
+            bail!(
+                "unsupported runtime-ir version {} in {} (supported: 1)",
+                program.version,
+                path.display()
+            );
+        }
         Ok(Self { program })
     }
 
@@ -227,6 +404,7 @@ impl RuntimeIrRuleEngine {
 // Accept both:
 // - single unit: {version, rules}
 // - multi unit:  {version, units:[{id, program:{version, rules}}]}
+/// Parse runtime program from single-unit or multi-unit JSON artifact.
 fn parse_runtime_program(content: &str) -> Result<RuntimeProgram> {
     if let Ok(program) = serde_json::from_str::<RuntimeProgram>(content) {
         return Ok(program);
@@ -246,6 +424,7 @@ fn parse_runtime_program(content: &str) -> Result<RuntimeProgram> {
     })
 }
 
+/// Check whether any response branch requests `block_egress`.
 fn rule_has_block_egress(rule: &RuntimeRule) -> bool {
     rule.respond
         .branches
@@ -254,6 +433,7 @@ fn rule_has_block_egress(rule: &RuntimeRule) -> bool {
         .any(|a| a.action == "block_egress")
 }
 
+/// Determine whether verbose time-context debug logs are enabled.
 fn should_debug_time_ir() -> bool {
     if !log_enabled!(Level::Debug) {
         return false;
@@ -267,6 +447,7 @@ fn should_debug_time_ir() -> bool {
     }
 }
 
+/// Emit detailed debug log for rules that reference time context.
 fn debug_time_ir_eval(rule: &RuntimeRule, event: &IngestEvent, matched: bool) {
     if let Some(tm) = event_local_time(event) {
         debug!(
@@ -287,25 +468,15 @@ fn debug_time_ir_eval(rule: &RuntimeRule, event: &IngestEvent, matched: bool) {
     }
 }
 
+/// Return true when any rule predicate references time-derived fields.
 fn rule_uses_time_context(rule: &RuntimeRule) -> bool {
     rule.predicates.iter().any(expr_uses_time_context)
 }
 
+/// Recursively inspect expression tree for time-context field usage.
 fn expr_uses_time_context(expr: &RuntimeExpr) -> bool {
     match expr {
-        RuntimeExpr::Field { path } => {
-            path == "time"
-                || path.starts_with("time.")
-                || matches!(
-                    path.rsplit('.').next().unwrap_or(path.as_str()),
-                    "weekday"
-                        | "day_of_week"
-                        | "hour"
-                        | "minute"
-                        | "is_business_hour"
-                        | "business_hours"
-                )
-        }
+        RuntimeExpr::Field { path } => lookup_field_spec(path).is_some_and(|s| s.is_time_context),
         RuntimeExpr::And { lhs, rhs }
         | RuntimeExpr::Or { lhs, rhs }
         | RuntimeExpr::Eq { lhs, rhs }
@@ -332,6 +503,7 @@ fn expr_uses_time_context(expr: &RuntimeExpr) -> bool {
 }
 
 // Evaluate expression in boolean context.
+/// Evaluate an expression in boolean context.
 fn eval_bool(expr: &RuntimeExpr, event: &IngestEvent) -> bool {
     match expr {
         RuntimeExpr::Bool { value } => *value,
@@ -359,93 +531,86 @@ fn eval_bool(expr: &RuntimeExpr, event: &IngestEvent) -> bool {
     }
 }
 
+/// Evaluate equality with typed coercion rules.
 fn eval_eq(lhs: &RuntimeExpr, rhs: &RuntimeExpr, event: &IngestEvent) -> bool {
     let lhs_value = eval_value(lhs, event);
     let rhs_value = eval_value(rhs, event);
-    values_equal(lhs, &lhs_value, rhs, &rhs_value)
+    values_equal(&lhs_value, &rhs_value)
 }
 
+/// Evaluate membership predicate (`lhs in rhs_list`).
 fn eval_in(lhs: &RuntimeExpr, rhs: &[RuntimeExpr], event: &IngestEvent) -> bool {
     let lhs_value = eval_value(lhs, event);
     rhs.iter().any(|item| {
         let rhs_value = eval_value(item, event);
-        values_equal(lhs, &lhs_value, item, &rhs_value)
+        values_equal(&lhs_value, &rhs_value)
     })
 }
 
-fn field_path(expr: &RuntimeExpr) -> Option<&str> {
-    match expr {
-        RuntimeExpr::Field { path } => Some(path.as_str()),
-        _ => None,
-    }
-}
-
-fn is_domain_path(path: &str) -> bool {
-    path == "domain" || path.ends_with(".domain")
-}
-
-fn field_semantic(expr: &RuntimeExpr) -> Option<FieldSemantic> {
-    let path = field_path(expr)?;
-    if is_domain_path(path) {
-        return Some(FieldSemantic::Domain);
-    }
-    None
-}
-
-// Core value equality with semantic adapters.
-// This keeps operators generic and lets `==` / `in` share identical behavior.
-fn values_equal(lhs_expr: &RuntimeExpr, lhs: &Value, rhs_expr: &RuntimeExpr, rhs: &Value) -> bool {
-    if let Some(result) = semantic_eq(lhs_expr, lhs, rhs_expr, rhs) {
-        return result;
-    }
-
+// Core value equality with typed adapters.
+// Keeps operators generic: `==` and `in` do not need per-field special cases.
+fn values_equal(lhs: &Value, rhs: &Value) -> bool {
     match (value_as_ipv4(lhs), value_as_ipv4(rhs)) {
-        (Some(a), Some(b)) => a == b,
+        (Some(a), Some(b)) => return a == b,
+        _ => {}
+    }
+
+    match (lhs, rhs) {
+        (Value::Ip(ip), Value::String(candidate)) | (Value::String(candidate), Value::Ip(ip)) => {
+            if let Some(parsed_ip) = parse_ipv4_literal(candidate) {
+                return *ip == parsed_ip;
+            }
+            if looks_like_domain_name(candidate) {
+                return domain_matches_ip(candidate, *ip);
+            }
+            false
+        }
         _ => lhs == rhs,
     }
 }
 
-fn semantic_eq(
-    lhs_expr: &RuntimeExpr,
-    lhs: &Value,
-    rhs_expr: &RuntimeExpr,
-    rhs: &Value,
-) -> Option<bool> {
-    if matches!(field_semantic(lhs_expr), Some(FieldSemantic::Domain)) {
-        if let Value::String(domain) = rhs {
-            return Some(
-                value_as_ipv4(lhs)
-                    .map(|ip| domain_matches_ip(domain, ip))
-                    .unwrap_or(false),
-            );
-        }
-    }
-    if matches!(field_semantic(rhs_expr), Some(FieldSemantic::Domain)) {
-        if let Value::String(domain) = lhs {
-            return Some(
-                value_as_ipv4(rhs)
-                    .map(|ip| domain_matches_ip(domain, ip))
-                    .unwrap_or(false),
-            );
-        }
-    }
-    None
-}
-
+/// Convert value into IPv4 integer when representable.
 fn value_as_ipv4(value: &Value) -> Option<u32> {
     match value {
         Value::Ip(ip) => Some(*ip),
-        Value::String(s) => s.parse::<Ipv4Addr>().ok().map(u32::from),
+        Value::String(s) => parse_ipv4_literal(s),
         _ => None,
     }
 }
 
+/// Parse IPv4 literal into integer form.
+fn parse_ipv4_literal(value: &str) -> Option<u32> {
+    value.trim().parse::<Ipv4Addr>().ok().map(u32::from)
+}
+
+/// Heuristic domain-name detector used for typed comparisons.
+fn looks_like_domain_name(value: &str) -> bool {
+    let candidate = value.trim().trim_end_matches('.').to_ascii_lowercase();
+    if candidate.is_empty() {
+        return false;
+    }
+    if parse_ipv4_literal(&candidate).is_some() {
+        return false;
+    }
+    if candidate == "localhost" {
+        return true;
+    }
+    if !candidate.contains('.') {
+        return false;
+    }
+    candidate
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+}
+
+/// Resolve domain and test whether any A record equals target IP.
 fn domain_matches_ip(domain: &str, ip: u32) -> bool {
     resolve_domain_ipv4_cached(domain)
         .into_iter()
         .any(|resolved| resolved == ip)
 }
 
+/// Resolve and cache domain A records with short TTL.
 fn resolve_domain_ipv4_cached(domain: &str) -> Vec<u32> {
     let cache = DOMAIN_IP_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let now = Instant::now();
@@ -478,6 +643,7 @@ fn resolve_domain_ipv4_cached(domain: &str) -> Vec<u32> {
 }
 
 // Compare two expressions after numeric coercion.
+/// Compare two expressions as numbers after coercion.
 fn compare_ord(
     lhs: &RuntimeExpr,
     rhs: &RuntimeExpr,
@@ -494,6 +660,7 @@ fn compare_ord(
 }
 
 // Evaluate expression in value context (bool/number/string/null).
+/// Evaluate an expression in value context.
 fn eval_value(expr: &RuntimeExpr, event: &IngestEvent) -> Value {
     match expr {
         RuntimeExpr::Bool { value } => Value::Bool(*value),
@@ -519,45 +686,157 @@ fn eval_value(expr: &RuntimeExpr, event: &IngestEvent) -> Value {
 }
 
 // Resolve known event field names into runtime values.
+/// Resolve field path aliases from `IngestEvent` into typed `Value`.
 fn lookup_field(path: &str, event: &IngestEvent) -> Value {
-    let key = path.rsplit('.').next().unwrap_or(path);
-    match key {
-        "ts_ns" => Value::Number(event.ts_ns as f64),
-        "weekday" | "day_of_week" => event_local_time(event)
-            .map(|t| Value::String(weekday_name(t.tm_wday).to_string()))
-            .unwrap_or(Value::Null),
-        "hour" => event_local_time(event)
-            .map(|t| Value::Number(t.tm_hour as f64))
-            .unwrap_or(Value::Null),
-        "minute" => event_local_time(event)
-            .map(|t| Value::Number(t.tm_min as f64))
-            .unwrap_or(Value::Null),
-        "is_business_hour" | "business_hours" => event_local_time(event)
-            .map(|t| Value::Bool(is_business_hour(&t)))
-            .unwrap_or(Value::Bool(false)),
-        "pid" => Value::Number(event.pid as f64),
-        "process_id" => Value::Number(event.pid as f64),
-        "uid" => Value::Number(event.uid as f64),
-        "event_type" => Value::Number(event.event_type as f64),
-        "vertex_id" => Value::Number(event.vertex_id as f64),
-        "dst_vertex_id" => Value::Number(event.dst_vertex_id as f64),
-        // `p.name` in OIL maps to kernel `comm` in this userspace event model.
-        "name" | "comm" => Value::String(event_comm(event)),
-        "direction" if event.event_type == 3 => Value::String("outbound".to_string()),
-        // Domain fields are represented as observed destination IPv4 on wire.
-        // Semantic equality handles domain-string resolution when compared.
-        "domain" if event.event_type == 3 && event.net_dst_ip != 0 => Value::Ip(event.net_dst_ip),
-        "dst_ip" | "ip" if event.event_type == 3 && event.net_dst_ip != 0 => {
-            Value::Ip(event.net_dst_ip)
-        }
-        "dst_port" | "port" if event.event_type == 3 => Value::Number(event.net_dst_port as f64),
-        "comm_id" => Value::Number(event.comm_id as f64),
-        "risk_score" | "score" => Value::Number(event.risk_score as f64),
-        _ => Value::Null,
+    if let Some(spec) = lookup_field_spec(path) {
+        let value = (spec.extract)(event);
+        debug_assert!(
+            value_matches_field_type(&value, spec.value_type),
+            "field '{}' produced value {:?} that mismatches declared type {:?}",
+            spec.canonical,
+            value,
+            spec.value_type
+        );
+        value
+    } else {
+        Value::Null
+    }
+}
+
+/// Resolve runtime field metadata by exact path or suffix alias.
+fn lookup_field_spec(path: &str) -> Option<&'static FieldSpec> {
+    let normalized = normalize_field_path(path);
+    FIELD_SPECS
+        .iter()
+        .find(|spec| matches_field_path(spec, &normalized))
+}
+
+/// Normalize incoming field path for case-insensitive matching.
+fn normalize_field_path(path: &str) -> String {
+    path.trim().to_ascii_lowercase()
+}
+
+/// Match path against canonical or alias suffix on segment boundary.
+fn matches_field_path(spec: &FieldSpec, normalized_path: &str) -> bool {
+    if normalized_path == spec.canonical {
+        return true;
+    }
+    spec.aliases
+        .iter()
+        .copied()
+        .any(|alias| alias_matches_path(alias, normalized_path))
+}
+
+/// Alias match that supports arbitrary source aliases (`p.pid`, `n.dest.port`).
+fn alias_matches_path(alias: &str, normalized_path: &str) -> bool {
+    if normalized_path == alias {
+        return true;
+    }
+    if !normalized_path.ends_with(alias) {
+        return false;
+    }
+    let boundary = normalized_path.len().saturating_sub(alias.len());
+    boundary > 0 && normalized_path.as_bytes()[boundary - 1] == b'.'
+}
+
+/// Runtime debug helper that validates extracted value shape.
+fn value_matches_field_type(value: &Value, value_type: FieldType) -> bool {
+    matches!(
+        (value, value_type),
+        (Value::Bool(_), FieldType::Bool)
+            | (Value::Number(_), FieldType::Number)
+            | (Value::String(_), FieldType::String)
+            | (Value::Ip(_), FieldType::Ip)
+            | (Value::Null, _)
+    )
+}
+
+fn field_ts_ns(event: &IngestEvent) -> Value {
+    Value::Number(event.ts_ns as f64)
+}
+
+fn field_time_weekday(event: &IngestEvent) -> Value {
+    event_local_time(event)
+        .map(|t| Value::String(weekday_name(t.tm_wday).to_string()))
+        .unwrap_or(Value::Null)
+}
+
+fn field_time_hour(event: &IngestEvent) -> Value {
+    event_local_time(event)
+        .map(|t| Value::Number(t.tm_hour as f64))
+        .unwrap_or(Value::Null)
+}
+
+fn field_time_minute(event: &IngestEvent) -> Value {
+    event_local_time(event)
+        .map(|t| Value::Number(t.tm_min as f64))
+        .unwrap_or(Value::Null)
+}
+
+fn field_time_business_hour(event: &IngestEvent) -> Value {
+    event_local_time(event)
+        .map(|t| Value::Bool(is_business_hour(&t)))
+        .unwrap_or(Value::Bool(false))
+}
+
+fn field_pid(event: &IngestEvent) -> Value {
+    Value::Number(event.pid as f64)
+}
+
+fn field_uid(event: &IngestEvent) -> Value {
+    Value::Number(event.uid as f64)
+}
+
+fn field_event_type(event: &IngestEvent) -> Value {
+    Value::Number(event.event_type as f64)
+}
+
+fn field_vertex_id(event: &IngestEvent) -> Value {
+    Value::Number(event.vertex_id as f64)
+}
+
+fn field_dst_vertex_id(event: &IngestEvent) -> Value {
+    Value::Number(event.dst_vertex_id as f64)
+}
+
+fn field_process_name(event: &IngestEvent) -> Value {
+    Value::String(event_comm(event))
+}
+
+fn field_comm_id(event: &IngestEvent) -> Value {
+    Value::Number(event.comm_id as f64)
+}
+
+fn field_risk_score(event: &IngestEvent) -> Value {
+    Value::Number(event.risk_score as f64)
+}
+
+fn field_network_direction(event: &IngestEvent) -> Value {
+    if event.event_type == 3 {
+        Value::String("outbound".to_string())
+    } else {
+        Value::Null
+    }
+}
+
+fn field_network_dest_ip(event: &IngestEvent) -> Value {
+    if event.event_type == 3 && event.net_dst_ip != 0 {
+        Value::Ip(event.net_dst_ip)
+    } else {
+        Value::Null
+    }
+}
+
+fn field_network_dest_port(event: &IngestEvent) -> Value {
+    if event.event_type == 3 {
+        Value::Number(event.net_dst_port as f64)
+    } else {
+        Value::Null
     }
 }
 
 // Convert Value into number if possible.
+/// Convert typed value into numeric representation when possible.
 fn to_number(value: Value) -> Option<f64> {
     match value {
         Value::Number(v) => Some(v),
@@ -569,6 +848,7 @@ fn to_number(value: Value) -> Option<f64> {
 }
 
 // Convert Value into string for string operations.
+/// Convert typed value into display/string form for string operators.
 fn to_string(value: Value) -> String {
     match value {
         Value::String(v) => v,
@@ -585,6 +865,7 @@ fn to_string(value: Value) -> String {
     }
 }
 
+/// Decode null-terminated process `comm` bytes into UTF-8 string.
 fn event_comm(event: &IngestEvent) -> String {
     let end = event
         .comm
@@ -594,6 +875,7 @@ fn event_comm(event: &IngestEvent) -> String {
     String::from_utf8_lossy(&event.comm[..end]).to_string()
 }
 
+/// Convert event timestamp into local broken-down time.
 fn event_local_time(event: &IngestEvent) -> Option<libc::tm> {
     let realtime_ns = event_realtime_ns(event.ts_ns)?;
     let secs = realtime_ns / 1_000_000_000;
@@ -612,6 +894,7 @@ fn event_local_time(event: &IngestEvent) -> Option<libc::tm> {
 // Kernel probes emit `bpf_ktime_get_ns()` (monotonic since boot).
 // Convert that to wall-clock nanoseconds using a startup anchor so
 // weekday/hour rules evaluate against real local time.
+/// Convert probe timestamp to realtime nanoseconds.
 fn event_realtime_ns(ts_ns: u64) -> Option<u64> {
     // If we already have epoch-like ns (e.g. tests or future probe change),
     // use it directly.
@@ -632,6 +915,7 @@ fn event_realtime_ns(ts_ns: u64) -> Option<u64> {
     }
 }
 
+/// Capture startup anchor used for monotonic->realtime conversion.
 fn capture_clock_anchor() -> Option<ClockAnchor> {
     Some(ClockAnchor {
         monotonic_ns: read_clock_ns(libc::CLOCK_MONOTONIC)?,
@@ -639,6 +923,7 @@ fn capture_clock_anchor() -> Option<ClockAnchor> {
     })
 }
 
+/// Read nanoseconds from specified Linux clock id.
 fn read_clock_ns(clock_id: libc::clockid_t) -> Option<u64> {
     let mut ts = libc::timespec {
         tv_sec: 0,
@@ -654,6 +939,7 @@ fn read_clock_ns(clock_id: libc::clockid_t) -> Option<u64> {
     u64::try_from(ns).ok()
 }
 
+/// Map libc weekday integer to lowercase weekday name.
 fn weekday_name(wday: libc::c_int) -> &'static str {
     match wday {
         0 => "sunday",
@@ -667,6 +953,7 @@ fn weekday_name(wday: libc::c_int) -> &'static str {
     }
 }
 
+/// True for Monday-Friday between 09:00 and 16:59 (local time).
 fn is_business_hour(tm: &libc::tm) -> bool {
     // Monday-Friday + 09:00..16:59 local time.
     (1..=5).contains(&tm.tm_wday) && (9..17).contains(&tm.tm_hour)
@@ -1188,6 +1475,49 @@ rule "uid_7" {
     }
 
     #[test]
+    fn matches_domain_literal_against_ip_field_without_domain_specific_field_path() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "rules": [
+    {
+      "id": "rule:0:ip_field_vs_domain_literal",
+      "name": "ip_field_vs_domain_literal",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "n.dest.ip" },
+          "rhs": { "op": "str", "value": "localhost" }
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 9004,
+            uid: 0,
+            event_type: 3,
+            vertex_id: 9004,
+            dst_vertex_id: 0,
+            net_dst_ip: u32::from(Ipv4Addr::LOCALHOST),
+            net_dst_port: 443,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.2,
+        };
+
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule_name, "ip_field_vs_domain_literal");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn matches_ip_membership_predicate_against_net_destination_ip() {
         let path = temp_runtime_ir_path();
         let json = r#"{
@@ -1282,6 +1612,69 @@ rule "uid_7" {
     }
 
     #[test]
+    fn resolves_prefixed_field_paths_via_field_specs() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "rules": [
+    {
+      "id": "rule:0:prefixed_paths",
+      "name": "prefixed_paths",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "proc.pid" },
+          "rhs": { "op": "int", "value": 4242 }
+        },
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "wire.dest.port" },
+          "rhs": { "op": "int", "value": 443 }
+        },
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "wire.dest.ip" },
+          "rhs": { "op": "str", "value": "127.0.0.1" }
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+        let mut comm = [0u8; 16];
+        comm[..4].copy_from_slice(b"bash");
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 4242,
+            uid: 0,
+            event_type: 3,
+            vertex_id: 4242,
+            dst_vertex_id: 0,
+            net_dst_ip: u32::from(Ipv4Addr::LOCALHOST),
+            net_dst_port: 443,
+            comm,
+            comm_id: 0,
+            risk_score: 0.2,
+        };
+
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule_name, "prefixed_paths");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn field_spec_boundary_match_avoids_partial_suffix_collisions() {
+        assert!(lookup_field_spec("n.dest.port").is_some());
+        assert!(lookup_field_spec("proc.pid").is_some());
+        assert!(lookup_field_spec("proc.pid_extra").is_none());
+        assert!(lookup_field_spec("n.dest.port_suffix").is_none());
+    }
+
+    #[test]
     fn evaluates_time_context_fields() {
         let path = temp_runtime_ir_path();
         let mut comm = [0u8; 16];
@@ -1345,6 +1738,26 @@ rule "uid_7" {
         let matches = engine.evaluate_matches(&event);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].rule_name, "time_context");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_unsupported_runtime_ir_version_at_load() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 2,
+  "rules": []
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let err = RuntimeIrRuleEngine::from_file(&path)
+            .err()
+            .expect("unsupported version should fail");
+        assert!(
+            err.to_string().contains("unsupported runtime-ir version"),
+            "unexpected error: {err}"
+        );
 
         let _ = fs::remove_file(path);
     }

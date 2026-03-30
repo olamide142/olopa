@@ -11,8 +11,9 @@ mod budget_tracker;
 mod data;
 mod probe_manager;
 mod runtime_ir;
+mod transport;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::Parser;
 use log::{info, warn};
 use serde::Serialize;
@@ -24,8 +25,7 @@ use std::time::{Duration, Instant};
 
 use crate::agent::{
     BatcherLike, BatcherPush, EventStoreLike, GraphLike, IngestEvent, MetricAggregatorLike,
-    OlopaAgent, RelevanceScorerLike, RuleEngineLike, RuleMatch, SchedulerLike, SenderLike,
-    SenderStats,
+    OlopaAgent, RelevanceScorerLike, RuleEngineLike, RuleMatch, SchedulerLike,
 };
 use crate::budget_tracker::{BudgetSnapshot as RuntimeBudgetSnapshot, BudgetTracker};
 use crate::data::batcher_compressor::{
@@ -40,7 +40,9 @@ use crate::data::metric_aggregator::{MetricAggregator, MetricSummary};
 use crate::data::relevance_scorer::RelevanceScorer;
 use crate::probe_manager::{ProbeManager, ProbeSelection};
 use crate::runtime_ir::RuntimeIrRuleEngine;
+use crate::transport::http_sender::HttpIngestSender;
 
+/// CLI enum for selecting which probe groups to attach at startup.
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum ProbeEventArg {
     Fork,
@@ -52,6 +54,7 @@ enum ProbeEventArg {
 }
 
 impl ProbeEventArg {
+    /// Map CLI arg variant to probe manager selection enum.
     fn as_selection(self) -> ProbeSelection {
         match self {
             ProbeEventArg::Fork => ProbeSelection::Fork,
@@ -64,6 +67,7 @@ impl ProbeEventArg {
     }
 }
 
+/// Command line options for userspace agent runtime.
 #[derive(Debug, Parser)]
 #[command(name = "olopa-agent", about = "Olopa kernel security agent")]
 struct Opt {
@@ -91,6 +95,10 @@ struct Opt {
     graph_dump_interval_ms: u64,
 }
 
+/// Agent process entrypoint.
+///
+/// Initializes runtime dependencies, attaches selected probes, and
+/// delegates control to the long-running orchestrator loop.
 #[tokio::main]
 async fn main() -> Result<()> {
     let opt = Opt::parse();
@@ -125,10 +133,10 @@ async fn main() -> Result<()> {
         opt.graph_dump_path, opt.graph_dump_interval_ms
     );
     let mut metric_aggregator = RealMetricAggregator::default();
-    let mut rule_engine = ActiveRuleEngine::from_env();
+    let mut rule_engine = ActiveRuleEngine::from_env()?;
     let mut scheduler = RealScheduler::default();
     let mut batcher = RealBatcher::default();
-    let mut sender = SimpleSender::default();
+    let mut sender = HttpIngestSender::from_env();
     let mut budget_tracker = BudgetTracker::new();
 
     // 3) Main runtime loops live inside agent.run(...).
@@ -150,6 +158,7 @@ async fn main() -> Result<()> {
 // --- Concrete adapters for orchestrator traits ---
 
 #[derive(Default)]
+/// Adapter around `RelevanceScorer` that tracks synthetic event ids.
 struct RealRelevanceScorer {
     inner: RelevanceScorer,
     // Monotonic synthetic event id passed into scorer state machine.
@@ -163,6 +172,7 @@ impl Default for RelevanceScorer {
 }
 
 impl RelevanceScorerLike for RealRelevanceScorer {
+    /// Score one event and update its `risk_score` with computed relevance.
     fn score(&mut self, event: &mut IngestEvent) {
         // Current bridge passes core numeric fields only; richer context wiring
         // can be layered later without changing orchestrator contract.
@@ -180,6 +190,7 @@ impl RelevanceScorerLike for RealRelevanceScorer {
     }
 }
 
+/// Adapter around persistent hot/cold event storage.
 struct RealEventStore {
     inner: EventStore,
 }
@@ -193,6 +204,7 @@ impl Default for RealEventStore {
 }
 
 impl EventStoreLike for RealEventStore {
+    /// Persist one event and return the assigned event id.
     fn push(&mut self, event: IngestEvent) -> Option<usize> {
         // Split event into hot/cold representations expected by EventStore.
         let hot = HotEvent {
@@ -219,6 +231,7 @@ impl EventStoreLike for RealEventStore {
         Some(id)
     }
 
+    /// Serialize one stored event into transport-ready bytes.
     fn serialize_event(&self, event_id: usize) -> Option<Vec<u8>> {
         // Bootstrap wire format: plain text line; replace with protobuf later.
         let hot = self.inner.hot_events().get(event_id)?;
@@ -232,15 +245,18 @@ impl EventStoreLike for RealEventStore {
         )
     }
 
+    /// Return event ids that have not yet been scheduled.
     fn unscheduled_event_ids(&self, from: usize) -> Vec<usize> {
         (from..self.inner.hot_events().len()).collect()
     }
 
+    /// Return last valid event id.
     fn last_event_id(&self) -> usize {
         self.inner.hot_events().len().saturating_sub(1)
     }
 }
 
+/// Adapter around RCU CSR graph plus optional periodic graph dump writer.
 struct RealGraph {
     inner: Arc<CsrGraph>,
     graph_dumper: Option<GraphDumpWriter>,
@@ -262,6 +278,7 @@ impl Default for RealGraph {
 }
 
 impl RealGraph {
+    /// Construct graph adapter with JSON dump support enabled.
     fn with_dump(path: PathBuf, min_interval: Duration) -> Self {
         Self {
             inner: Arc::new(CsrGraph::new(65_536, 262_144)),
@@ -272,6 +289,7 @@ impl RealGraph {
         }
     }
 
+    /// Cache an event for graph dump rendering and event lineage visualization.
     fn record_event(&mut self, event: &IngestEvent) {
         let graph_source_id = normalize_graph_vertex(event.vertex_id);
         let graph_target_id = normalize_graph_vertex(event.dst_vertex_id);
@@ -305,6 +323,7 @@ impl RealGraph {
 }
 
 impl GraphLike for RealGraph {
+    /// Insert graph edge for one event and trigger optional dump write.
     fn write_edge(&mut self, event: &IngestEvent) {
         // Map lightweight event discriminator to graph edge kind.
         let kind = match event.event_type {
@@ -336,6 +355,7 @@ impl GraphLike for RealGraph {
         }
     }
 
+    /// Merge queued graph deltas into new snapshot and optionally dump.
     fn merge_deltas(&mut self) {
         self.inner.merge_deltas();
         if let Some(dumper) = self.graph_dumper.as_mut() {
@@ -346,6 +366,7 @@ impl GraphLike for RealGraph {
     }
 }
 
+/// Adapter around userspace metric aggregator.
 struct RealMetricAggregator {
     inner: MetricAggregator,
 }
@@ -359,11 +380,13 @@ impl Default for RealMetricAggregator {
 }
 
 impl MetricAggregatorLike for RealMetricAggregator {
+    /// Record one event into metric aggregates.
     fn record(&mut self, event: &IngestEvent) {
         // Risk metric keyed by comm_id to preserve low cardinality.
         self.inner.record_risk(event.comm_id, event.risk_score);
     }
 
+    /// Flush metric summaries and serialize each summary into payload bytes.
     fn flush(&mut self) -> Vec<Vec<u8>> {
         self.inner
             .flush()
@@ -373,6 +396,7 @@ impl MetricAggregatorLike for RealMetricAggregator {
     }
 }
 
+/// Adapter around MDKP scheduler.
 struct RealScheduler {
     inner: Scheduler,
 }
@@ -386,6 +410,7 @@ impl Default for RealScheduler {
 }
 
 impl SchedulerLike for RealScheduler {
+    /// Apply latest budget snapshot to scheduler.
     fn update_budget(&mut self, snapshot: RuntimeBudgetSnapshot) {
         // Convert runtime tracker snapshot into scheduler-local budget type.
         let converted = SchedulerBudgetSnapshot {
@@ -396,12 +421,14 @@ impl SchedulerLike for RealScheduler {
         self.inner.update_budget(converted);
     }
 
+    /// Enqueue one event id as scheduler candidate.
     fn enqueue(&mut self, event_id: usize) {
         // Placeholder relevance/cost mapping until full scorer->scheduler bridge is wired.
         let item = TelemetryItem::new(event_id, 0.5, [1.0; N_RESOURCES]);
         self.inner.enqueue(item);
     }
 
+    /// Solve scheduling window and return selected event ids.
     fn solve(&mut self) -> Vec<usize> {
         let selected = self.inner.solve(SolverTier::Greedy).event_ids;
         info!("scheduler.solve selected={} events", selected.len());
@@ -411,6 +438,7 @@ impl SchedulerLike for RealScheduler {
 
 // --- Bootstrap components for rule engine, batching, and transport ---
 
+/// Extremely small fallback matcher used only when explicitly enabled.
 struct SimpleRuleEngine;
 
 impl RuleEngineLike for SimpleRuleEngine {
@@ -427,6 +455,7 @@ impl RuleEngineLike for SimpleRuleEngine {
     }
 }
 
+/// Active rule engine mode for the running process.
 enum ActiveRuleEngine {
     // Compiler-emitted runtime IR evaluator.
     RuntimeIr(RuntimeIrRuleEngine),
@@ -435,11 +464,13 @@ enum ActiveRuleEngine {
 }
 
 impl ActiveRuleEngine {
-    fn from_env() -> Self {
+    /// Load runtime-ir rule engine from disk with optional fallback behavior.
+    fn from_env() -> Result<Self> {
         const DEFAULT_RUNTIME_IR_PATH: &str = "/etc/olopa/runtime-ir.json";
         // Explicit env var overrides default deployment path.
         let path = std::env::var("OLOPA_RUNTIME_IR")
             .unwrap_or_else(|_| DEFAULT_RUNTIME_IR_PATH.to_string());
+        let allow_simple_fallback = env_flag("OLOPA_ALLOW_SIMPLE_RULE_FALLBACK");
 
         match RuntimeIrRuleEngine::from_file(std::path::Path::new(&path)) {
             Ok(engine) => {
@@ -448,14 +479,35 @@ impl ActiveRuleEngine {
                     path,
                     engine.rule_count()
                 );
-                Self::RuntimeIr(engine)
+                Ok(Self::RuntimeIr(engine))
             }
             Err(e) => {
-                warn!("failed to load runtime-ir from {}: {}", path, e);
-                info!("rule engine using SimpleRuleEngine fallback");
-                Self::Simple(SimpleRuleEngine)
+                if allow_simple_fallback {
+                    warn!("failed to load runtime-ir from {}: {}", path, e);
+                    warn!(
+                        "rule engine using SimpleRuleEngine fallback (OLOPA_ALLOW_SIMPLE_RULE_FALLBACK=1)"
+                    );
+                    Ok(Self::Simple(SimpleRuleEngine))
+                } else {
+                    bail!(
+                        "failed to load runtime-ir from {} (set OLOPA_ALLOW_SIMPLE_RULE_FALLBACK=1 to force simple fallback): {}",
+                        path,
+                        e
+                    );
+                }
             }
         }
+    }
+}
+
+/// Read permissive boolean environment flag values (`1/true/yes/on`).
+fn env_flag(key: &str) -> bool {
+    match std::env::var(key) {
+        Ok(v) => {
+            let value = v.trim().to_ascii_lowercase();
+            matches!(value.as_str(), "1" | "true" | "yes" | "on")
+        }
+        Err(_) => false,
     }
 }
 
@@ -468,6 +520,7 @@ impl RuleEngineLike for ActiveRuleEngine {
     }
 }
 
+/// Adapter around compression batcher.
 struct RealBatcher {
     inner: CompressorBatcher,
 }
@@ -485,6 +538,7 @@ impl Default for RealBatcher {
 }
 
 impl BatcherLike for RealBatcher {
+    /// Push one event payload into compression batcher.
     fn push(&mut self, serialized_event: &[u8], _budget: &RuntimeBudgetSnapshot) -> BatcherPush {
         let budget = SchedulerBudgetSnapshot {
             total: _budget.total,
@@ -500,10 +554,12 @@ impl BatcherLike for RealBatcher {
         }
     }
 
+    /// Force flush currently buffered payloads.
     fn flush(&mut self) -> Option<Vec<u8>> {
         self.inner.flush().map(|batch| batch.payload.to_vec())
     }
 
+    /// Flush only if time-based trigger has elapsed.
     fn flush_if_time_triggered(&mut self) -> Option<Vec<u8>> {
         self.inner
             .flush_if_ready()
@@ -511,45 +567,7 @@ impl BatcherLike for RealBatcher {
     }
 }
 
-#[derive(Default)]
-struct SimpleSender {
-    // Count of payloads sent directly (non-spooled).
-    sent: u64,
-    // In-memory spool used while sender is in spooling mode.
-    spooled: Vec<Vec<u8>>,
-    // Toggle for degraded transport mode.
-    spooling: bool,
-}
-
-impl SenderLike for SimpleSender {
-    fn send_or_spool(&mut self, payload: Vec<u8>) -> Result<()> {
-        if self.spooling {
-            self.spooled.push(payload);
-        } else {
-            self.sent += 1;
-            info!("sent payload #{}", self.sent);
-        }
-        Ok(())
-    }
-
-    fn stats(&self) -> SenderStats {
-        let pending: u64 = self.spooled.iter().map(|b| b.len() as u64).sum();
-        SenderStats {
-            spool_pending_bytes: pending,
-            spooling: self.spooling,
-        }
-    }
-
-    fn drain_spool(&mut self, deadline: Instant) -> Result<usize> {
-        let mut drained = 0usize;
-        while !self.spooled.is_empty() && Instant::now() < deadline {
-            self.spooled.remove(0);
-            drained += 1;
-        }
-        Ok(drained)
-    }
-}
-
+/// Encode metric summary in current text wire format.
 fn serialize_metric_summary(s: MetricSummary) -> Vec<u8> {
     // Bootstrap text wire format for metric snapshots.
     format!(
@@ -559,6 +577,7 @@ fn serialize_metric_summary(s: MetricSummary) -> Vec<u8> {
     .into_bytes()
 }
 
+/// JSON node model for graph dumps consumed by UI/debug tools.
 #[derive(Serialize)]
 struct GraphDumpNode {
     id: u32,
@@ -570,6 +589,7 @@ struct GraphDumpNode {
     out_degree: u32,
 }
 
+/// JSON edge model for graph dumps.
 #[derive(Serialize)]
 struct GraphDumpEdge {
     source: u32,
@@ -585,6 +605,7 @@ struct GraphDumpEdge {
     parent_span_id: Option<u64>,
 }
 
+/// Top-level graph dump payload persisted by userspace runtime.
 #[derive(Serialize)]
 struct GraphDumpPayload {
     generated_at_unix_ns: u64,
@@ -600,6 +621,7 @@ struct GraphDumpPayload {
     events: Vec<GraphDumpEvent>,
 }
 
+/// Recent event record embedded alongside graph topology in dumps.
 #[derive(Serialize, Clone)]
 struct GraphDumpEvent {
     event_id: u64,
@@ -621,6 +643,7 @@ struct GraphDumpEvent {
     risk_score: f32,
 }
 
+/// File writer responsible for periodic graph snapshot dumps.
 struct GraphDumpWriter {
     path: PathBuf,
     min_interval: Duration,
@@ -628,6 +651,7 @@ struct GraphDumpWriter {
 }
 
 impl GraphDumpWriter {
+    /// Create dump writer bound to output file and rate limit interval.
     fn new(path: PathBuf, min_interval: Duration) -> Self {
         Self {
             path,
@@ -636,6 +660,7 @@ impl GraphDumpWriter {
         }
     }
 
+    /// Persist graph dump only when minimum interval has elapsed.
     fn maybe_dump(
         &mut self,
         graph: &CsrGraph,
@@ -664,6 +689,7 @@ impl GraphDumpWriter {
     }
 }
 
+/// Build a dump payload by combining graph snapshot + recent events.
 fn build_graph_dump_payload(
     graph: &CsrGraph,
     recent_events: &VecDeque<GraphDumpEvent>,
@@ -768,6 +794,7 @@ fn build_graph_dump_payload(
     }
 }
 
+/// Current wall-clock timestamp in nanoseconds since UNIX epoch.
 fn now_unix_ns() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -777,6 +804,7 @@ fn now_unix_ns() -> u64 {
     }
 }
 
+/// Render node label as human-readable name.
 fn node_label_name(label: NodeLabel) -> &'static str {
     match label {
         NodeLabel::Process => "Process",
@@ -792,6 +820,7 @@ fn node_label_name(label: NodeLabel) -> &'static str {
     }
 }
 
+/// Render edge kind as human-readable name.
 fn edge_kind_name(kind: EdgeKind) -> &'static str {
     match kind {
         EdgeKind::Spawned => "Spawned",
@@ -809,6 +838,7 @@ fn edge_kind_name(kind: EdgeKind) -> &'static str {
     }
 }
 
+/// Render numeric event type to stable string label.
 fn event_type_name(event_type: u8) -> &'static str {
     match event_type {
         1 => "exec",
@@ -818,14 +848,18 @@ fn event_type_name(event_type: u8) -> &'static str {
     }
 }
 
+/// Convert 16-byte null-terminated comm buffer into UTF-8 string.
 fn event_comm_to_string(comm: &[u8; 16]) -> String {
     let end = comm.iter().position(|&b| b == 0).unwrap_or(comm.len());
     std::str::from_utf8(&comm[..end]).unwrap_or("").to_string()
 }
 
+/// Maximum number of recent events retained in dump payload.
 const MAX_DUMP_EVENTS: usize = 10_000;
+/// Fixed graph id space used by current bootstrap graph allocator.
 const GRAPH_NODE_SPACE: u32 = 65_536;
 
+/// Map arbitrary vertex ids into current fixed graph id space.
 fn normalize_graph_vertex(vertex_id: u32) -> u32 {
     if GRAPH_NODE_SPACE == 0 {
         return 0;
@@ -833,6 +867,7 @@ fn normalize_graph_vertex(vertex_id: u32) -> u32 {
     vertex_id % GRAPH_NODE_SPACE
 }
 
+/// Format attached probe selections for startup logs.
 fn format_probe_selections(selections: &[ProbeSelection]) -> String {
     selections
         .iter()
@@ -841,6 +876,7 @@ fn format_probe_selections(selections: &[ProbeSelection]) -> String {
         .join(",")
 }
 
+/// Render one probe selection as CLI-style token.
 fn probe_selection_name(selection: ProbeSelection) -> &'static str {
     match selection {
         ProbeSelection::Fork => "fork",
