@@ -30,10 +30,10 @@
 //   unbounded growth from short-lived processes.
 // ============================================================
 
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
 use crossbeam_utils::CachePadded;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 // ── Constants ────────────────────────────────────────────────
 // Default dead-band: suppress events where risk changed < 5%
@@ -47,13 +47,11 @@ const RECENCY_HALF_LIFE_MS: f32 = 5_000.0;
 
 // Component weights — must sum to 1.0
 const W_SEVERITY: f32 = 0.30;
-const W_DELTA:    f32 = 0.40;
-const W_RECENCY:  f32 = 0.20;
-const W_CONTEXT:  f32 = 0.10;
+const W_DELTA: f32 = 0.40;
+const W_RECENCY: f32 = 0.20;
+const W_CONTEXT: f32 = 0.10;
 
-const _: () = assert!(
-    ((W_SEVERITY + W_DELTA + W_RECENCY + W_CONTEXT) - 1.0).abs() < 1e-6
-);
+const _: () = assert!(((W_SEVERITY + W_DELTA + W_RECENCY + W_CONTEXT) - 1.0).abs() < 1e-6);
 
 // ── Per-process state ────────────────────────────────────────
 // One entry per vertex_id seen since last eviction pass.
@@ -61,9 +59,9 @@ const _: () = assert!(
 // owned by a single ingest worker thread.
 #[derive(Debug, Clone)]
 struct ProcessState {
-    last_risk:    f32,     // risk_score at last observed event
-    last_seen:    Instant, // wall time of last event for this process
-    event_count:  u32,     // total events seen (used for novelty scoring)
+    last_risk: f32,     // risk_score at last observed event
+    last_seen: Instant, // wall time of last event for this process
+    event_count: u32,   // total events seen (used for novelty scoring)
 }
 
 // ── ScoredEvent — output of the scorer ───────────────────────
@@ -71,10 +69,10 @@ struct ProcessState {
 // so the caller can construct a TelemetryItem directly.
 #[derive(Debug, Clone)]
 pub struct ScoredEvent {
-    pub event_id:   usize,  // index into EventStore
-    pub vertex_id:  u32,    // graph node ID
-    pub relevance:  f32,    // 0.0–1.0 — MDKP objective value
-    pub risk_delta: f32,    // signed change from last observation
+    pub event_id: usize,             // index into EventStore
+    pub vertex_id: u32,              // graph node ID
+    pub relevance: f32,              // 0.0–1.0 — MDKP objective value
+    pub risk_delta: f32,             // signed change from last observation
     pub components: ScoreComponents, // breakdown for observability
 }
 
@@ -82,17 +80,17 @@ pub struct ScoredEvent {
 #[derive(Debug, Clone, Copy)]
 pub struct ScoreComponents {
     pub severity: f32,
-    pub delta:    f32,
-    pub recency:  f32,
-    pub context:  f32,
+    pub delta: f32,
+    pub recency: f32,
+    pub context: f32,
 }
 
 impl ScoreComponents {
     pub fn total(&self) -> f32 {
         self.severity * W_SEVERITY
-        + self.delta   * W_DELTA
-        + self.recency * W_RECENCY
-        + self.context * W_CONTEXT
+            + self.delta * W_DELTA
+            + self.recency * W_RECENCY
+            + self.context * W_CONTEXT
     }
 }
 
@@ -107,8 +105,8 @@ pub struct RelevanceScorer {
     dead_band_epsilon: f32,
 
     // Metrics
-    pub events_in:       CachePadded<AtomicU64>,
-    pub events_passed:   CachePadded<AtomicU64>,
+    pub events_in: CachePadded<AtomicU64>,
+    pub events_passed: CachePadded<AtomicU64>,
     pub events_filtered: CachePadded<AtomicU64>,
     pub state_evictions: CachePadded<AtomicU64>,
 }
@@ -116,12 +114,12 @@ pub struct RelevanceScorer {
 impl RelevanceScorer {
     pub fn new(dead_band_epsilon: f32) -> Self {
         Self {
-            state:             HashMap::with_capacity(4096),
+            state: HashMap::with_capacity(4096),
             dead_band_epsilon,
-            events_in:         CachePadded::new(AtomicU64::new(0)),
-            events_passed:     CachePadded::new(AtomicU64::new(0)),
-            events_filtered:   CachePadded::new(AtomicU64::new(0)),
-            state_evictions:   CachePadded::new(AtomicU64::new(0)),
+            events_in: CachePadded::new(AtomicU64::new(0)),
+            events_passed: CachePadded::new(AtomicU64::new(0)),
+            events_filtered: CachePadded::new(AtomicU64::new(0)),
+            state_evictions: CachePadded::new(AtomicU64::new(0)),
         }
     }
 
@@ -142,15 +140,15 @@ impl RelevanceScorer {
     #[inline]
     pub fn score(
         &mut self,
-        event_id:    usize,
-        vertex_id:   u32,
-        risk_score:  f32,
-        ts_ns:       u64,
+        event_id: usize,
+        vertex_id: u32,
+        risk_score: f32,
+        ts_ns: u64,
         chain_depth: u8,
     ) -> Option<ScoredEvent> {
         self.events_in.fetch_add(1, Ordering::Relaxed);
 
-        let now       = Instant::now();
+        let now = Instant::now();
         let risk_score = risk_score.clamp(0.0, 1.0);
 
         // ── Look up or create per-process state ──────────────
@@ -158,8 +156,8 @@ impl RelevanceScorer {
             // First time we've seen this process.
             // Treat as maximum delta — new process is always interesting.
             ProcessState {
-                last_risk:   0.0,
-                last_seen:   now,
+                last_risk: 0.0,
+                last_seen: now,
                 event_count: 0,
             }
         });
@@ -213,12 +211,17 @@ impl RelevanceScorer {
         // Each hop adds (1/8) of the context weight.
         let context = (chain_depth as f32 / 8.0).min(1.0);
 
-        let components = ScoreComponents { severity, delta, recency, context };
-        let relevance  = components.total().clamp(0.0, 1.0);
+        let components = ScoreComponents {
+            severity,
+            delta,
+            recency,
+            context,
+        };
+        let relevance = components.total().clamp(0.0, 1.0);
 
         // ── Update state ──────────────────────────────────────
-        entry.last_risk   = risk_score;
-        entry.last_seen   = now;
+        entry.last_risk = risk_score;
+        entry.last_seen = now;
         entry.event_count += 1;
 
         self.events_passed.fetch_add(1, Ordering::Relaxed);
@@ -236,20 +239,14 @@ impl RelevanceScorer {
     // Used by the ingest loop so it doesn't have to unpack fields.
     pub fn score_hot(
         &mut self,
-        event_id:    usize,
-        hot:         &crate::data::event_store::HotEvent,
-        vertex_id:   u32,
+        event_id: usize,
+        hot: &crate::data::event_store::HotEvent,
+        vertex_id: u32,
         chain_depth: u8,
     ) -> Option<ScoredEvent> {
         // HotEvent carries ts_ns and risk_score directly.
         // ts_ns is already PTP-synced nanoseconds from the kernel.
-        self.score(
-            event_id,
-            vertex_id,
-            hot.risk_score,
-            hot.ts_ns,
-            chain_depth,
-        )
+        self.score(event_id, vertex_id, hot.risk_score, hot.ts_ns, chain_depth)
     }
 
     // ── Evict stale per-process state ─────────────────────────
@@ -259,13 +256,13 @@ impl RelevanceScorer {
     // commands) would otherwise accumulate indefinitely.
     pub fn evict_stale(&mut self) {
         let before = self.state.len();
-        let now    = Instant::now();
-        self.state.retain(|_, s| {
-            now.duration_since(s.last_seen) < STALE_THRESHOLD
-        });
+        let now = Instant::now();
+        self.state
+            .retain(|_, s| now.duration_since(s.last_seen) < STALE_THRESHOLD);
         let evicted = before - self.state.len();
         if evicted > 0 {
-            self.state_evictions.fetch_add(evicted as u64, Ordering::Relaxed);
+            self.state_evictions
+                .fetch_add(evicted as u64, Ordering::Relaxed);
         }
     }
 
@@ -283,9 +280,11 @@ impl RelevanceScorer {
     // If below 0.70: epsilon may be too low, sending too much.
     // If above 0.95: epsilon may be too high, missing signal.
     pub fn filter_rate(&self) -> f32 {
-        let total    = self.events_in.load(Ordering::Relaxed) as f32;
+        let total = self.events_in.load(Ordering::Relaxed) as f32;
         let filtered = self.events_filtered.load(Ordering::Relaxed) as f32;
-        if total < 1.0 { return 0.0; }
+        if total < 1.0 {
+            return 0.0;
+        }
         filtered / total
     }
 
@@ -294,16 +293,20 @@ impl RelevanceScorer {
     }
 
     pub fn stats(&self) -> ScorerStats {
-        let inn      = self.events_in.load(Ordering::Relaxed);
-        let passed   = self.events_passed.load(Ordering::Relaxed);
+        let inn = self.events_in.load(Ordering::Relaxed);
+        let passed = self.events_passed.load(Ordering::Relaxed);
         let filtered = self.events_filtered.load(Ordering::Relaxed);
         ScorerStats {
-            events_in:         inn,
-            events_passed:     passed,
-            events_filtered:   filtered,
-            filter_rate:       if inn == 0 { 0.0 } else { filtered as f32 / inn as f32 },
+            events_in: inn,
+            events_passed: passed,
+            events_filtered: filtered,
+            filter_rate: if inn == 0 {
+                0.0
+            } else {
+                filtered as f32 / inn as f32
+            },
             tracked_processes: self.state.len(),
-            state_evictions:   self.state_evictions.load(Ordering::Relaxed),
+            state_evictions: self.state_evictions.load(Ordering::Relaxed),
             dead_band_epsilon: self.dead_band_epsilon,
         }
     }
@@ -311,12 +314,12 @@ impl RelevanceScorer {
 
 #[derive(Debug)]
 pub struct ScorerStats {
-    pub events_in:         u64,
-    pub events_passed:     u64,
-    pub events_filtered:   u64,
-    pub filter_rate:       f32,
+    pub events_in: u64,
+    pub events_passed: u64,
+    pub events_filtered: u64,
+    pub filter_rate: f32,
     pub tracked_processes: usize,
-    pub state_evictions:   u64,
+    pub state_evictions: u64,
     pub dead_band_epsilon: f32,
 }
 
@@ -368,11 +371,13 @@ mod tests {
         // First event — chain_depth=3
         let r = s.score(0, 1, 0.80, 0, 3).unwrap();
         let computed = r.components.severity * W_SEVERITY
-            + r.components.delta    * W_DELTA
-            + r.components.recency  * W_RECENCY
-            + r.components.context  * W_CONTEXT;
-        assert!((computed - r.relevance).abs() < 1e-5,
-            "components.total() should equal relevance");
+            + r.components.delta * W_DELTA
+            + r.components.recency * W_RECENCY
+            + r.components.context * W_CONTEXT;
+        assert!(
+            (computed - r.relevance).abs() < 1e-5,
+            "components.total() should equal relevance"
+        );
     }
 
     #[test]
@@ -385,8 +390,11 @@ mod tests {
         let r = s.score(0, 1, 0.80, 0, 0).unwrap();
         // At age=0 the process is new so recency is computed from
         // now - entry.last_seen which is ~0ms
-        assert!(r.components.recency > 0.95,
-            "fresh event should have near-1.0 recency, got {}", r.components.recency);
+        assert!(
+            r.components.recency > 0.95,
+            "fresh event should have near-1.0 recency, got {}",
+            r.components.recency
+        );
     }
 
     #[test]
@@ -395,12 +403,16 @@ mod tests {
         let mut s2 = scorer();
 
         let standalone = s1.score(0, 1, 0.5, 0, 0).unwrap();
-        let in_chain   = s2.score(0, 1, 0.5, 0, 8).unwrap();
+        let in_chain = s2.score(0, 1, 0.5, 0, 8).unwrap();
 
-        assert!(in_chain.components.context > standalone.components.context,
-            "chain events should have higher context score");
-        assert!((in_chain.components.context - 1.0).abs() < 1e-5,
-            "depth=8 should saturate context at 1.0");
+        assert!(
+            in_chain.components.context > standalone.components.context,
+            "chain events should have higher context score"
+        );
+        assert!(
+            (in_chain.components.context - 1.0).abs() < 1e-5,
+            "depth=8 should saturate context at 1.0"
+        );
     }
 
     #[test]
@@ -408,8 +420,10 @@ mod tests {
         let mut s = scorer();
         // New process with low risk_score — delta should still be 1.0
         let r = s.score(0, 42, 0.05, 0, 0).unwrap();
-        assert!((r.components.delta - 1.0).abs() < 1e-5,
-            "new process should get delta=1.0 regardless of risk");
+        assert!(
+            (r.components.delta - 1.0).abs() < 1e-5,
+            "new process should get delta=1.0 regardless of risk"
+        );
     }
 
     #[test]
@@ -456,10 +470,10 @@ mod tests {
     fn filter_rate_tracks_correctly() {
         let mut s = scorer();
 
-        s.score(0, 1, 0.5, 0, 0);       // passes (new)
-        s.score(1, 1, 0.51, 1_000, 0);  // filtered (delta=0.01 < 0.05)
-        s.score(2, 1, 0.52, 2_000, 0);  // filtered
-        s.score(3, 1, 0.90, 3_000, 0);  // passes (delta=0.38 > 0.05)
+        s.score(0, 1, 0.5, 0, 0); // passes (new)
+        s.score(1, 1, 0.51, 1_000, 0); // filtered (delta=0.01 < 0.05)
+        s.score(2, 1, 0.52, 2_000, 0); // filtered
+        s.score(3, 1, 0.90, 3_000, 0); // passes (delta=0.38 > 0.05)
 
         // 2 out of 4 filtered = 0.5 filter rate
         assert!((s.filter_rate() - 0.5).abs() < 0.01);

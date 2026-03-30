@@ -114,10 +114,7 @@ impl ProbeManager {
 
     /// Return records for a given probe kind.
     pub fn attached_for(&self, kind: ProbeKind) -> &[String] {
-        self.attached
-            .get(&kind)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        self.attached.get(&kind).map(Vec::as_slice).unwrap_or(&[])
     }
 
     /// Internal attachment recorder.
@@ -129,12 +126,7 @@ impl ProbeManager {
     }
 
     fn attach_fork_tracepoints(&mut self, bpf: &mut Ebpf) -> Result<()> {
-        self.attach_tracepoint(
-            bpf,
-            "on_sched_process_fork",
-            "sched",
-            "sched_process_fork",
-        )?;
+        self.attach_tracepoint(bpf, "on_sched_process_fork", "sched", "sched_process_fork")?;
         self.record(ProbeKind::ForkTracepoint, "sched:sched_process_fork");
         Ok(())
     }
@@ -156,12 +148,7 @@ impl ProbeManager {
     fn attach_file_tracepoints(&mut self, bpf: &mut Ebpf) -> Result<()> {
         self.attach_tracepoint(bpf, "on_openat", "syscalls", "sys_enter_openat")?;
         self.record(ProbeKind::FileTracepoint, "syscalls:sys_enter_openat");
-        if self.attach_tracepoint_if_present(
-            bpf,
-            "on_openat2",
-            "syscalls",
-            "sys_enter_openat2",
-        )? {
+        if self.attach_tracepoint_if_present(bpf, "on_openat2", "syscalls", "sys_enter_openat2")? {
             self.record(ProbeKind::FileTracepoint, "syscalls:sys_enter_openat2");
         }
         Ok(())
@@ -187,12 +174,12 @@ impl ProbeManager {
         match prog.attach(iface, XdpFlags::default()) {
             Ok(_) => info!("XDP attached on {} (native mode)", iface),
             Err(e) => {
-                warn!("XDP native mode failed on {}: {} — trying SKB_MODE", iface, e);
+                warn!(
+                    "XDP native mode failed on {}: {} — trying SKB_MODE",
+                    iface, e
+                );
                 prog.attach(iface, XdpFlags::SKB_MODE).with_context(|| {
-                    format!(
-                        "XDP attach failed on {} in both native and SKB mode",
-                        iface
-                    )
+                    format!("XDP attach failed on {} in both native and SKB mode", iface)
                 })?;
                 info!("XDP attached on {} (SKB_MODE fallback)", iface);
             }

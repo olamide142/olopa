@@ -19,8 +19,8 @@
 
 use aya_ebpf::{
     helpers::{
-        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid,
-        bpf_ktime_get_ns, bpf_probe_read_user, bpf_probe_read_user_str_bytes,
+        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_ns,
+        bpf_probe_read_user, bpf_probe_read_user_str_bytes,
     },
     macros::tracepoint,
     programs::TracePointContext,
@@ -54,9 +54,9 @@ unsafe fn try_openat(ctx: &TracePointContext, openat2: bool) -> u32 {
     (*event).ts_ns = bpf_ktime_get_ns();
 
     let pid_tgid = bpf_get_current_pid_tgid();
-    (*event).pid  = (pid_tgid >> 32) as u32;
+    (*event).pid = (pid_tgid >> 32) as u32;
 
-    let uid_gid  = bpf_get_current_uid_gid();
+    let uid_gid = bpf_get_current_uid_gid();
     (*event).uid = uid_gid as u32;
 
     (*event).flags = if openat2 {
@@ -104,10 +104,7 @@ unsafe fn try_openat(ctx: &TracePointContext, openat2: bool) -> u32 {
         }
     };
 
-    let _ = bpf_probe_read_user_str_bytes(
-        filename_ptr as *const u8,
-        &mut (*event).filename,
-    );
+    let _ = bpf_probe_read_user_str_bytes(filename_ptr as *const u8, &mut (*event).filename);
 
     entry.submit(0);
     0

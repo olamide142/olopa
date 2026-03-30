@@ -9,8 +9,8 @@
 
 use aya_ebpf::{
     helpers::{
-        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid,
-        bpf_ktime_get_ns, bpf_probe_read_user_str_bytes,
+        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_ns,
+        bpf_probe_read_user_str_bytes,
     },
     macros::{map, tracepoint},
     maps::HashMap,
@@ -77,15 +77,15 @@ unsafe fn try_execve(ctx: &TracePointContext, filename_ptr_offset: usize) -> u32
 
     (*event).ts_ns = bpf_ktime_get_ns();
 
-    let pid_tgid  = bpf_get_current_pid_tgid();
+    let pid_tgid = bpf_get_current_pid_tgid();
     let pid = (pid_tgid >> 32) as u32;
-    (*event).pid  = pid;
+    (*event).pid = pid;
     (*event).ppid = match PID_LINEAGE.get(&pid) {
         Some(ppid) => *ppid,
         None => 0,
     };
 
-    let uid_gid  = bpf_get_current_uid_gid();
+    let uid_gid = bpf_get_current_uid_gid();
     (*event).uid = uid_gid as u32;
     (*event).gid = (uid_gid >> 32) as u32;
 
@@ -109,10 +109,7 @@ unsafe fn try_execve(ctx: &TracePointContext, filename_ptr_offset: usize) -> u32
         }
     };
 
-    let _ = bpf_probe_read_user_str_bytes(
-        filename_ptr as *const u8,
-        &mut (*event).filename,
-    );
+    let _ = bpf_probe_read_user_str_bytes(filename_ptr as *const u8, &mut (*event).filename);
 
     (*event).argv_hash = 0;
 

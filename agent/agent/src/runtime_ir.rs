@@ -3,13 +3,21 @@
 //! This module loads the JSON artifact emitted by `oilc --emit-runtime-ir`
 //! and evaluates each rule predicate against `IngestEvent`.
 
+use std::collections::HashMap;
 use std::fs;
+use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use crate::agent::{IngestEvent, RuleMatch};
+
+const DNS_CACHE_TTL: Duration = Duration::from_secs(60);
+type DnsCache = HashMap<String, (Instant, Vec<u32>)>;
+static DOMAIN_IP_CACHE: OnceLock<Mutex<DnsCache>> = OnceLock::new();
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuntimeProgram {
@@ -27,6 +35,28 @@ pub struct RuntimeRule {
     pub name: String,
     /// All predicates must evaluate to true for a match.
     pub predicates: Vec<RuntimeExpr>,
+    /// Optional response plan; present in enriched runtime-ir output.
+    #[serde(default)]
+    pub respond: RuntimeRespondPlan,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct RuntimeRespondPlan {
+    #[serde(default)]
+    pub branches: Vec<RuntimeRespondBranch>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct RuntimeRespondBranch {
+    #[serde(default)]
+    pub actions: Vec<RuntimeAction>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RuntimeAction {
+    pub action: String,
+    #[serde(default)]
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -43,31 +73,67 @@ pub enum RuntimeExpr {
     /// Event field path such as `pid` or `event.pid`.
     Field { path: String },
     /// Logical conjunction.
-    And { lhs: Box<RuntimeExpr>, rhs: Box<RuntimeExpr> },
+    And {
+        lhs: Box<RuntimeExpr>,
+        rhs: Box<RuntimeExpr>,
+    },
     /// Logical disjunction.
-    Or { lhs: Box<RuntimeExpr>, rhs: Box<RuntimeExpr> },
+    Or {
+        lhs: Box<RuntimeExpr>,
+        rhs: Box<RuntimeExpr>,
+    },
     /// Logical negation.
     Not { expr: Box<RuntimeExpr> },
     /// Equality.
-    Eq { lhs: Box<RuntimeExpr>, rhs: Box<RuntimeExpr> },
+    Eq {
+        lhs: Box<RuntimeExpr>,
+        rhs: Box<RuntimeExpr>,
+    },
     /// Inequality.
-    Ne { lhs: Box<RuntimeExpr>, rhs: Box<RuntimeExpr> },
+    Ne {
+        lhs: Box<RuntimeExpr>,
+        rhs: Box<RuntimeExpr>,
+    },
     /// Less than.
-    Lt { lhs: Box<RuntimeExpr>, rhs: Box<RuntimeExpr> },
+    Lt {
+        lhs: Box<RuntimeExpr>,
+        rhs: Box<RuntimeExpr>,
+    },
     /// Greater than.
-    Gt { lhs: Box<RuntimeExpr>, rhs: Box<RuntimeExpr> },
+    Gt {
+        lhs: Box<RuntimeExpr>,
+        rhs: Box<RuntimeExpr>,
+    },
     /// Less or equal.
-    Le { lhs: Box<RuntimeExpr>, rhs: Box<RuntimeExpr> },
+    Le {
+        lhs: Box<RuntimeExpr>,
+        rhs: Box<RuntimeExpr>,
+    },
     /// Greater or equal.
-    Ge { lhs: Box<RuntimeExpr>, rhs: Box<RuntimeExpr> },
+    Ge {
+        lhs: Box<RuntimeExpr>,
+        rhs: Box<RuntimeExpr>,
+    },
     /// Membership check.
-    In { lhs: Box<RuntimeExpr>, rhs: Vec<RuntimeExpr> },
+    In {
+        lhs: Box<RuntimeExpr>,
+        rhs: Vec<RuntimeExpr>,
+    },
     /// String prefix check.
-    StartsWith { lhs: Box<RuntimeExpr>, rhs: Box<RuntimeExpr> },
+    StartsWith {
+        lhs: Box<RuntimeExpr>,
+        rhs: Box<RuntimeExpr>,
+    },
     /// String suffix check.
-    EndsWith { lhs: Box<RuntimeExpr>, rhs: Box<RuntimeExpr> },
+    EndsWith {
+        lhs: Box<RuntimeExpr>,
+        rhs: Box<RuntimeExpr>,
+    },
     /// String contains check.
-    Contains { lhs: Box<RuntimeExpr>, rhs: Box<RuntimeExpr> },
+    Contains {
+        lhs: Box<RuntimeExpr>,
+        rhs: Box<RuntimeExpr>,
+    },
     /// Placeholder for operators not yet implemented in runtime.
     Unsupported { kind: String },
 }
@@ -125,6 +191,7 @@ impl RuntimeIrRuleEngine {
                 out.push(RuleMatch {
                     rule_id: rule.id.clone(),
                     rule_name: rule.name.clone(),
+                    enforce_block_egress: rule_has_block_egress(rule),
                 });
             }
         }
@@ -158,6 +225,14 @@ fn parse_runtime_program(content: &str) -> Result<RuntimeProgram> {
     })
 }
 
+fn rule_has_block_egress(rule: &RuntimeRule) -> bool {
+    rule.respond
+        .branches
+        .iter()
+        .flat_map(|b| b.actions.iter())
+        .any(|a| a.action == "block_egress")
+}
+
 // Evaluate expression in boolean context.
 fn eval_bool(expr: &RuntimeExpr, event: &IngestEvent) -> bool {
     match expr {
@@ -165,8 +240,8 @@ fn eval_bool(expr: &RuntimeExpr, event: &IngestEvent) -> bool {
         RuntimeExpr::And { lhs, rhs } => eval_bool(lhs, event) && eval_bool(rhs, event),
         RuntimeExpr::Or { lhs, rhs } => eval_bool(lhs, event) || eval_bool(rhs, event),
         RuntimeExpr::Not { expr } => !eval_bool(expr, event),
-        RuntimeExpr::Eq { lhs, rhs } => eval_value(lhs, event) == eval_value(rhs, event),
-        RuntimeExpr::Ne { lhs, rhs } => eval_value(lhs, event) != eval_value(rhs, event),
+        RuntimeExpr::Eq { lhs, rhs } => eval_eq(lhs, rhs, event),
+        RuntimeExpr::Ne { lhs, rhs } => !eval_eq(lhs, rhs, event),
         RuntimeExpr::Lt { lhs, rhs } => compare_ord(lhs, rhs, event, |a, b| a < b),
         RuntimeExpr::Gt { lhs, rhs } => compare_ord(lhs, rhs, event, |a, b| a > b),
         RuntimeExpr::Le { lhs, rhs } => compare_ord(lhs, rhs, event, |a, b| a <= b),
@@ -189,6 +264,88 @@ fn eval_bool(expr: &RuntimeExpr, event: &IngestEvent) -> bool {
     }
 }
 
+fn eval_eq(lhs: &RuntimeExpr, rhs: &RuntimeExpr, event: &IngestEvent) -> bool {
+    if let Some(result) = eval_domain_eq(lhs, rhs, event) {
+        return result;
+    }
+    eval_value(lhs, event) == eval_value(rhs, event)
+}
+
+// Support `n.dest.domain == "example.com"` by resolving the right-hand domain
+// to IPv4 addresses and matching against the observed net destination IP.
+fn eval_domain_eq(lhs: &RuntimeExpr, rhs: &RuntimeExpr, event: &IngestEvent) -> Option<bool> {
+    if event.event_type != 3 || event.net_dst_ip == 0 {
+        return None;
+    }
+
+    if let (Some(path), Some(domain)) = (field_path(lhs), string_lit(rhs)) {
+        if is_domain_path(path) {
+            return Some(domain_matches_dst_ip(domain, event.net_dst_ip));
+        }
+    }
+    if let (Some(path), Some(domain)) = (field_path(rhs), string_lit(lhs)) {
+        if is_domain_path(path) {
+            return Some(domain_matches_dst_ip(domain, event.net_dst_ip));
+        }
+    }
+    None
+}
+
+fn field_path(expr: &RuntimeExpr) -> Option<&str> {
+    match expr {
+        RuntimeExpr::Field { path } => Some(path.as_str()),
+        _ => None,
+    }
+}
+
+fn string_lit(expr: &RuntimeExpr) -> Option<&str> {
+    match expr {
+        RuntimeExpr::Str { value } => Some(value.as_str()),
+        _ => None,
+    }
+}
+
+fn is_domain_path(path: &str) -> bool {
+    path == "domain" || path.ends_with(".domain")
+}
+
+fn domain_matches_dst_ip(domain: &str, dst_ip: u32) -> bool {
+    resolve_domain_ipv4_cached(domain)
+        .into_iter()
+        .any(|resolved| resolved == dst_ip)
+}
+
+fn resolve_domain_ipv4_cached(domain: &str) -> Vec<u32> {
+    let cache = DOMAIN_IP_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let now = Instant::now();
+
+    if let Ok(guard) = cache.lock() {
+        if let Some((fetched_at, ips)) = guard.get(domain) {
+            if now.duration_since(*fetched_at) <= DNS_CACHE_TTL {
+                return ips.clone();
+            }
+        }
+    }
+
+    let mut resolved = Vec::new();
+    if let Ok(addrs) = (domain, 0u16).to_socket_addrs() {
+        for addr in addrs {
+            if let IpAddr::V4(v4) = addr.ip() {
+                let ip = u32::from(v4);
+                if !resolved.contains(&ip) {
+                    resolved.push(ip);
+                }
+            }
+        }
+    }
+
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(domain.to_string(), (Instant::now(), resolved.clone()));
+    }
+
+    resolved
+}
+
 // Compare two expressions after numeric coercion.
 fn compare_ord(
     lhs: &RuntimeExpr,
@@ -196,7 +353,10 @@ fn compare_ord(
     event: &IngestEvent,
     cmp: impl Fn(f64, f64) -> bool,
 ) -> bool {
-    match (to_number(eval_value(lhs, event)), to_number(eval_value(rhs, event))) {
+    match (
+        to_number(eval_value(lhs, event)),
+        to_number(eval_value(rhs, event)),
+    ) {
         (Some(a), Some(b)) => cmp(a, b),
         _ => false,
     }
@@ -237,6 +397,11 @@ fn lookup_field(path: &str, event: &IngestEvent) -> Value {
         "event_type" => Value::Number(event.event_type as f64),
         "vertex_id" => Value::Number(event.vertex_id as f64),
         "dst_vertex_id" => Value::Number(event.dst_vertex_id as f64),
+        "direction" if event.event_type == 3 => Value::String("outbound".to_string()),
+        "dst_ip" | "ip" if event.event_type == 3 => {
+            Value::String(Ipv4Addr::from(event.net_dst_ip).to_string())
+        }
+        "dst_port" | "port" if event.event_type == 3 => Value::Number(event.net_dst_port as f64),
         "comm_id" => Value::Number(event.comm_id as f64),
         "risk_score" | "score" => Value::Number(event.risk_score as f64),
         _ => Value::Null,
@@ -307,6 +472,7 @@ mod tests {
                         }),
                         rhs: Box::new(RuntimeExpr::Int { value: 42 }),
                     }],
+                    respond: RuntimeRespondPlan::default(),
                 }],
             },
         };
@@ -318,6 +484,8 @@ mod tests {
             event_type: 1,
             vertex_id: 42,
             dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.1,
@@ -325,6 +493,7 @@ mod tests {
         let matches = engine.evaluate_matches(&event);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].rule_id, "r1");
+        assert!(!matches[0].enforce_block_egress);
     }
 
     #[test]
@@ -356,6 +525,8 @@ mod tests {
             event_type: 1,
             vertex_id: 42,
             dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.1,
@@ -365,6 +536,7 @@ mod tests {
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].rule_id, "rule:0:pid_42");
         assert_eq!(matches[0].rule_name, "pid_42");
+        assert!(!matches[0].enforce_block_egress);
 
         let _ = fs::remove_file(path);
     }
@@ -427,6 +599,8 @@ mod tests {
             event_type: 1,
             vertex_id: 0,
             dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.0,
@@ -435,6 +609,8 @@ mod tests {
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].rule_id, "rule:pid_42");
         assert_eq!(matches[1].rule_id, "rule:uid_7");
+        assert!(!matches[0].enforce_block_egress);
+        assert!(!matches[1].enforce_block_egress);
 
         let _ = fs::remove_file(path);
     }
@@ -492,6 +668,8 @@ rule "pid_42" {
             event_type: 1,
             vertex_id: 0,
             dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.0,
@@ -499,6 +677,7 @@ rule "pid_42" {
         let matches = engine.evaluate_matches(&event);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].rule_name, "pid_42");
+        assert!(!matches[0].enforce_block_egress);
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -569,6 +748,8 @@ rule "uid_7" {
             event_type: 1,
             vertex_id: 0,
             dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.0,
@@ -577,7 +758,106 @@ rule "uid_7" {
         assert_eq!(matches.len(), 2);
         assert!(matches.iter().any(|m| m.rule_name == "pid_42"));
         assert!(matches.iter().any(|m| m.rule_name == "uid_7"));
+        assert!(!matches.iter().any(|m| m.enforce_block_egress));
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn marks_block_egress_rules_for_enforcement() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "rules": [
+    {
+      "id": "rule:0:block_egress",
+      "name": "block_egress",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "pid" },
+          "rhs": { "op": "int", "value": 42 }
+        }
+      ],
+      "respond": {
+        "branches": [
+          {
+            "condition": null,
+            "actions": [
+              { "action": "alert", "severity": "critical" },
+              { "action": "block_egress", "target": "n.dest.domain" }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 42,
+            uid: 0,
+            event_type: 3,
+            vertex_id: 42,
+            dst_vertex_id: 0,
+            net_dst_ip: u32::from(Ipv4Addr::LOCALHOST),
+            net_dst_port: 443,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.1,
+        };
+
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule_name, "block_egress");
+        assert!(matches[0].enforce_block_egress);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn matches_domain_predicate_against_net_destination_ip() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "rules": [
+    {
+      "id": "rule:0:localhost_domain",
+      "name": "localhost_domain",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "n.dest.domain" },
+          "rhs": { "op": "str", "value": "localhost" }
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 9001,
+            uid: 0,
+            event_type: 3,
+            vertex_id: 9001,
+            dst_vertex_id: 0,
+            net_dst_ip: u32::from(Ipv4Addr::LOCALHOST),
+            net_dst_port: 443,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.2,
+        };
+
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule_name, "localhost_domain");
+
+        let _ = fs::remove_file(path);
     }
 }

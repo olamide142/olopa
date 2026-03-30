@@ -18,8 +18,8 @@
 
 use aya_ebpf::{
     helpers::{
-        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid,
-        bpf_ktime_get_ns, bpf_probe_read_user,
+        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_ns,
+        bpf_probe_read_user,
     },
     macros::tracepoint,
     programs::TracePointContext,
@@ -32,8 +32,8 @@ use crate::EVENTS;
 #[derive(Copy, Clone)]
 struct SockAddrIn {
     sin_family: u16,
-    sin_port:   u16,
-    sin_addr:   u32,
+    sin_port: u16,
+    sin_addr: u32,
 }
 
 #[tracepoint]

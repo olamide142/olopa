@@ -5,12 +5,12 @@
 // Hot path only ever touches `hot`. Cold data loaded on alert.
 // ============================================================
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use crossbeam_utils::CachePadded;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // ── Compile-time size guards ─────────────────────────────────
 // If you change a field, the assert fails loudly at compile time.
-const _: () = assert!(std::mem::size_of::<HotEvent>()  == 16);
+const _: () = assert!(std::mem::size_of::<HotEvent>() == 16);
 const _: () = assert!(std::mem::size_of::<ColdEvent>() == 128);
 
 // ── HotEvent — 16 bytes, 4 per cache line ───────────────────
@@ -20,9 +20,9 @@ const _: () = assert!(std::mem::size_of::<ColdEvent>() == 128);
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct HotEvent {
-    pub ts_ns:      u64,   // 8 bytes — nanosecond epoch (PTP-synced)
-    pub pid:        u32,   // 4 bytes — kernel PID
-    pub risk_score: f32,   // 4 bytes — computed by relevance scorer
+    pub ts_ns: u64,      // 8 bytes — nanosecond epoch (PTP-synced)
+    pub pid: u32,        // 4 bytes — kernel PID
+    pub risk_score: f32, // 4 bytes — computed by relevance scorer
 }
 // Total: 16 bytes. A single cache line holds exactly 4 HotEvents.
 // Sequential scan over hot[] = hardware prefetcher works perfectly.
@@ -33,14 +33,14 @@ pub struct HotEvent {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ColdEvent {
-    pub argv_hash: [u8; 32],  // SHA-256 of argv — never raw args
-    pub path_hash: [u8; 32],  // SHA-256 of full file path
-    pub env_hash:  [u8; 32],  // SHA-256 of environment block
-    pub ppid:      u32,       // parent PID — for lineage, not hot path
-    pub uid:       u32,       // effective UID at exec time
-    pub gid:       u32,       // effective GID at exec time
-    pub comm_id:   u32,       // string→int assigned at eBPF layer
-    pub _pad:      [u8; 16],  // explicit padding to 128 bytes
+    pub argv_hash: [u8; 32], // SHA-256 of argv — never raw args
+    pub path_hash: [u8; 32], // SHA-256 of full file path
+    pub env_hash: [u8; 32],  // SHA-256 of environment block
+    pub ppid: u32,           // parent PID — for lineage, not hot path
+    pub uid: u32,            // effective UID at exec time
+    pub gid: u32,            // effective GID at exec time
+    pub comm_id: u32,        // string→int assigned at eBPF layer
+    pub _pad: [u8; 16],      // explicit padding to 128 bytes
 }
 // 32+32+32 = 96 bytes of hashes + 16 bytes of integers + 16 pad = 128 bytes.
 // Sensitive data (argv, paths, env) is hashed — never stored raw.
@@ -50,16 +50,16 @@ pub struct ColdEvent {
 // Parallel arrays. hot[i] and cold[i] describe the same event.
 // Indexed by a monotonic u64 event_id (wraps at u64::MAX — fine).
 pub struct EventStore {
-    hot:      Vec<HotEvent>,      // scanned on every event — keep cache-hot
-    cold:     Vec<ColdEvent>,     // loaded by index on alert — keep cache-cold
-    len:      usize,              // current number of events stored
-    capacity: usize,              // fixed at construction — no realloc on hot path
+    hot: Vec<HotEvent>,   // scanned on every event — keep cache-hot
+    cold: Vec<ColdEvent>, // loaded by index on alert — keep cache-cold
+    len: usize,           // current number of events stored
+    capacity: usize,      // fixed at construction — no realloc on hot path
 
     // Per-store counters. CachePadded prevents false sharing on multi-core.
     // Each counter lives on its own 64-byte cache line.
     total_written: CachePadded<AtomicU64>,
     total_dropped: CachePadded<AtomicU64>,
-    alert_loads:   CachePadded<AtomicU64>, // how often cold[] was accessed
+    alert_loads: CachePadded<AtomicU64>, // how often cold[] was accessed
 }
 
 impl EventStore {
@@ -72,13 +72,13 @@ impl EventStore {
     //   cold: 3_000_000 × 128 bytes = 384 MB  ← only loaded on alert
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            hot:  Vec::with_capacity(capacity),
+            hot: Vec::with_capacity(capacity),
             cold: Vec::with_capacity(capacity),
-            len:  0,
+            len: 0,
             capacity,
             total_written: CachePadded::new(AtomicU64::new(0)),
             total_dropped: CachePadded::new(AtomicU64::new(0)),
-            alert_loads:   CachePadded::new(AtomicU64::new(0)),
+            alert_loads: CachePadded::new(AtomicU64::new(0)),
         }
     }
 
@@ -98,9 +98,9 @@ impl EventStore {
         // SAFETY: capacity was pre-allocated — no realloc.
         // Both pushes always happen together — the arrays stay in sync.
         unsafe {
-            let hot_ptr  = self.hot.as_mut_ptr().add(id);
+            let hot_ptr = self.hot.as_mut_ptr().add(id);
             let cold_ptr = self.cold.as_mut_ptr().add(id);
-            std::ptr::write(hot_ptr,  hot);
+            std::ptr::write(hot_ptr, hot);
             std::ptr::write(cold_ptr, cold);
             self.hot.set_len(id + 1);
             self.cold.set_len(id + 1);
@@ -144,7 +144,11 @@ impl EventStore {
             .iter()
             .enumerate()
             .filter_map(|(i, e)| {
-                if e.risk_score > threshold { Some(i) } else { None }
+                if e.risk_score > threshold {
+                    Some(i)
+                } else {
+                    None
+                }
             })
             .collect()
     }
@@ -165,24 +169,24 @@ impl EventStore {
     // ── Metrics ─────────────────────────────────────────────
     pub fn stats(&self) -> EventStoreStats {
         EventStoreStats {
-            len:           self.len,
-            capacity:      self.capacity,
-            fill_ratio:    self.len as f32 / self.capacity as f32,
+            len: self.len,
+            capacity: self.capacity,
+            fill_ratio: self.len as f32 / self.capacity as f32,
             total_written: self.total_written.load(Ordering::Relaxed),
             total_dropped: self.total_dropped.load(Ordering::Relaxed),
-            alert_loads:   self.alert_loads.load(Ordering::Relaxed),
+            alert_loads: self.alert_loads.load(Ordering::Relaxed),
         }
     }
 }
 
 #[derive(Debug)]
 pub struct EventStoreStats {
-    pub len:           usize,
-    pub capacity:      usize,
-    pub fill_ratio:    f32,
+    pub len: usize,
+    pub capacity: usize,
+    pub fill_ratio: f32,
     pub total_written: u64,
     pub total_dropped: u64,
-    pub alert_loads:   u64,
+    pub alert_loads: u64,
 }
 
 // ── Usage example ────────────────────────────────────────────
@@ -193,7 +197,7 @@ mod tests {
     #[test]
     fn layout_sizes_are_correct() {
         // These are load-bearing — change a field and these fail.
-        assert_eq!(std::mem::size_of::<HotEvent>(),  16);
+        assert_eq!(std::mem::size_of::<HotEvent>(), 16);
         assert_eq!(std::mem::size_of::<ColdEvent>(), 128);
         // 4 HotEvents fit in a 64-byte cache line
         assert_eq!(64 / std::mem::size_of::<HotEvent>(), 4);
@@ -203,12 +207,19 @@ mod tests {
     fn hot_and_cold_stay_in_sync() {
         let mut store = EventStore::with_capacity(1024);
 
-        let hot  = HotEvent  { ts_ns: 1_000_000, pid: 4821, risk_score: 0.85 };
+        let hot = HotEvent {
+            ts_ns: 1_000_000,
+            pid: 4821,
+            risk_score: 0.85,
+        };
         let cold = ColdEvent {
             argv_hash: [0xAA; 32],
             path_hash: [0xBB; 32],
-            env_hash:  [0xCC; 32],
-            ppid: 1241, uid: 33, gid: 33, comm_id: 7,
+            env_hash: [0xCC; 32],
+            ppid: 1241,
+            uid: 33,
+            gid: 33,
+            comm_id: 7,
             _pad: [0; 16],
         };
 
@@ -229,10 +240,20 @@ mod tests {
         let mut store = EventStore::with_capacity(16);
         for i in 0..8u32 {
             let risk = i as f32 * 0.125; // 0.0, 0.125, 0.25 ... 0.875
-            let hot  = HotEvent { ts_ns: i as u64, pid: i, risk_score: risk };
+            let hot = HotEvent {
+                ts_ns: i as u64,
+                pid: i,
+                risk_score: risk,
+            };
             let cold = ColdEvent {
-                argv_hash: [0; 32], path_hash: [0; 32], env_hash: [0; 32],
-                ppid: 0, uid: 0, gid: 0, comm_id: 0, _pad: [0; 16],
+                argv_hash: [0; 32],
+                path_hash: [0; 32],
+                env_hash: [0; 32],
+                ppid: 0,
+                uid: 0,
+                gid: 0,
+                comm_id: 0,
+                _pad: [0; 16],
             };
             store.push(hot, cold).unwrap();
         }

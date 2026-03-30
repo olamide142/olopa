@@ -14,11 +14,7 @@
 //! - Program is intentionally pass-through (`TC_ACT_OK`) while policy/data
 //!   maps are staged. This keeps attach path exercised without packet impact.
 
-use aya_ebpf::{
-    bindings::TC_ACT_OK,
-    macros::classifier,
-    programs::TcContext,
-};
+use aya_ebpf::{bindings::TC_ACT_OK, macros::classifier, programs::TcContext};
 
 #[classifier]
 pub fn tc_egress(ctx: TcContext) -> i32 {

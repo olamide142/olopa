@@ -20,28 +20,28 @@
 //              x[i] ∈ {0, 1}
 // ============================================================
 
-use std::collections::BinaryHeap;
-use std::cmp::Ordering;
-use std::time::{Duration, Instant};
 use crossbeam_utils::CachePadded;
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrd};
+use std::time::{Duration, Instant};
 
 // ── Resource dimensions ──────────────────────────────────────
 pub const N_RESOURCES: usize = 5;
-pub const CPU:  usize = 0;
-pub const MEM:  usize = 1;
-pub const IO:   usize = 2;
-pub const NET:  usize = 3;
-pub const BW:   usize = 4;
+pub const CPU: usize = 0;
+pub const MEM: usize = 1;
+pub const IO: usize = 2;
+pub const NET: usize = 3;
+pub const BW: usize = 4;
 
 // ── Default budgets (soft targets, not hard caps) ────────────
 // PI controller adjusts these dynamically (see budget_tracker.rs)
 pub const DEFAULT_BUDGETS: [f32; N_RESOURCES] = [
-    5_000.0,       // CPU: 5,000 µs per 500ms window = 1% of one core
-    52_428_800.0,  // MEM: 50 MB
-    10_485_760.0,  // IO:  10 MB/s write
-    500.0,         // NET: 500 packets/s
-    5_242_880.0,   // BW:  5 MB/s (5% of detected uplink)
+    5_000.0,      // CPU: 5,000 µs per 500ms window = 1% of one core
+    52_428_800.0, // MEM: 50 MB
+    10_485_760.0, // IO:  10 MB/s write
+    500.0,        // NET: 500 packets/s
+    5_242_880.0,  // BW:  5 MB/s (5% of detected uplink)
 ];
 
 // ── TelemetryItem — one pending event waiting to be scheduled ─
@@ -49,12 +49,12 @@ pub const DEFAULT_BUDGETS: [f32; N_RESOURCES] = [
 // Dropped if the MDKP solver excludes it from the current window.
 #[derive(Clone, Debug)]
 pub struct TelemetryItem {
-    pub event_id:    usize,        // index into EventStore
-    pub relevance:   f32,          // scorer output: 0.0–1.0
-    pub cost:        [f32; N_RESOURCES], // resource consumption if transmitted
+    pub event_id: usize,          // index into EventStore
+    pub relevance: f32,           // scorer output: 0.0–1.0
+    pub cost: [f32; N_RESOURCES], // resource consumption if transmitted
     // Cached efficiency score — recomputed when budgets change.
     // Stored here so BinaryHeap ordering is O(1).
-    efficiency:      f32,
+    efficiency: f32,
 }
 
 impl TelemetryItem {
@@ -68,7 +68,12 @@ impl TelemetryItem {
         } else {
             relevance // zero-cost item: efficiency = relevance
         };
-        Self { event_id, relevance, cost, efficiency }
+        Self {
+            event_id,
+            relevance,
+            cost,
+            efficiency,
+        }
     }
 
     pub fn recompute_efficiency(&mut self, budget: &BudgetSnapshot) {
@@ -91,11 +96,7 @@ const LAMBDA: f32 = 0.1;
 fn composite_cost(cost: &[f32; N_RESOURCES]) -> f32 {
     // Simple weighted sum across resource dimensions.
     // Weights reflect relative scarcity — bandwidth is most scarce.
-    cost[CPU] * 0.20
-    + cost[MEM] * 0.15
-    + cost[IO]  * 0.15
-    + cost[NET] * 0.20
-    + cost[BW]  * 0.30
+    cost[CPU] * 0.20 + cost[MEM] * 0.15 + cost[IO] * 0.15 + cost[NET] * 0.20 + cost[BW] * 0.30
 }
 
 fn composite_cost_relative(cost: &[f32; N_RESOURCES], budget: &BudgetSnapshot) -> f32 {
@@ -115,17 +116,17 @@ fn composite_cost_relative(cost: &[f32; N_RESOURCES], budget: &BudgetSnapshot) -
 // on a snapshot taken at the start of each scheduling window.
 #[derive(Clone, Debug)]
 pub struct BudgetSnapshot {
-    pub total:     [f32; N_RESOURCES], // maximum allowed per window
+    pub total: [f32; N_RESOURCES],     // maximum allowed per window
     pub remaining: [f32; N_RESOURCES], // how much is left after items selected so far
-    pub weights:   [f32; N_RESOURCES], // relative importance per dimension
+    pub weights: [f32; N_RESOURCES],   // relative importance per dimension
 }
 
 impl BudgetSnapshot {
     pub fn default_budgets() -> Self {
         Self {
-            total:     DEFAULT_BUDGETS,
+            total: DEFAULT_BUDGETS,
             remaining: DEFAULT_BUDGETS,
-            weights:   [0.20, 0.15, 0.15, 0.20, 0.30],
+            weights: [0.20, 0.15, 0.15, 0.20, 0.30],
         }
     }
 
@@ -140,9 +141,7 @@ impl BudgetSnapshot {
     }
 
     pub fn utilization(&self) -> [f32; N_RESOURCES] {
-        std::array::from_fn(|i| {
-            1.0 - (self.remaining[i] / self.total[i].max(1e-9))
-        })
+        std::array::from_fn(|i| 1.0 - (self.remaining[i] / self.total[i].max(1e-9)))
     }
 }
 
@@ -153,7 +152,7 @@ impl BudgetSnapshot {
 #[derive(PartialEq)]
 struct HeapItem {
     efficiency: f32,
-    index:      usize, // index into the items slice
+    index: usize, // index into the items slice
 }
 
 impl Eq for HeapItem {}
@@ -177,30 +176,30 @@ impl Ord for HeapItem {
 pub struct Scheduler {
     // Pending items waiting to be scheduled.
     // Populated by the event pipeline between scheduling windows.
-    pending:  Vec<TelemetryItem>,
+    pending: Vec<TelemetryItem>,
 
     // The heap holds (efficiency, index) pairs into `pending`.
     // Rebuilt at the start of each solve() call.
-    heap:     BinaryHeap<HeapItem>,
+    heap: BinaryHeap<HeapItem>,
 
     // Current resource budgets — updated by PI controller
-    budget:   BudgetSnapshot,
+    budget: BudgetSnapshot,
 
     // Metrics — each on its own cache line
     pub items_selected: CachePadded<AtomicU64>,
-    pub items_dropped:  CachePadded<AtomicU64>,
-    pub solve_count:    CachePadded<AtomicU64>,
+    pub items_dropped: CachePadded<AtomicU64>,
+    pub solve_count: CachePadded<AtomicU64>,
 }
 
 impl Scheduler {
     pub fn new(budget: BudgetSnapshot) -> Self {
         Self {
-            pending:        Vec::with_capacity(4096),
-            heap:           BinaryHeap::with_capacity(4096),
+            pending: Vec::with_capacity(4096),
+            heap: BinaryHeap::with_capacity(4096),
             budget,
             items_selected: CachePadded::new(AtomicU64::new(0)),
-            items_dropped:  CachePadded::new(AtomicU64::new(0)),
-            solve_count:    CachePadded::new(AtomicU64::new(0)),
+            items_dropped: CachePadded::new(AtomicU64::new(0)),
+            solve_count: CachePadded::new(AtomicU64::new(0)),
         }
     }
 
@@ -234,21 +233,21 @@ impl Scheduler {
 
         let selected = match tier {
             SolverTier::Greedy => self.greedy(&snapshot),
-            SolverTier::LP     => self.lp_relaxation(&snapshot),
-            SolverTier::BnB    => self.branch_and_bound(&snapshot),
+            SolverTier::LP => self.lp_relaxation(&snapshot),
+            SolverTier::BnB => self.branch_and_bound(&snapshot),
         };
 
         let n_selected = selected.len();
-        let n_dropped  = self.pending.len() - n_selected;
+        let n_dropped = self.pending.len() - n_selected;
 
-        self.items_selected.fetch_add(n_selected as u64, AtomicOrd::Relaxed);
-        self.items_dropped.fetch_add(n_dropped  as u64, AtomicOrd::Relaxed);
+        self.items_selected
+            .fetch_add(n_selected as u64, AtomicOrd::Relaxed);
+        self.items_dropped
+            .fetch_add(n_dropped as u64, AtomicOrd::Relaxed);
         self.solve_count.fetch_add(1, AtomicOrd::Relaxed);
 
         // Collect selected event_ids before clearing
-        let event_ids: Vec<usize> = selected.iter()
-            .map(|&i| self.pending[i].event_id)
-            .collect();
+        let event_ids: Vec<usize> = selected.iter().map(|&i| self.pending[i].event_id).collect();
 
         self.pending.clear();
         self.heap.clear();
@@ -272,11 +271,14 @@ impl Scheduler {
         self.heap.clear();
         for (i, item) in self.pending.iter().enumerate() {
             if item.efficiency > 0.0 {
-                self.heap.push(HeapItem { efficiency: item.efficiency, index: i });
+                self.heap.push(HeapItem {
+                    efficiency: item.efficiency,
+                    index: i,
+                });
             }
         }
 
-        let mut budget   = initial_budget.clone();
+        let mut budget = initial_budget.clone();
         let mut selected = Vec::with_capacity(self.pending.len() / 2);
 
         // Pop highest-efficiency item, select if it fits all budgets
@@ -302,15 +304,16 @@ impl Scheduler {
     // Shown here as a simplified implementation for clarity.
     fn lp_relaxation(&mut self, initial_budget: &BudgetSnapshot) -> Vec<usize> {
         let n = self.pending.len();
-        if n == 0 { return vec![]; }
+        if n == 0 {
+            return vec![];
+        }
 
         // Normalize costs relative to budgets → constraint matrix A[n_resources][n]
         // Each column is one item's normalized cost vector.
         let mut normalized: Vec<[f32; N_RESOURCES]> = Vec::with_capacity(n);
         for item in &self.pending {
-            let nc: [f32; N_RESOURCES] = std::array::from_fn(|r| {
-                item.cost[r] / initial_budget.total[r].max(1e-9)
-            });
+            let nc: [f32; N_RESOURCES] =
+                std::array::from_fn(|r| item.cost[r] / initial_budget.total[r].max(1e-9));
             normalized.push(nc);
         }
 
@@ -318,10 +321,10 @@ impl Scheduler {
         // (proper LP solve uses Clarabel; this is the warm-start heuristic)
         let mut lp_order: Vec<usize> = (0..n).collect();
         lp_order.sort_unstable_by(|&a, &b| {
-            let eff_a = self.pending[a].relevance
-                / normalized[a].iter().copied().sum::<f32>().max(1e-9);
-            let eff_b = self.pending[b].relevance
-                / normalized[b].iter().copied().sum::<f32>().max(1e-9);
+            let eff_a =
+                self.pending[a].relevance / normalized[a].iter().copied().sum::<f32>().max(1e-9);
+            let eff_b =
+                self.pending[b].relevance / normalized[b].iter().copied().sum::<f32>().max(1e-9);
             eff_b.partial_cmp(&eff_a).unwrap_or(Ordering::Equal)
         });
 
@@ -330,13 +333,18 @@ impl Scheduler {
         let mut remaining = [1.0f32; N_RESOURCES]; // normalized: 1.0 = full budget
 
         for &i in &lp_order {
-            if self.pending[i].efficiency <= 0.0 { continue; }
+            if self.pending[i].efficiency <= 0.0 {
+                continue;
+            }
 
             // How much of item i can we fit across all dimensions?
             let max_fraction = (0..N_RESOURCES)
                 .map(|r| {
-                    if normalized[i][r] < 1e-9 { 1.0f32 }
-                    else { (remaining[r] / normalized[i][r]).min(1.0) }
+                    if normalized[i][r] < 1e-9 {
+                        1.0f32
+                    } else {
+                        (remaining[r] / normalized[i][r]).min(1.0)
+                    }
                 })
                 .fold(f32::MAX, f32::min);
 
@@ -348,13 +356,11 @@ impl Scheduler {
 
         // Round: select items with fractional value ≥ 0.5
         // (threshold can be tuned; 0.5 gives best worst-case guarantee)
-        let rounded: Vec<usize> = (0..n)
-            .filter(|&i| x[i] >= 0.5)
-            .collect();
+        let rounded: Vec<usize> = (0..n).filter(|&i| x[i] >= 0.5).collect();
 
         // Feasibility repair: remove items that violate integer budgets
         // after rounding (rounding can overshoot budgets)
-        let mut budget   = initial_budget.clone();
+        let mut budget = initial_budget.clone();
         let mut selected = Vec::with_capacity(rounded.len());
         for i in rounded {
             if budget.fits(&self.pending[i].cost) {
@@ -375,8 +381,10 @@ impl Scheduler {
     // Typical wall time: < 500ms for n ≤ 50 with good pruning.
     fn branch_and_bound(&mut self, initial_budget: &BudgetSnapshot) -> Vec<usize> {
         let n = self.pending.len();
-        if n == 0  { return vec![]; }
-        if n > 64  {
+        if n == 0 {
+            return vec![];
+        }
+        if n > 64 {
             // B&B is intractable for large n — fall back to LP
             return self.lp_relaxation(initial_budget);
         }
@@ -384,12 +392,13 @@ impl Scheduler {
         // Sort by efficiency descending — best items first for tighter bounds
         let mut order: Vec<usize> = (0..n).collect();
         order.sort_unstable_by(|&a, &b| {
-            self.pending[b].efficiency
+            self.pending[b]
+                .efficiency
                 .partial_cmp(&self.pending[a].efficiency)
                 .unwrap_or(Ordering::Equal)
         });
 
-        let mut best_value   = 0.0f32;
+        let mut best_value = 0.0f32;
         let mut best_set: u64 = 0; // bitmask of selected items (n ≤ 64)
 
         // Stack-based DFS: (depth, current_value, current_budget, selection_mask)
@@ -401,19 +410,21 @@ impl Scheduler {
                 // Leaf node — check if this is a new best
                 if value > best_value {
                     best_value = value;
-                    best_set   = mask;
+                    best_set = mask;
                 }
                 continue;
             }
 
             let item_idx = order[depth];
-            let item     = &self.pending[item_idx];
+            let item = &self.pending[item_idx];
 
             // ── Upper bound pruning ───────────────────────────
             // Best case from here: take all remaining items (LP relaxation).
             // If even that can't beat current best, prune this branch.
             let ub = value + self.upper_bound_remaining(&order, depth, &budget);
-            if ub <= best_value { continue; }
+            if ub <= best_value {
+                continue;
+            }
 
             // ── Branch: EXCLUDE item[depth] ───────────────────
             stack.push((depth + 1, value, budget.clone(), mask));
@@ -423,7 +434,7 @@ impl Scheduler {
                 let mut new_budget = budget.clone();
                 new_budget.consume(&item.cost);
                 let new_value = value + item.relevance;
-                let new_mask  = mask | (1u64 << depth);
+                let new_mask = mask | (1u64 << depth);
                 stack.push((depth + 1, new_value, new_budget, new_mask));
             }
         }
@@ -436,22 +447,20 @@ impl Scheduler {
     }
 
     // Upper bound for B&B: LP relaxation of remaining items
-    fn upper_bound_remaining(
-        &self,
-        order:  &[usize],
-        from:   usize,
-        budget: &BudgetSnapshot,
-    ) -> f32 {
+    fn upper_bound_remaining(&self, order: &[usize], from: usize, budget: &BudgetSnapshot) -> f32 {
         let mut remaining = budget.remaining;
-        let mut value     = 0.0f32;
+        let mut value = 0.0f32;
 
         for &i in &order[from..] {
             let item = &self.pending[i];
             // Maximum fraction of item i that fits
             let frac = (0..N_RESOURCES)
                 .map(|r| {
-                    if item.cost[r] < 1e-9 { 1.0f32 }
-                    else { (remaining[r] / item.cost[r]).min(1.0).max(0.0) }
+                    if item.cost[r] < 1e-9 {
+                        1.0f32
+                    } else {
+                        (remaining[r] / item.cost[r]).min(1.0).max(0.0)
+                    }
                 })
                 .fold(f32::MAX, f32::min);
 
@@ -493,10 +502,10 @@ impl SolverTier {
 // ── Schedule result ──────────────────────────────────────────
 #[derive(Debug)]
 pub struct ScheduleResult {
-    pub event_ids:  Vec<usize>,   // EventStore indices to transmit
-    pub n_dropped:  usize,        // items excluded by budget
-    pub solve_time: Duration,     // wall time of solve() call
-    pub tier:       SolverTier,   // which solver ran
+    pub event_ids: Vec<usize>, // EventStore indices to transmit
+    pub n_dropped: usize,      // items excluded by budget
+    pub solve_time: Duration,  // wall time of solve() call
+    pub tier: SolverTier,      // which solver ran
 }
 
 // ── Relevance scorer — feeds the scheduler ───────────────────
@@ -517,10 +526,10 @@ impl RelevanceScorer {
     // Returns None if the event is below dead-band threshold (suppress).
     pub fn score(
         &self,
-        risk_score:    f32,
-        risk_delta:    f32,  // change from last observed value for this process
-        age_ms:        f32,  // how old is this event (ms since kernel timestamp)
-        chain_depth:   u8,   // position in a detected action chain (0 = standalone)
+        risk_score: f32,
+        risk_delta: f32, // change from last observed value for this process
+        age_ms: f32,     // how old is this event (ms since kernel timestamp)
+        chain_depth: u8, // position in a detected action chain (0 = standalone)
     ) -> Option<f32> {
         // Dead-band filter: if risk hasn't changed significantly, suppress
         if risk_delta.abs() < self.dead_band_epsilon {
@@ -545,18 +554,14 @@ impl RelevanceScorer {
 
     // Estimate resource cost of transmitting one event.
     // In production: derived from actual event size + compression ratio.
-    pub fn estimate_cost(
-        &self,
-        compressed_bytes: u32,
-        event_type: u8,
-    ) -> [f32; N_RESOURCES] {
+    pub fn estimate_cost(&self, compressed_bytes: u32, event_type: u8) -> [f32; N_RESOURCES] {
         let wire = compressed_bytes as f32;
         [
-            wire * 0.002,   // CPU: ~2ns per compressed byte to process
-            wire * 4.0,     // MEM: 4× expansion factor in receive buffer
-            0.0,            // IO:  no disk write on hot path
-            1.0,            // NET: 1 packet per event (batched upstream)
-            wire,           // BW:  compressed wire bytes
+            wire * 0.002, // CPU: ~2ns per compressed byte to process
+            wire * 4.0,   // MEM: 4× expansion factor in receive buffer
+            0.0,          // IO:  no disk write on hot path
+            1.0,          // NET: 1 packet per event (batched upstream)
+            wire,         // BW:  compressed wire bytes
         ]
     }
 }
@@ -573,7 +578,7 @@ mod tests {
 
     fn tight_bw_budget(limit: f32) -> BudgetSnapshot {
         let mut b = BudgetSnapshot::default_budgets();
-        b.total[BW]     = limit;
+        b.total[BW] = limit;
         b.remaining[BW] = limit;
         b
     }
@@ -586,7 +591,7 @@ mod tests {
         // Item B: relevance=0.5, cost=2   → efficiency=0.5/2 =0.250  ← better
         // Item C: relevance=0.8, cost=50  → efficiency=0.8/50=0.016
         sched.enqueue(make_item(0, 0.9, 10.0));
-        sched.enqueue(make_item(1, 0.5,  2.0));
+        sched.enqueue(make_item(1, 0.5, 2.0));
         sched.enqueue(make_item(2, 0.8, 50.0));
 
         let result = sched.solve(SolverTier::Greedy);
@@ -624,17 +629,22 @@ mod tests {
         // Optimal: B+C — total relevance=12, cost=6
         let mut sched = Scheduler::new(tight_bw_budget(6.0));
         sched.enqueue(make_item(0, 10.0, 5.0)); // A
-        sched.enqueue(make_item(1,  6.0, 3.0)); // B
-        sched.enqueue(make_item(2,  6.0, 3.0)); // C
+        sched.enqueue(make_item(1, 6.0, 3.0)); // B
+        sched.enqueue(make_item(2, 6.0, 3.0)); // C
 
         let result = sched.solve(SolverTier::BnB);
 
         // B&B should find B+C (relevance=12) > A (relevance=10)
-        let selected_relevance: f32 = result.event_ids.iter()
+        let selected_relevance: f32 = result
+            .event_ids
+            .iter()
             .map(|&id| [10.0f32, 6.0, 6.0][id])
             .sum();
-        assert!(selected_relevance >= 12.0 - 0.01,
-            "B&B should find optimal: got {}", selected_relevance);
+        assert!(
+            selected_relevance >= 12.0 - 0.01,
+            "B&B should find optimal: got {}",
+            selected_relevance
+        );
     }
 
     #[test]
@@ -653,9 +663,12 @@ mod tests {
         let scorer = RelevanceScorer::new(0.01);
 
         let fresh = scorer.score(0.5, 0.5, 0.0, 0).unwrap();
-        let old   = scorer.score(0.5, 0.5, 10_000.0, 0).unwrap();
+        let old = scorer.score(0.5, 0.5, 10_000.0, 0).unwrap();
 
-        assert!(fresh > old, "fresh events should score higher than old ones");
+        assert!(
+            fresh > old,
+            "fresh events should score higher than old ones"
+        );
     }
 
     #[test]
@@ -663,10 +676,12 @@ mod tests {
         let scorer = RelevanceScorer::new(0.01);
 
         let standalone = scorer.score(0.5, 0.5, 0.0, 0).unwrap();
-        let in_chain   = scorer.score(0.5, 0.5, 0.0, 5).unwrap();
+        let in_chain = scorer.score(0.5, 0.5, 0.0, 5).unwrap();
 
-        assert!(in_chain > standalone,
-            "events in a chain should score higher than standalone");
+        assert!(
+            in_chain > standalone,
+            "events in a chain should score higher than standalone"
+        );
     }
 
     #[test]

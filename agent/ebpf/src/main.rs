@@ -14,11 +14,11 @@
 #![no_std]
 #![no_main]
 
-mod xdp;
-mod tc;
 mod exec_probe;
 mod file_probe;
 mod net_probe;
+mod tc;
+mod xdp;
 
 use aya_ebpf::macros::map;
 use aya_ebpf::maps::RingBuf;

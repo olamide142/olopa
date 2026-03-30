@@ -26,6 +26,9 @@ pub struct IngestEvent {
     pub event_type: u8, // 1=exec, 2=file, 3=net
     pub vertex_id: u32,
     pub dst_vertex_id: u32,
+    // Host-endian IPv4 destination and destination port for net events.
+    pub net_dst_ip: u32,
+    pub net_dst_port: u16,
     pub comm: [u8; 16],
     pub comm_id: u32,
     pub risk_score: f32,
@@ -49,6 +52,8 @@ pub enum BatcherPush {
 pub struct RuleMatch {
     pub rule_id: String,
     pub rule_name: String,
+    // Rule contains an explicit `block egress ...` response action.
+    pub enforce_block_egress: bool,
 }
 
 // Scorer contract used by ingest loop.
@@ -275,12 +280,7 @@ impl OlopaAgent {
                     ingested_since_housekeeping
                 );
                 ingested_since_housekeeping = 0;
-                Self::housekeeping_tick(
-                    budget_tracker,
-                    metric_aggregator,
-                    graph,
-                    sender,
-                )?;
+                Self::housekeeping_tick(budget_tracker, metric_aggregator, graph, sender)?;
                 // Same cadence discipline for housekeeping.
                 next_housekeeping_tick += Duration::from_secs(5);
             }
@@ -326,6 +326,8 @@ impl OlopaAgent {
                     event_type: 1,
                     vertex_id: raw.pid,
                     dst_vertex_id: raw.ppid,
+                    net_dst_ip: 0,
+                    net_dst_port: 0,
                     comm: raw.comm,
                     comm_id: fnv1a_32(&raw.comm),
                     risk_score: 0.5,
@@ -341,6 +343,8 @@ impl OlopaAgent {
                     event_type: 2,
                     vertex_id: raw.pid,
                     dst_vertex_id: fnv1a_32(&raw.filename),
+                    net_dst_ip: 0,
+                    net_dst_port: 0,
                     comm: raw.comm,
                     comm_id: fnv1a_32(&raw.comm),
                     risk_score: if raw.flags & 0x3 == 0 { 0.35 } else { 0.60 },
@@ -358,13 +362,18 @@ impl OlopaAgent {
                     event_type: 3,
                     vertex_id: raw.pid,
                     dst_vertex_id: dst,
+                    net_dst_ip: u32::from_be(raw.dst_ip),
+                    net_dst_port: u16::from_be(raw.dst_port),
                     comm: raw.comm,
                     comm_id: fnv1a_32(&raw.comm),
                     risk_score: 0.7,
                 }
             } else {
                 // Unknown payload size: skip for hot-path resilience.
-                warn!("ringbuf unknown payload size={} bytes; skipping", bytes.len());
+                warn!(
+                    "ringbuf unknown payload size={} bytes; skipping",
+                    bytes.len()
+                );
                 continue;
             };
 
@@ -411,7 +420,6 @@ impl OlopaAgent {
         metric_aggregator.record(&event);
         let matches = rule_engine.evaluate(&event);
         let fired = !matches.is_empty();
-
         debug!(
             "ingest event: type={} pid={} uid={} risk={:.3} src={} dst={} fired={} matches={}",
             event.event_type,
@@ -426,6 +434,9 @@ impl OlopaAgent {
 
         // Incident path: bypass scheduler entirely, send immediately.
         for matched_rule in &matches {
+            if matched_rule.enforce_block_egress {
+                enforce_block_egress_pid(&event, matched_rule);
+            }
             sender.send_or_spool(encode_alert_payload(&event, matched_rule))?;
         }
 
@@ -514,12 +525,58 @@ impl OlopaAgent {
     }
 }
 
-
 fn comm_to_str(comm: &[u8; 16]) -> &str {
     let end = comm.iter().position(|&b| b == 0).unwrap_or(16);
     std::str::from_utf8(&comm[..end]).unwrap_or("")
 }
-    
+
+// Bootstrap enforcement path:
+// if a matched rule includes `block egress`, terminate the offending process.
+// This immediately stops further outbound attempts from that PID.
+fn enforce_block_egress_pid(event: &IngestEvent, matched_rule: &RuleMatch) {
+    // Only meaningful for network events.
+    if event.event_type != 3 {
+        warn!(
+            "block-egress requested by rule={} on non-network event_type={}; skipping",
+            matched_rule.rule_name, event.event_type
+        );
+        return;
+    }
+
+    let pid = event.pid as i32;
+    if pid <= 1 {
+        warn!(
+            "block-egress requested by rule={} for protected pid={}; skipping",
+            matched_rule.rule_name, pid
+        );
+        return;
+    }
+
+    let self_pid = std::process::id() as i32;
+    if pid == self_pid {
+        warn!(
+            "block-egress requested by rule={} for agent pid={}; refusing self-terminate",
+            matched_rule.rule_name, pid
+        );
+        return;
+    }
+
+    // SAFETY: libc::kill is an FFI syscall wrapper; arguments are plain ints.
+    let rc = unsafe { libc::kill(pid, libc::SIGKILL) };
+    if rc == 0 {
+        warn!(
+            "enforcement: rule={} terminated pid={} to block egress",
+            matched_rule.rule_name, pid
+        );
+    } else {
+        let err = std::io::Error::last_os_error();
+        warn!(
+            "enforcement: rule={} failed to terminate pid={} ({})",
+            matched_rule.rule_name, pid, err
+        );
+    }
+}
+
 fn log_exec_ingest(e: &ExecEvent) {
     info!(
         "[ringbuf][exec] pid={} ppid={} uid={} gid={} comm={} file={}",
@@ -662,12 +719,15 @@ mod tests {
         let dst_vertex_id = u32::from_le_bytes(payload[28..32].try_into().expect("dst"));
         let comm_id = u32::from_le_bytes(payload[32..36].try_into().expect("comm"));
         let risk_score = f32::from_le_bytes(payload[36..40].try_into().expect("risk"));
-        let rule_id_len = u16::from_le_bytes(payload[40..42].try_into().expect("rule_id_len")) as usize;
-        let rule_name_len = u16::from_le_bytes(payload[42..44].try_into().expect("rule_name_len")) as usize;
+        let rule_id_len =
+            u16::from_le_bytes(payload[40..42].try_into().expect("rule_id_len")) as usize;
+        let rule_name_len =
+            u16::from_le_bytes(payload[42..44].try_into().expect("rule_name_len")) as usize;
         let mut cursor = 44usize;
         let end_rule_id = cursor + rule_id_len;
         assert!(end_rule_id <= payload.len(), "invalid rule_id_len");
-        let rule_id = String::from_utf8(payload[cursor..end_rule_id].to_vec()).expect("rule_id utf8");
+        let rule_id =
+            String::from_utf8(payload[cursor..end_rule_id].to_vec()).expect("rule_id utf8");
         cursor = end_rule_id;
         let end_rule_name = cursor + rule_name_len;
         assert!(end_rule_name <= payload.len(), "invalid rule_name_len");
@@ -717,6 +777,8 @@ mod tests {
             event_type: 1,
             vertex_id: 42,
             dst_vertex_id: 1,
+            net_dst_ip: 0,
+            net_dst_port: 0,
             comm: [0; 16],
             comm_id: 123,
             risk_score: 0.9,
@@ -785,10 +847,12 @@ mod tests {
                 RuleMatch {
                     rule_id: "rule:one".to_string(),
                     rule_name: "rule_one".to_string(),
+                    enforce_block_egress: false,
                 },
                 RuleMatch {
                     rule_id: "rule:two".to_string(),
                     rule_name: "rule_two".to_string(),
+                    enforce_block_egress: false,
                 },
             ]
         }
@@ -831,6 +895,8 @@ mod tests {
             event_type: 1,
             vertex_id: 123,
             dst_vertex_id: 7,
+            net_dst_ip: 0,
+            net_dst_port: 0,
             comm: [0; 16],
             comm_id: 9,
             risk_score: 0.8,
@@ -924,6 +990,8 @@ rule "critical_pid_4242" {
             event_type: 1,
             vertex_id: 4242,
             dst_vertex_id: 1,
+            net_dst_ip: 0,
+            net_dst_port: 0,
             comm: [0; 16],
             comm_id: 7,
             risk_score: 0.85,

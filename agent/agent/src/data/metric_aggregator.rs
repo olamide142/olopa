@@ -11,10 +11,10 @@
 // Strings were converted to integers at the eBPF ID-assignment stage.
 // ============================================================
 
+use crossbeam_utils::CachePadded;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use crossbeam_utils::CachePadded;
 
 // ── Compile-time size guard ──────────────────────────────────
 const _: () = assert!(std::mem::size_of::<MetricSummary>() == 56);
@@ -26,14 +26,14 @@ const _: () = assert!(std::mem::size_of::<MetricSummary>() == 56);
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct MetricSummary {
-    pub min:     f64,   // 8
-    pub max:     f64,   // 8
-    pub mean:    f64,   // 8
-    pub p50:     f64,   // 8
-    pub p95:     f64,   // 8
-    pub p99:     f64,   // 8
-    pub comm_id: u32,   // 4 — which process type this covers
-    pub count:   u32,   // 4 — how many raw values were compressed
+    pub min: f64,     // 8
+    pub max: f64,     // 8
+    pub mean: f64,    // 8
+    pub p50: f64,     // 8
+    pub p95: f64,     // 8
+    pub p99: f64,     // 8
+    pub comm_id: u32, // 4 — which process type this covers
+    pub count: u32,   // 4 — how many raw values were compressed
 }
 // Total: 56 bytes.
 
@@ -47,29 +47,29 @@ pub struct MetricSummary {
 // Olopa use case (flush every 100ms, ~1000 values per window).
 // Production: swap for the `tdigest` crate which is more complete.
 pub struct TDigest {
-    centroids:   Vec<Centroid>,   // sorted by mean
-    compression: f64,             // trades accuracy for memory (100 = good default)
-    count:       u64,             // total values merged so far
-    min:         f64,
-    max:         f64,
-    sum:         f64,
+    centroids: Vec<Centroid>, // sorted by mean
+    compression: f64,         // trades accuracy for memory (100 = good default)
+    count: u64,               // total values merged so far
+    min: f64,
+    max: f64,
+    sum: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct Centroid {
-    mean:   f64,
+    mean: f64,
     weight: f64,
 }
 
 impl TDigest {
     pub fn new(compression: f64) -> Self {
         Self {
-            centroids:   Vec::with_capacity(compression as usize * 2),
+            centroids: Vec::with_capacity(compression as usize * 2),
             compression,
-            count:       0,
-            min:         f64::MAX,
-            max:         f64::MIN,
-            sum:         0.0,
+            count: 0,
+            min: f64::MAX,
+            max: f64::MIN,
+            sum: 0.0,
         }
     }
 
@@ -81,15 +81,26 @@ impl TDigest {
     #[inline]
     pub fn push(&mut self, value: f64) {
         self.count += 1;
-        self.sum   += value;
-        if value < self.min { self.min = value; }
-        if value > self.max { self.max = value; }
+        self.sum += value;
+        if value < self.min {
+            self.min = value;
+        }
+        if value > self.max {
+            self.max = value;
+        }
 
         // Insert new centroid, keep list sorted by mean
-        let pos = self.centroids
+        let pos = self
+            .centroids
             .binary_search_by(|c| c.mean.partial_cmp(&value).unwrap())
             .unwrap_or_else(|i| i);
-        self.centroids.insert(pos, Centroid { mean: value, weight: 1.0 });
+        self.centroids.insert(
+            pos,
+            Centroid {
+                mean: value,
+                weight: 1.0,
+            },
+        );
 
         // Compress lazily when we have too many centroids
         if self.centroids.len() > (self.compression as usize * 2) {
@@ -106,13 +117,19 @@ impl TDigest {
             }
         }
         // Carry over min/max exactly
-        if other.min < self.min { self.min = other.min; }
-        if other.max > self.max { self.max = other.max; }
+        if other.min < self.min {
+            self.min = other.min;
+        }
+        if other.max > self.max {
+            self.max = other.max;
+        }
     }
 
     // ── Compress: merge adjacent centroids ──────────────────
     fn compress(&mut self) {
-        if self.centroids.is_empty() { return; }
+        if self.centroids.is_empty() {
+            return;
+        }
 
         let total_weight: f64 = self.centroids.iter().map(|c| c.weight).sum();
         let mut merged: Vec<Centroid> = Vec::with_capacity(self.compression as usize);
@@ -147,9 +164,15 @@ impl TDigest {
     // ── Quantile query ──────────────────────────────────────
     // Returns the estimated value at quantile q (0.0–1.0).
     pub fn quantile(&self, q: f64) -> f64 {
-        if self.centroids.is_empty() { return 0.0; }
-        if q <= 0.0 { return self.min; }
-        if q >= 1.0 { return self.max; }
+        if self.centroids.is_empty() {
+            return 0.0;
+        }
+        if q <= 0.0 {
+            return self.min;
+        }
+        if q >= 1.0 {
+            return self.max;
+        }
 
         let total: f64 = self.centroids.iter().map(|c| c.weight).sum();
         let target = q * total;
@@ -170,12 +193,26 @@ impl TDigest {
         self.max
     }
 
-    pub fn min(&self)   -> f64 { self.min }
-    pub fn max(&self)   -> f64 { self.max }
-    pub fn mean(&self)  -> f64 { if self.count == 0 { 0.0 } else { self.sum / self.count as f64 } }
-    pub fn count(&self) -> u32 { self.count as u32 }
+    pub fn min(&self) -> f64 {
+        self.min
+    }
+    pub fn max(&self) -> f64 {
+        self.max
+    }
+    pub fn mean(&self) -> f64 {
+        if self.count == 0 {
+            0.0
+        } else {
+            self.sum / self.count as f64
+        }
+    }
+    pub fn count(&self) -> u32 {
+        self.count as u32
+    }
 
-    pub fn is_empty(&self) -> bool { self.count == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
 
     // ── Reset for next flush window ─────────────────────────
     // Clears all state. Does NOT free memory — Vec capacity stays.
@@ -183,22 +220,22 @@ impl TDigest {
     pub fn reset(&mut self) {
         self.centroids.clear();
         self.count = 0;
-        self.min   = f64::MAX;
-        self.max   = f64::MIN;
-        self.sum   = 0.0;
+        self.min = f64::MAX;
+        self.max = f64::MIN;
+        self.sum = 0.0;
     }
 
     // ── Build a MetricSummary from current state ─────────────
     pub fn summarize(&self, comm_id: u32) -> MetricSummary {
         MetricSummary {
-            min:     self.min(),
-            max:     self.max(),
-            mean:    self.mean(),
-            p50:     self.quantile(0.50),
-            p95:     self.quantile(0.95),
-            p99:     self.quantile(0.99),
+            min: self.min(),
+            max: self.max(),
+            mean: self.mean(),
+            p50: self.quantile(0.50),
+            p95: self.quantile(0.95),
+            p99: self.quantile(0.99),
             comm_id,
-            count:   self.count(),
+            count: self.count(),
         }
     }
 }
@@ -211,14 +248,14 @@ pub struct MetricAggregator {
     // HashMap<comm_id: u32, TDigest>
     // comm_id is a u32 integer — no strings ever reach this map.
     // Strings were converted to integers at the eBPF ID-assignment stage.
-    digests:        HashMap<u32, TDigest>,
+    digests: HashMap<u32, TDigest>,
 
     // How many raw values have been pushed since last flush
-    values_pushed:  u64,
+    values_pushed: u64,
 
     // Flush interval — flush() is called externally every 100ms
     // by the background flush task. This timer is for self-monitoring only.
-    last_flush:     Instant,
+    last_flush: Instant,
     flush_interval: Duration,
 
     // CachePadded counters — each on its own 64-byte cache line.
@@ -227,20 +264,20 @@ pub struct MetricAggregator {
     // both cores to invalidate each other's L1 on every increment.
     // CachePadded prevents this entirely.
     pub total_values_processed: CachePadded<AtomicU64>,
-    pub total_flushes:          CachePadded<AtomicU64>,
-    pub total_summaries_sent:   CachePadded<AtomicU64>,
+    pub total_flushes: CachePadded<AtomicU64>,
+    pub total_summaries_sent: CachePadded<AtomicU64>,
 }
 
 impl MetricAggregator {
     pub fn new(flush_interval_ms: u64) -> Self {
         Self {
-            digests:       HashMap::with_capacity(512), // ~512 distinct process types
+            digests: HashMap::with_capacity(512), // ~512 distinct process types
             values_pushed: 0,
-            last_flush:    Instant::now(),
+            last_flush: Instant::now(),
             flush_interval: Duration::from_millis(flush_interval_ms),
             total_values_processed: CachePadded::new(AtomicU64::new(0)),
-            total_flushes:          CachePadded::new(AtomicU64::new(0)),
-            total_summaries_sent:   CachePadded::new(AtomicU64::new(0)),
+            total_flushes: CachePadded::new(AtomicU64::new(0)),
+            total_summaries_sent: CachePadded::new(AtomicU64::new(0)),
         }
     }
 
@@ -284,15 +321,18 @@ impl MetricAggregator {
         let mut summaries = Vec::with_capacity(self.digests.len());
 
         for (&comm_id, digest) in &mut self.digests {
-            if digest.is_empty() { continue; }
+            if digest.is_empty() {
+                continue;
+            }
             summaries.push(digest.summarize(comm_id));
             digest.reset(); // reset in place — capacity preserved, no dealloc
         }
 
         self.values_pushed = 0;
-        self.last_flush    = Instant::now();
+        self.last_flush = Instant::now();
         self.total_flushes.fetch_add(1, Ordering::Relaxed);
-        self.total_summaries_sent.fetch_add(summaries.len() as u64, Ordering::Relaxed);
+        self.total_summaries_sent
+            .fetch_add(summaries.len() as u64, Ordering::Relaxed);
         summaries
     }
 
@@ -314,22 +354,22 @@ impl MetricAggregator {
 
     pub fn stats(&self) -> AggregatorStats {
         AggregatorStats {
-            distinct_comm_ids:       self.digests.len(),
+            distinct_comm_ids: self.digests.len(),
             values_since_last_flush: self.values_pushed,
-            total_processed:         self.total_values_processed.load(Ordering::Relaxed),
-            total_flushes:           self.total_flushes.load(Ordering::Relaxed),
-            total_summaries_sent:    self.total_summaries_sent.load(Ordering::Relaxed),
+            total_processed: self.total_values_processed.load(Ordering::Relaxed),
+            total_flushes: self.total_flushes.load(Ordering::Relaxed),
+            total_summaries_sent: self.total_summaries_sent.load(Ordering::Relaxed),
         }
     }
 }
 
 #[derive(Debug)]
 pub struct AggregatorStats {
-    pub distinct_comm_ids:       usize,
+    pub distinct_comm_ids: usize,
     pub values_since_last_flush: u64,
-    pub total_processed:         u64,
-    pub total_flushes:           u64,
-    pub total_summaries_sent:    u64,
+    pub total_processed: u64,
+    pub total_flushes: u64,
+    pub total_summaries_sent: u64,
 }
 
 // ── Fleet aggregator: merges per-core digests ────────────────
@@ -345,7 +385,9 @@ pub struct FleetAggregator {
 
 impl FleetAggregator {
     pub fn new() -> Self {
-        Self { merged: HashMap::with_capacity(512) }
+        Self {
+            merged: HashMap::with_capacity(512),
+        }
     }
 
     // Ingest summaries from one core's flush output.
@@ -354,7 +396,8 @@ impl FleetAggregator {
     // Shown here with summaries for simplicity.
     pub fn ingest_summaries(&mut self, summaries: Vec<MetricSummary>) {
         for s in summaries {
-            let digest = self.merged
+            let digest = self
+                .merged
                 .entry(s.comm_id)
                 .or_insert_with(|| TDigest::new(100.0));
             // Approximate re-ingest from summary quantiles
@@ -399,21 +442,29 @@ mod tests {
             d.push(i as f64 / 1000.0);
         }
         assert_eq!(d.count(), 1000);
-        assert!((d.min()  - 0.0).abs()   < 0.001);
-        assert!((d.max()  - 0.999).abs() < 0.001);
+        assert!((d.min() - 0.0).abs() < 0.001);
+        assert!((d.max() - 0.999).abs() < 0.001);
         assert!((d.mean() - 0.4995).abs() < 0.01);
         // p50 ≈ 0.50 (within 1%)
-        assert!((d.quantile(0.50) - 0.50).abs() < 0.01,
-            "p50={}", d.quantile(0.50));
+        assert!(
+            (d.quantile(0.50) - 0.50).abs() < 0.01,
+            "p50={}",
+            d.quantile(0.50)
+        );
         // p99 ≈ 0.99 (within 2%)
-        assert!((d.quantile(0.99) - 0.99).abs() < 0.02,
-            "p99={}", d.quantile(0.99));
+        assert!(
+            (d.quantile(0.99) - 0.99).abs() < 0.02,
+            "p99={}",
+            d.quantile(0.99)
+        );
     }
 
     #[test]
     fn tdigest_reset_clears_state() {
         let mut d = TDigest::new(100.0);
-        for i in 0..500 { d.push(i as f64); }
+        for i in 0..500 {
+            d.push(i as f64);
+        }
         assert_eq!(d.count(), 500);
         d.reset();
         assert_eq!(d.count(), 0);
@@ -424,7 +475,7 @@ mod tests {
     fn aggregator_flush_produces_summaries() {
         let mut agg = MetricAggregator::new(100);
         let nginx_id: u32 = 7;
-        let bash_id:  u32 = 42;
+        let bash_id: u32 = 42;
 
         // Record 1000 risk scores for nginx, 500 for bash
         for i in 0..1000u32 {
@@ -439,9 +490,9 @@ mod tests {
 
         let nginx = summaries.iter().find(|s| s.comm_id == nginx_id).unwrap();
         assert_eq!(nginx.count, 1000);
-        assert!((nginx.min  - 0.0).abs()  < 0.002);
-        assert!((nginx.max  - 0.999).abs() < 0.002);
-        assert!((nginx.p99  - 0.99).abs()  < 0.02);
+        assert!((nginx.min - 0.0).abs() < 0.002);
+        assert!((nginx.max - 0.999).abs() < 0.002);
+        assert!((nginx.p99 - 0.99).abs() < 0.02);
 
         // After flush, digests should be reset
         let summaries2 = agg.flush();
@@ -474,9 +525,13 @@ mod tests {
         // 1 MetricSummary = 56 bytes
         // Raw data was 1000 × 4 bytes = 4,000 bytes
         // Reduction: (4000 - 56) / 4000 = 98.6%
-        let raw_bytes     = 1000 * 4;
+        let raw_bytes = 1000 * 4;
         let summary_bytes = std::mem::size_of::<MetricSummary>();
         let reduction = 1.0 - (summary_bytes as f64 / raw_bytes as f64);
-        assert!(reduction > 0.98, "expected >98% reduction, got {:.1}%", reduction * 100.0);
+        assert!(
+            reduction > 0.98,
+            "expected >98% reduction, got {:.1}%",
+            reduction * 100.0
+        );
     }
 }

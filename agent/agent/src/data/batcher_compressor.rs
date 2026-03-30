@@ -25,25 +25,25 @@
 //   Both sides must use identical dictionary (same dict_id).
 // ============================================================
 
+use bytes::{BufMut, Bytes, BytesMut};
+use crossbeam_utils::CachePadded;
 use std::collections::VecDeque;
 use std::io;
-use std::time::{Duration, Instant};
-use bytes::{Bytes, BytesMut, BufMut};
-use crossbeam_utils::CachePadded;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use zstd::bulk::{Compressor, Decompressor};
 
 // -- Flush thresholds -----------------------------------------
-const MAX_BATCH_BYTES:   usize    = 4 * 1024 * 1024;  // 4 MB
-const MAX_FRAME_COUNT:   usize    = 1_000;             // frames per batch
-const FLUSH_INTERVAL:    Duration = Duration::from_millis(500);
+const MAX_BATCH_BYTES: usize = 4 * 1024 * 1024; // 4 MB
+const MAX_FRAME_COUNT: usize = 1_000; // frames per batch
+const FLUSH_INTERVAL: Duration = Duration::from_millis(500);
 
 // -- Compression level thresholds ----------------------------
 // Keyed on BudgetSnapshot utilization fractions.
-const LEVEL_FAST:     i32 = 1; // CPU < 30% remaining
-const LEVEL_DEFAULT:  i32 = 3; // normal
+const LEVEL_FAST: i32 = 1; // CPU < 30% remaining
+const LEVEL_DEFAULT: i32 = 3; // normal
 const LEVEL_BALANCED: i32 = 6; // BW < 40% remaining
-const LEVEL_MAX:      i32 = 9; // BW critically constrained
+const LEVEL_MAX: i32 = 9; // BW critically constrained
 
 // -- Embedded zstd dictionary ---------------------------------
 // In production: generated offline by running:
@@ -62,10 +62,10 @@ static OLOPA_DICT: &[u8] = &[];
 // Frames accumulate in the VecDeque until a flush trigger fires.
 #[derive(Debug)]
 pub struct Frame {
-    pub compressed:  Bytes,   // zstd-compressed protobuf payload
-    pub raw_len:     u32,     // original byte count before compression
-    pub frame_count: u16,     // number of events inside this frame
-    pub level:       i32,     // compression level used
+    pub compressed: Bytes, // zstd-compressed protobuf payload
+    pub raw_len: u32,      // original byte count before compression
+    pub frame_count: u16,  // number of events inside this frame
+    pub level: i32,        // compression level used
 }
 
 // -- BatchHeader — prepended to every flushed batch -----------
@@ -74,15 +74,15 @@ pub struct Frame {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct BatchHeader {
-    pub magic:        [u8; 4],  // b"OLOP"
-    pub schema_ver:   u16,      // increment when frame format changes
-    pub frame_count:  u16,      // number of frames in this batch
-    pub raw_bytes:    u32,      // total uncompressed bytes
-    pub wire_bytes:   u32,      // total compressed bytes (excl. header)
-    pub agent_id:     u32,      // which agent sent this
-    pub ts_ns:        u64,      // batch creation timestamp
-    pub dict_id:      u32,      // zstd dictionary ID (0 = no dict)
-    pub _pad:         [u8; 4],  // align to 40 bytes
+    pub magic: [u8; 4],   // b"OLOP"
+    pub schema_ver: u16,  // increment when frame format changes
+    pub frame_count: u16, // number of frames in this batch
+    pub raw_bytes: u32,   // total uncompressed bytes
+    pub wire_bytes: u32,  // total compressed bytes (excl. header)
+    pub agent_id: u32,    // which agent sent this
+    pub ts_ns: u64,       // batch creation timestamp
+    pub dict_id: u32,     // zstd dictionary ID (0 = no dict)
+    pub _pad: [u8; 4],    // align to 40 bytes
 }
 const _: () = assert!(std::mem::size_of::<BatchHeader>() == 40);
 
@@ -90,46 +90,46 @@ const _: () = assert!(std::mem::size_of::<BatchHeader>() == 40);
 pub struct Batcher {
     // Pending compressed frames — bounded to prevent unbounded growth
     // under backpressure. When full, new frames are dropped (counted).
-    queue:        VecDeque<Frame>,
-    queue_cap:    usize,
+    queue: VecDeque<Frame>,
+    queue_cap: usize,
 
     // Accumulated metrics for the current unflushed window
-    raw_bytes:    usize,
-    wire_bytes:   usize,
-    last_flush:   Instant,
+    raw_bytes: usize,
+    wire_bytes: usize,
+    last_flush: Instant,
 
     // zstd compressor — reused across frames (owns encoder state)
     // Loaded with the domain dictionary at construction.
-    compressor:   DictCompressor,
+    compressor: DictCompressor,
 
     // Agent identity — embedded in every BatchHeader
-    agent_id:     u32,
+    agent_id: u32,
 
     // Metrics — each on its own cache line (no false sharing)
-    pub total_frames_in:    CachePadded<AtomicU64>,
-    pub total_frames_out:   CachePadded<AtomicU64>,
-    pub total_raw_bytes:    CachePadded<AtomicU64>,
-    pub total_wire_bytes:   CachePadded<AtomicU64>,
-    pub total_flushes:      CachePadded<AtomicU64>,
-    pub total_dropped:      CachePadded<AtomicU64>,
+    pub total_frames_in: CachePadded<AtomicU64>,
+    pub total_frames_out: CachePadded<AtomicU64>,
+    pub total_raw_bytes: CachePadded<AtomicU64>,
+    pub total_wire_bytes: CachePadded<AtomicU64>,
+    pub total_flushes: CachePadded<AtomicU64>,
+    pub total_dropped: CachePadded<AtomicU64>,
 }
 
 impl Batcher {
     pub fn new(agent_id: u32, queue_cap: usize) -> Self {
         Self {
-            queue:        VecDeque::with_capacity(queue_cap),
+            queue: VecDeque::with_capacity(queue_cap),
             queue_cap,
-            raw_bytes:    0,
-            wire_bytes:   0,
-            last_flush:   Instant::now(),
-            compressor:   DictCompressor::new(LEVEL_DEFAULT),
+            raw_bytes: 0,
+            wire_bytes: 0,
+            last_flush: Instant::now(),
+            compressor: DictCompressor::new(LEVEL_DEFAULT),
             agent_id,
-            total_frames_in:  CachePadded::new(AtomicU64::new(0)),
+            total_frames_in: CachePadded::new(AtomicU64::new(0)),
             total_frames_out: CachePadded::new(AtomicU64::new(0)),
-            total_raw_bytes:  CachePadded::new(AtomicU64::new(0)),
+            total_raw_bytes: CachePadded::new(AtomicU64::new(0)),
             total_wire_bytes: CachePadded::new(AtomicU64::new(0)),
-            total_flushes:    CachePadded::new(AtomicU64::new(0)),
-            total_dropped:    CachePadded::new(AtomicU64::new(0)),
+            total_flushes: CachePadded::new(AtomicU64::new(0)),
+            total_dropped: CachePadded::new(AtomicU64::new(0)),
         }
     }
 
@@ -140,11 +140,7 @@ impl Batcher {
     //
     // Returns FlushNeeded if a flush trigger fired after this push,
     // so the caller knows to call flush() without waiting for the timer.
-    pub fn push(
-        &mut self,
-        raw:    &[u8],
-        budget: &BudgetSnapshot,
-    ) -> PushResult {
+    pub fn push(&mut self, raw: &[u8], budget: &BudgetSnapshot) -> PushResult {
         // Adapt compression level to current budget state
         let level = self.select_level(budget);
         if level != self.compressor.level {
@@ -153,7 +149,7 @@ impl Batcher {
 
         // Compress the raw bytes using the domain dictionary
         let compressed = match self.compressor.compress(raw) {
-            Ok(c)  => c,
+            Ok(c) => c,
             Err(e) => {
                 // Compression failure — drop this frame, log, continue
                 // Never panic on the hot path
@@ -164,14 +160,15 @@ impl Batcher {
         };
 
         let frame = Frame {
-            raw_len:     raw.len() as u32,
+            raw_len: raw.len() as u32,
             frame_count: 1,
             level,
             compressed: Bytes::from(compressed),
         };
 
         self.total_frames_in.fetch_add(1, Ordering::Relaxed);
-        self.total_raw_bytes.fetch_add(raw.len() as u64, Ordering::Relaxed);
+        self.total_raw_bytes
+            .fetch_add(raw.len() as u64, Ordering::Relaxed);
 
         // Queue full — drop the frame (backpressure from sender)
         if self.queue.len() >= self.queue_cap {
@@ -180,7 +177,7 @@ impl Batcher {
         }
 
         self.wire_bytes += frame.compressed.len();
-        self.raw_bytes  += raw.len();
+        self.raw_bytes += raw.len();
         self.queue.push_back(frame);
 
         // Check flush triggers
@@ -196,31 +193,31 @@ impl Batcher {
     // ready for the gRPC sender. Clears the queue.
     // Returns None if nothing is pending.
     pub fn flush(&mut self) -> Option<BatchOutput> {
-        if self.queue.is_empty() { return None; }
+        if self.queue.is_empty() {
+            return None;
+        }
 
-        let n_frames    = self.queue.len();
-        let raw_total   = self.raw_bytes;
-        let wire_total  = self.wire_bytes;
+        let n_frames = self.queue.len();
+        let raw_total = self.raw_bytes;
+        let wire_total = self.wire_bytes;
 
         // Allocate output buffer: header + all compressed frame bodies
         // Each frame is preceded by a 4-byte length prefix (u32 BE).
-        let capacity = std::mem::size_of::<BatchHeader>()
-            + wire_total
-            + n_frames * 4; // 4-byte length prefix per frame
+        let capacity = std::mem::size_of::<BatchHeader>() + wire_total + n_frames * 4; // 4-byte length prefix per frame
 
         let mut buf = BytesMut::with_capacity(capacity);
 
         // Write BatchHeader
         let header = BatchHeader {
-            magic:       *b"OLOP",
-            schema_ver:  1,
+            magic: *b"OLOP",
+            schema_ver: 1,
             frame_count: n_frames as u16,
-            raw_bytes:   raw_total  as u32,
-            wire_bytes:  wire_total as u32,
-            agent_id:    self.agent_id,
-            ts_ns:       now_ns(),
-            dict_id:     self.compressor.dict_id,
-            _pad:        [0; 4],
+            raw_bytes: raw_total as u32,
+            wire_bytes: wire_total as u32,
+            agent_id: self.agent_id,
+            ts_ns: now_ns(),
+            dict_id: self.compressor.dict_id,
+            _pad: [0; 4],
         };
         // SAFETY: BatchHeader is repr(C), all fields are initialized.
         let header_bytes = unsafe {
@@ -241,26 +238,31 @@ impl Batcher {
         }
 
         // Reset window state
-        self.raw_bytes  = 0;
+        self.raw_bytes = 0;
         self.wire_bytes = 0;
         self.last_flush = Instant::now();
 
-        self.total_wire_bytes.fetch_add(wire_total as u64, Ordering::Relaxed);
+        self.total_wire_bytes
+            .fetch_add(wire_total as u64, Ordering::Relaxed);
         self.total_flushes.fetch_add(1, Ordering::Relaxed);
 
         Some(BatchOutput {
-            payload:        buf.freeze(),
+            payload: buf.freeze(),
             n_frames,
-            n_events:       n_events_total as usize,
-            raw_bytes:      raw_total,
-            wire_bytes:     wire_total,
+            n_events: n_events_total as usize,
+            raw_bytes: raw_total,
+            wire_bytes: wire_total,
             compression_ratio: raw_total as f32 / wire_total.max(1) as f32,
         })
     }
 
     // -- Flush if any trigger is satisfied --------------------
     pub fn flush_if_ready(&mut self) -> Option<BatchOutput> {
-        if self.should_flush() { self.flush() } else { None }
+        if self.should_flush() {
+            self.flush()
+        } else {
+            None
+        }
     }
 
     // -- Three flush triggers ----------------------------------
@@ -278,32 +280,31 @@ impl Batcher {
     // otherwise           → level 3 (default,  ~0.5 µs/KB)
     fn select_level(&self, budget: &BudgetSnapshot) -> i32 {
         let cpu_remaining = budget.remaining[CPU] / budget.total[CPU].max(1.0);
-        let bw_remaining  = budget.remaining[BW]  / budget.total[BW].max(1.0);
+        let bw_remaining = budget.remaining[BW] / budget.total[BW].max(1.0);
 
         if cpu_remaining < 0.30 {
-            return LEVEL_FAST;      // CPU starved — compress fast
+            return LEVEL_FAST; // CPU starved — compress fast
         }
         if bw_remaining < 0.15 {
-            return LEVEL_MAX;       // BW critical — maximum compression
+            return LEVEL_MAX; // BW critical — maximum compression
         }
         if bw_remaining < 0.40 {
-            return LEVEL_BALANCED;  // BW tight — trade CPU for ratio
+            return LEVEL_BALANCED; // BW tight — trade CPU for ratio
         }
         LEVEL_DEFAULT
     }
 
     pub fn stats(&self) -> BatcherStats {
         BatcherStats {
-            queue_depth:       self.queue.len(),
-            queue_cap:         self.queue_cap,
+            queue_depth: self.queue.len(),
+            queue_cap: self.queue_cap,
             raw_bytes_pending: self.raw_bytes,
             wire_bytes_pending: self.wire_bytes,
-            compression_ratio: self.raw_bytes as f32
-                / self.wire_bytes.max(1) as f32,
-            total_frames_in:   self.total_frames_in.load(Ordering::Relaxed),
-            total_frames_out:  self.total_frames_out.load(Ordering::Relaxed),
-            total_flushes:     self.total_flushes.load(Ordering::Relaxed),
-            total_dropped:     self.total_dropped.load(Ordering::Relaxed),
+            compression_ratio: self.raw_bytes as f32 / self.wire_bytes.max(1) as f32,
+            total_frames_in: self.total_frames_in.load(Ordering::Relaxed),
+            total_frames_out: self.total_frames_out.load(Ordering::Relaxed),
+            total_flushes: self.total_flushes.load(Ordering::Relaxed),
+            total_dropped: self.total_dropped.load(Ordering::Relaxed),
         }
     }
 }
@@ -313,10 +314,10 @@ impl Batcher {
 // Reusing the same Compressor across frames avoids re-initialising
 // the zstd context (which allocates ~100KB of internal state).
 struct DictCompressor {
-    inner:   Compressor<'static>,
-    level:   i32,
-    dict_id: u32,  // embedded in zstd frame — backend uses this to
-                   // select the matching decompressor dictionary
+    inner: Compressor<'static>,
+    level: i32,
+    dict_id: u32, // embedded in zstd frame — backend uses this to
+                  // select the matching decompressor dictionary
 }
 
 impl DictCompressor {
@@ -324,15 +325,23 @@ impl DictCompressor {
         // If OLOPA_DICT is empty (test mode), fall back to no dictionary
         if OLOPA_DICT.is_empty() {
             let c = Compressor::new(level).expect("zstd compressor init");
-            return Self { inner: c, level, dict_id: 0 };
+            return Self {
+                inner: c,
+                level,
+                dict_id: 0,
+            };
         }
 
-        let compressor = Compressor::with_dictionary(level, OLOPA_DICT)
-            .expect("zstd dict compressor init");
+        let compressor =
+            Compressor::with_dictionary(level, OLOPA_DICT).expect("zstd dict compressor init");
 
         // The runtime currently does not ship with a trained dictionary artifact.
         // Keep dict_id at 0 until dictionary plumbing is enabled end-to-end.
-        Self { inner: compressor, level, dict_id: 0 }
+        Self {
+            inner: compressor,
+            level,
+            dict_id: 0,
+        }
     }
 
     fn compress(&mut self, src: &[u8]) -> io::Result<Vec<u8>> {
@@ -346,8 +355,8 @@ impl DictCompressor {
         if OLOPA_DICT.is_empty() {
             self.inner = Compressor::new(level).expect("zstd level change");
         } else {
-            self.inner = Compressor::with_dictionary(level, OLOPA_DICT)
-                .expect("zstd dict level change");
+            self.inner =
+                Compressor::with_dictionary(level, OLOPA_DICT).expect("zstd dict level change");
         }
         self.level = level;
     }
@@ -355,12 +364,12 @@ impl DictCompressor {
 
 // -- BatchOutput — what the gRPC sender receives --------------
 pub struct BatchOutput {
-    pub payload:           Bytes,  // ready-to-send wire bytes (header + frames)
-    pub n_frames:          usize,
-    pub n_events:          usize,
-    pub raw_bytes:         usize,
-    pub wire_bytes:        usize,
-    pub compression_ratio: f32,    // raw/wire — e.g. 4.2x = 76% reduction
+    pub payload: Bytes, // ready-to-send wire bytes (header + frames)
+    pub n_frames: usize,
+    pub n_events: usize,
+    pub raw_bytes: usize,
+    pub wire_bytes: usize,
+    pub compression_ratio: f32, // raw/wire — e.g. 4.2x = 76% reduction
 }
 
 // -- Decompressor — used by backend and tests ------------------
@@ -377,8 +386,7 @@ impl DictDecompressor {
             };
         }
         Self {
-            inner: Decompressor::with_dictionary(OLOPA_DICT)
-                .expect("zstd dict decompressor init"),
+            inner: Decompressor::with_dictionary(OLOPA_DICT).expect("zstd dict decompressor init"),
         }
     }
 
@@ -390,7 +398,7 @@ impl DictDecompressor {
 // -- BatchParser — parse a BatchOutput on the backend ---------
 // Reads the BatchHeader then iterates over [len][frame] pairs.
 pub struct BatchParser<'a> {
-    data:   &'a [u8],
+    data: &'a [u8],
     cursor: usize,
     pub header: BatchHeader,
 }
@@ -403,27 +411,33 @@ impl<'a> BatchParser<'a> {
         }
 
         // SAFETY: we checked length, BatchHeader is repr(C) with no padding issues
-        let header: BatchHeader = unsafe {
-            std::ptr::read_unaligned(data.as_ptr() as *const BatchHeader)
-        };
+        let header: BatchHeader =
+            unsafe { std::ptr::read_unaligned(data.as_ptr() as *const BatchHeader) };
 
         if &header.magic != b"OLOP" {
             return Err(ParseError::BadMagic);
         }
 
-        Ok(Self { data, cursor: hdr_size, header })
+        Ok(Self {
+            data,
+            cursor: hdr_size,
+            header,
+        })
     }
 
     // Iterate over compressed frame payloads
     pub fn next_frame(&mut self) -> Option<&'a [u8]> {
-        if self.cursor + 4 > self.data.len() { return None; }
+        if self.cursor + 4 > self.data.len() {
+            return None;
+        }
 
-        let len = u32::from_be_bytes(
-            self.data[self.cursor..self.cursor + 4].try_into().ok()?
-        ) as usize;
+        let len =
+            u32::from_be_bytes(self.data[self.cursor..self.cursor + 4].try_into().ok()?) as usize;
         self.cursor += 4;
 
-        if self.cursor + len > self.data.len() { return None; }
+        if self.cursor + len > self.data.len() {
+            return None;
+        }
         let frame = &self.data[self.cursor..self.cursor + len];
         self.cursor += len;
         Some(frame)
@@ -431,7 +445,10 @@ impl<'a> BatchParser<'a> {
 }
 
 #[derive(Debug)]
-pub enum ParseError { TooShort, BadMagic }
+pub enum ParseError {
+    TooShort,
+    BadMagic,
+}
 
 // -- PushResult — returned by Batcher::push() -----------------
 #[derive(Debug, PartialEq)]
@@ -443,19 +460,19 @@ pub enum PushResult {
 
 // -- Budget type alias (from mdkp_scheduler.rs) ---------------
 // Repeated here to keep this file self-contained.
-pub use crate::data::mdkp_scheduler::{BudgetSnapshot, CPU, BW};
+pub use crate::data::mdkp_scheduler::{BudgetSnapshot, BW, CPU};
 
 #[derive(Debug)]
 pub struct BatcherStats {
-    pub queue_depth:        usize,
-    pub queue_cap:          usize,
-    pub raw_bytes_pending:  usize,
+    pub queue_depth: usize,
+    pub queue_cap: usize,
+    pub raw_bytes_pending: usize,
     pub wire_bytes_pending: usize,
-    pub compression_ratio:  f32,
-    pub total_frames_in:    u64,
-    pub total_frames_out:   u64,
-    pub total_flushes:      u64,
-    pub total_dropped:      u64,
+    pub compression_ratio: f32,
+    pub total_frames_in: u64,
+    pub total_frames_out: u64,
+    pub total_flushes: u64,
+    pub total_dropped: u64,
 }
 
 fn now_ns() -> u64 {
@@ -466,7 +483,7 @@ fn now_ns() -> u64 {
         .unwrap_or(0)
 }
 
-// -- Tests 
+// -- Tests
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -547,7 +564,10 @@ mod tests {
                 break;
             }
         }
-        assert!(flush_signalled, "count trigger should fire at MAX_FRAME_COUNT");
+        assert!(
+            flush_signalled,
+            "count trigger should fire at MAX_FRAME_COUNT"
+        );
     }
 
     #[test]
@@ -636,7 +656,7 @@ mod tests {
 
         let s = batcher.stats();
         assert_eq!(s.total_flushes, 1);
-        assert_eq!(s.queue_depth,   0); // cleared after flush
+        assert_eq!(s.queue_depth, 0); // cleared after flush
         assert_eq!(s.raw_bytes_pending, 0);
     }
 }

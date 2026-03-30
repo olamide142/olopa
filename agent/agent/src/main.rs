@@ -8,8 +8,8 @@
 
 mod agent;
 mod budget_tracker;
-mod probe_manager;
 mod data;
+mod probe_manager;
 mod runtime_ir;
 
 use anyhow::Result;
@@ -23,18 +23,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::agent::{
-    BatcherLike, BatcherPush, EventStoreLike, GraphLike, IngestEvent,
-    MetricAggregatorLike, OlopaAgent, RelevanceScorerLike, RuleEngineLike, RuleMatch,
-    SchedulerLike, SenderLike, SenderStats,
+    BatcherLike, BatcherPush, EventStoreLike, GraphLike, IngestEvent, MetricAggregatorLike,
+    OlopaAgent, RelevanceScorerLike, RuleEngineLike, RuleMatch, SchedulerLike, SenderLike,
+    SenderStats,
 };
 use crate::budget_tracker::{BudgetSnapshot as RuntimeBudgetSnapshot, BudgetTracker};
-use crate::data::csr_graph::{CsrGraph, EdgeKind, EdgeProps, NodeLabel};
-use crate::data::event_store::{ColdEvent, EventStore, HotEvent};
 use crate::data::batcher_compressor::{
     Batcher as CompressorBatcher, PushResult as CompressorPushResult,
 };
+use crate::data::csr_graph::{CsrGraph, EdgeKind, EdgeProps, NodeLabel};
+use crate::data::event_store::{ColdEvent, EventStore, HotEvent};
 use crate::data::mdkp_scheduler::{
-    BudgetSnapshot as SchedulerBudgetSnapshot, N_RESOURCES, Scheduler, SolverTier, TelemetryItem,
+    BudgetSnapshot as SchedulerBudgetSnapshot, Scheduler, SolverTier, TelemetryItem, N_RESOURCES,
 };
 use crate::data::metric_aggregator::{MetricAggregator, MetricSummary};
 use crate::data::relevance_scorer::RelevanceScorer;
@@ -356,7 +356,11 @@ impl MetricAggregatorLike for RealMetricAggregator {
     }
 
     fn flush(&mut self) -> Vec<Vec<u8>> {
-        self.inner.flush().into_iter().map(serialize_metric_summary).collect()
+        self.inner
+            .flush()
+            .into_iter()
+            .map(serialize_metric_summary)
+            .collect()
     }
 }
 
@@ -403,6 +407,7 @@ impl RuleEngineLike for SimpleRuleEngine {
             vec![RuleMatch {
                 rule_id: "simple:fallback".to_string(),
                 rule_name: "simple_fallback_threshold".to_string(),
+                enforce_block_egress: false,
             }]
         } else {
             Vec::new()
@@ -486,7 +491,9 @@ impl BatcherLike for RealBatcher {
     }
 
     fn flush_if_time_triggered(&mut self) -> Option<Vec<u8>> {
-        self.inner.flush_if_ready().map(|batch| batch.payload.to_vec())
+        self.inner
+            .flush_if_ready()
+            .map(|batch| batch.payload.to_vec())
     }
 }
 
@@ -614,7 +621,11 @@ impl GraphDumpWriter {
         }
     }
 
-    fn maybe_dump(&mut self, graph: &CsrGraph, recent_events: &VecDeque<GraphDumpEvent>) -> Result<()> {
+    fn maybe_dump(
+        &mut self,
+        graph: &CsrGraph,
+        recent_events: &VecDeque<GraphDumpEvent>,
+    ) -> Result<()> {
         if let Some(last_dump_at) = self.last_dump_at {
             if last_dump_at.elapsed() < self.min_interval {
                 return Ok(());
@@ -638,7 +649,10 @@ impl GraphDumpWriter {
     }
 }
 
-fn build_graph_dump_payload(graph: &CsrGraph, recent_events: &VecDeque<GraphDumpEvent>) -> GraphDumpPayload {
+fn build_graph_dump_payload(
+    graph: &CsrGraph,
+    recent_events: &VecDeque<GraphDumpEvent>,
+) -> GraphDumpPayload {
     let snapshot = graph.snapshot();
     let mut active_nodes = HashSet::new();
     let mut latest_comm_by_graph_pid: HashMap<u32, String> = HashMap::new();
