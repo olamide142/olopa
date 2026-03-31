@@ -1197,7 +1197,7 @@
       <div class="stack-row">
         <div class="stack-layer">Policy Engine</div>
         <div class="stack-tech">Custom DSL (OIL - Olopa Intent Language) compiler <span class="tag">Cypher
-            triggers</span> <span class="tag">EPL .so</span></div>
+            triggers</span> <span class="tag">Runtime IR</span></div>
         <div class="stack-latency">15–100ms</div>
       </div>
       <div class="stack-row">
@@ -1367,11 +1367,11 @@
         <p style="font-size: 13px; font-weight: 300; color: var(--text-dim); line-height: 1.7; margin-bottom: 20px;">OIL
           is a declarative, compiled security language that replaces four separate policy surfaces - event filtering,
           graph correlation, risk scoring, and response playbooks - with a single coherent grammar. The compiler routes
-          each rule to the optimal runtime: EPL &thinsp;.so (15ns), Tokio stream operator, Memgraph Cypher trigger.</p>
+          each rule to the optimal runtime: Runtime IR (agent evaluator), Tokio stream operator, Memgraph Cypher trigger.</p>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
           <div
             style="font-family: var(--mono); font-size: 10px; color: var(--text-dim); padding: 12px 14px; border: 1px solid var(--border);">
-            EPL HotPath<br><span style="color: var(--text-hi);">~15ns / event</span></div>
+            Runtime IR HotPath<br><span style="color: var(--text-hi);">agent-evaluated</span></div>
           <div
             style="font-family: var(--mono); font-size: 10px; color: var(--text-dim); padding: 12px 14px; border: 1px solid var(--border);">
             Temporal Stream<br><span style="color: var(--text-hi);">&lt; 50ms / window</span></div>

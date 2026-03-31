@@ -1,0 +1,17 @@
+rule "mir_expr_precedence" {
+  from network.flow
+  correlate network.connect as n
+
+  # Parentheses and precedence checks (and/or/not) with list membership.
+  where
+    n.direction == "outbound"
+    and (n.dest.port == 80 or n.dest.port == 443)
+    and not (time.hour < 6 or time.hour > 23)
+    and (
+      n.dest.domain in ["apple.com", "google.com"]
+      or n.dest.domain in ["142.250.129.94"]
+    )
+
+  respond
+    alert low "MIR test: precedence and grouping"
+}

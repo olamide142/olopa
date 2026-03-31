@@ -807,7 +807,7 @@ body > *{position:relative;z-index:1}
         <div class="panel-actions">
           <select class="oil-select" onchange="loadTemplate(this.value)">
             <option value="">— Load Template —</option>
-            <option value="webshell">Webshell Detect (EPL)</option>
+            <option value="webshell">Webshell Detect (Runtime IR)</option>
             <option value="lateral">Lateral Movement (Graph)</option>
             <option value="exfil">Credential Exfil Chain (Temporal)</option>
             <option value="policy">Adaptive Policy</option>
@@ -853,7 +853,7 @@ body > *{position:relative;z-index:1}
     <div class="panel" id="panel-compiler">
       <div class="panel-header">
         <span class="panel-title">Compiler</span>
-        <span class="panel-sub">/ OIL → EPL .so / Cypher / Stream / OPA</span>
+        <span class="panel-sub">/ OIL → Runtime IR / Cypher / Stream / OPA</span>
         <div class="panel-actions">
           <button class="btn" onclick="resetCompiler()">Reset</button>
           <button class="btn btn-primary" id="compile-btn" onclick="runFullCompile()">▶ Run Pipeline</button>
@@ -1010,16 +1010,16 @@ function drawVerdictChart() {
 
 /* events table */
 const EVENTS_DATA = [
-  {ts:'14:32:07',host:'prod-web-01',desc:'nginx:1241 spawned bash:4821',sev:'crit',eng:'EPL'},
+  {ts:'14:32:07',host:'prod-web-01',desc:'nginx:1241 spawned bash:4821',sev:'crit',eng:'RuntimeIR'},
   {ts:'14:31:58',host:'prod-web-01',desc:'bash:4821 connected to 185.220.101.x:4444',sev:'crit',eng:'Graph'},
   {ts:'14:31:44',host:'prod-db-03',desc:'python:8821 read /etc/shadow',sev:'high',eng:'eBPF'},
   {ts:'14:30:21',host:'agent-svc',  desc:'AgentSession:abc called send_email external',sev:'high',eng:'Firewall'},
-  {ts:'14:29:33',host:'prod-api-02',desc:'uid 0→1000 after SUID exec',sev:'high',eng:'EPL'},
+  {ts:'14:29:33',host:'prod-api-02',desc:'uid 0→1000 after SUID exec',sev:'high',eng:'RuntimeIR'},
   {ts:'14:28:11',host:'prod-web-01',desc:'DNS query entropy 4.8 — dga_suspect',sev:'med',eng:'Stream'},
   {ts:'14:27:50',host:'prod-db-03', desc:'10 internal hosts reached via SSH',sev:'high',eng:'Graph'},
   {ts:'14:26:39',host:'prod-api-02',desc:'Outbound bytes > 500KB to ASN 60781',sev:'med',eng:'ClickHouse'},
   {ts:'14:25:02',host:'worker-11',  desc:'Container escape attempt — ns_change',sev:'high',eng:'eBPF'},
-  {ts:'14:24:18',host:'prod-web-01',desc:'Low-prevalence binary from /tmp',sev:'low',eng:'EPL'},
+  {ts:'14:24:18',host:'prod-web-01',desc:'Low-prevalence binary from /tmp',sev:'low',eng:'RuntimeIR'},
 ];
 (function buildEventsTable(){
   const tb = document.getElementById('events-tbody');
@@ -1240,13 +1240,13 @@ function highlightPath(idx){
    INCIDENTS
 ════════════════════════════════════════════════ */
 const INCIDENTS=[
-  {id:'INC-0041',sev:'crit',ttp:'T1059',host:'prod-web-01',engine:'Graph+EPL',
+  {id:'INC-0041',sev:'crit',ttp:'T1059',host:'prod-web-01',engine:'Graph+RuntimeIR',
    title:'Web Shell → Reverse Shell Confirmed',
    ts:'2024-01-15 14:32:07',confidence:0.94,
    mitre:['T1059','T1190'],
    summary:'nginx:1241 spawned bash:4821 which established an outbound connection to 185.220.101.x:4444 within 2 seconds. Cypher trigger fired on SPAWNED edge write. GNN confidence 0.94. Three engines corroborated.',
    timeline:[
-     {type:'alert',ts:'14:32:07',text:'EPL rule webshell_spawn_detect fired — nginx→bash SPAWNED edge'},
+     {type:'alert',ts:'14:32:07',text:'Runtime-IR rule webshell_spawn_detect fired — nginx→bash SPAWNED edge'},
      {type:'alert',ts:'14:32:07',text:'Graph trigger webshell_chain fired — bash→ext CONNECTED_TO edge'},
      {type:'alert',ts:'14:32:09',text:'GNN inference: attack_class=webshell, confidence=0.94'},
      {type:'info', ts:'14:32:10',text:'Detection Orchestrator fused 3 signals → CRITICAL alert'},
@@ -1361,14 +1361,14 @@ function openIncident(inc,el){
    OIL PLAYGROUND
 ════════════════════════════════════════════════ */
 const TEMPLATES={
-webshell:`# Hot-path EPL rule — compiles to .so ~15ns/event
+webshell:`# Hot-path runtime rule — evaluated in agent runtime
 set shells      = ["bash", "sh", "zsh", "python3", "perl", "ruby"]
 set web_servers = ["nginx", "apache2", "httpd", "gunicorn", "uvicorn"]
 
 meta {
   severity    = "critical"
   mitre       = ["T1059", "T1190"]
-  tags        = ["webshell", "epl"]
+  tags        = ["webshell", "runtime_ir"]
 }
 
 rule "webshell_spawn_detect" {
@@ -1691,7 +1691,7 @@ ${(src.match(/([+-]\d+) if ([^\n]+)/g)||[]).slice(0,4).map(m=>`  <div class="mir
   <div class="mir-line">  branch[2]: else → actions[alert]</div>
 </div>
 <div class="mir-block">
-  <div class="mir-label">codegen_target: ${cls==='HotPath'?'EPL → .so':cls==='Graph'?'Cypher → Memgraph trigger':'Stream → Tokio operator'}</div>
+  <div class="mir-label">codegen_target: ${cls==='HotPath'?'Runtime IR → Agent evaluator':cls==='Graph'?'Cypher → Memgraph trigger':'Stream → Tokio operator'}</div>
 </div>`;
 }
 
@@ -1719,7 +1719,7 @@ RETURN web.host_id, shell.comm, ext.ip,
        length(path) AS depth
 ORDER BY ext.threat_intel_score DESC</span>`;
   } else {
-    code=`<span class="codegen-comment">// Generated Rust EPL — compiles to .so</span>
+    code=`<span class="codegen-comment">// Generated runtime evaluator snippet</span>
 <span class="codegen-comment">// Evaluation budget: ~15ns per event</span>
 
 <span class="codegen-output">use std::collections::HashSet;
@@ -1786,7 +1786,7 @@ const OPT_PASSES=[
   {name:'ScoreFunctionFlatten',desc:'Merge constant score deltas'},
 ];
 const TARGETS=[
-  {name:'EPL Compiled (.so)',icon:'⚡',desc:'HotPath rules → Rust shared object'},
+  {name:'Runtime IR Artifact',icon:'⚡',desc:'HotPath rules → runtime evaluator'},
   {name:'Stream Operator',icon:'⟳',desc:'Temporal rules → Tokio async operator'},
   {name:'Cypher Trigger',icon:'◈',desc:'Graph rules → Memgraph trigger'},
   {name:'OPA Rego Module',icon:'⊞',desc:'Policy rules → OPA enforcement'},
@@ -1888,7 +1888,7 @@ function runFullCompile(){
   function runTargets(){
     stageStatus.textContent='codegen';
     const results=[
-      {k:'EPL_Compiled_(_so_)',size:'48 KB',status:'✓ emitted'},
+      {k:'Runtime_IR_Artifact',size:'48 KB',status:'✓ emitted'},
       {k:'Stream_Operator',size:'n/a',status:'not applicable'},
       {k:'Cypher_Trigger',size:'1.2 KB',status:'✓ emitted'},
       {k:'OPA_Rego_Module',size:'n/a',status:'not applicable'},
@@ -1911,7 +1911,7 @@ function runFullCompile(){
       document.getElementById('cp-diag-status').style.color='var(--ok)';
       document.getElementById('cp-diagnostics').innerHTML=`
         <div class="oil-ok" style="font-family:var(--mono);font-size:9px">✓ Compilation successful — all stages passed</div>
-        <div class="oil-info" style="margin-top:6px">EPL .so emitted → /etc/olopa/rules/webshell_spawn_detect.so</div>
+        <div class="oil-info" style="margin-top:6px">Runtime IR emitted → /etc/olopa/runtime-ir.json</div>
         <div class="oil-info">Cypher trigger installed → Memgraph:detect.webshell_spawn_detect</div>
         <div class="oil-info">Rule engine will hot-reload on next 500ms cycle</div>`;
       btn.textContent='▶ Run Pipeline'; btn.disabled=false;

@@ -1,0 +1,18 @@
+rule "mir_expr_string_ops" {
+  from endpoint.process, network.flow
+  correlate
+    process.spawn as p
+    with network.connect as n on n.process_id == p.id
+
+  # String operators lowered through typed MIR:
+  # contains, starts_with, ends_with, and unary not.
+  where
+    n.direction == "outbound"
+    and p.name contains "Chrome"
+    and p.name starts_with "Chrome"
+    and p.name ends_with "IOT"
+    and not (p.name == "systemd")
+
+  respond
+    alert medium "MIR test: string operators"
+}

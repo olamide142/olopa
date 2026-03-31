@@ -1,0 +1,12 @@
+rule "mir_expr_under" {
+  from endpoint.process
+  correlate process.exec as p
+
+  # `under` is currently lowered to starts_with in MIR.
+  where
+    p.name under "Chrome"
+    and not (p.uid == 0)
+
+  respond
+    alert low "MIR test: under lowering"
+}

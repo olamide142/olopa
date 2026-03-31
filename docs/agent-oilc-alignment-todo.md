@@ -7,9 +7,9 @@ Target plan to restore:
 ## Gap Snapshot (Current)
 
 - `oilc` has MIR, but MIR expressions are still `MirExpr::Raw(Expr)` (AST wrapper), not a runtime-executable op graph.
-- `oilc` codegen focuses on text artifacts (`Cypher`, generated Rust source + ad-hoc `.so` compilation) instead of producing a stable runtime IR package.
+- `oilc` codegen focuses on text artifacts (`Cypher`) instead of producing a stable runtime IR package.
 - `agent` hot path calls a single `RuleEngineLike::evaluate(&event) -> bool`; current impl is `SimpleRuleEngine` (`risk_score >= 0.95`) rather than evaluating compiled rules.
-- advanced rule-engine files exist (`epl_rule_engine.rs`) but are not wired into build/runtime path.
+- advanced legacy rule-engine files existed but were not wired into build/runtime path.
 
 ## P0 - Architecture Corrections
 
@@ -22,7 +22,7 @@ Target plan to restore:
   - Add explicit lowering pass AST -> MIR -> RuntimeIR.
 
 - [ ] Stop treating backend text generation as the primary execution path for agent runtime.
-  - Keep Cypher/EPL as optional targets.
+  - Keep Cypher as an optional target.
   - Make RuntimeIR output first-class artifact from `oilc`.
 
 ## P1 - Runtime Integration
@@ -53,8 +53,6 @@ Target plan to restore:
 - [ ] Add benchmark harness for per-event per-rule throughput.
   - Baseline before optimization.
 
-- [ ] Keep `.so` path optional until runtime contract is complete.
-  - If retained, align exported symbol ABI with agent loader and event struct.
 
 ## Immediate First Slice
 

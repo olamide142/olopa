@@ -1,8 +1,9 @@
 //! OIL parser (current stage)
 //!
 //! What this parser currently supports:
-//! - top-level declarations: `use`/`import`, `set`, `rule`
-//! - rule clauses: `from`, `match`, `correlate`, `where`, `within`, `let`, `score`, `respond`
+//! - top-level declarations: `use`/`import`, `set`, `predicate`, `fact`, `rule`
+//! - rule clauses: `from`, `match`, `correlate`, `where`, `within`, `let`, `score`, `respond`,
+//!   `require`, `verify`, `emit`
 //! - Pratt expression parsing for boolean/comparison/membership/string operators
 //! - non-fatal error accumulation with synchronization and capped diagnostics
 //!
@@ -110,12 +111,6 @@ impl Parser {
                     Some(decl) => program.facts.push(decl),
                     None => self.synchronize_top_level(),
                 }
-                continue;
-            }
-
-            // Remaining top-level declarations still intentionally skipped.
-            if self.peek_keyword(Keyword::Template) || self.peek_keyword(Keyword::Policy) {
-                self.skip_unimplemented_top_level_decl();
                 continue;
             }
 
@@ -1469,10 +1464,6 @@ impl Parser {
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
                 },
-                InfixOp::Under => Expr::Under {
-                    path: Box::new(lhs),
-                    prefix: Box::new(rhs),
-                },
                 InfixOp::Matches => {
                     let pattern = expr_to_pattern_string(&rhs.node);
                     Expr::Matches {
@@ -1480,6 +1471,10 @@ impl Parser {
                         pattern,
                     }
                 }
+                InfixOp::Under => Expr::Under {
+                    path: Box::new(lhs),
+                    prefix: Box::new(rhs),
+                },
             };
 
             lhs = Spanned::new(node, span);
@@ -1741,43 +1736,13 @@ impl Parser {
                     || self.peek_keyword(Keyword::Set)
                     || self.peek_keyword(Keyword::Rule)
                     || self.peek_keyword(Keyword::Predicate)
-                    || self.peek_keyword(Keyword::Template)
                     || self.peek_keyword(Keyword::Fact)
-                    || self.peek_keyword(Keyword::Policy)
                 {
                     return;
                 }
                 continue;
             }
             self.advance();
-        }
-    }
-
-    fn skip_unimplemented_top_level_decl(&mut self) {
-        self.advance(); // declaration keyword
-
-        let mut depth = 0usize;
-        while !self.is_at_end() {
-            match self.peek().kind {
-                TokenKind::LBrace => {
-                    depth += 1;
-                    self.advance();
-                }
-                TokenKind::RBrace => {
-                    if depth == 0 {
-                        return;
-                    }
-                    depth -= 1;
-                    self.advance();
-                    if depth == 0 {
-                        return;
-                    }
-                }
-                TokenKind::Newline if depth == 0 => return,
-                _ => {
-                    self.advance();
-                }
-            }
         }
     }
 

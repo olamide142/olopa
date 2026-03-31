@@ -17,7 +17,7 @@
 //      transmit under budget pressure.
 //
 // Score formula (four weighted components):
-//   severity  (30%) — raw risk_score from EPL / node baseline
+//   severity  (30%) — raw risk_score from runtime rule match / node baseline
 //   delta     (40%) — normalised change from last seen value
 //   recency   (20%) — exponential decay by event age
 //   context   (10%) — chain depth bonus
@@ -134,7 +134,7 @@ impl RelevanceScorer {
     //
     // `event_id`   — index into EventStore (already pushed)
     // `vertex_id`  — XDP-tagged graph node ID
-    // `risk_score` — from EPL rule engine or node baseline
+    // `risk_score` — from runtime rule engine or node baseline
     // `ts_ns`      — kernel timestamp (nanoseconds)
     // `chain_depth`— 0 for standalone, >0 if part of a chain
     #[inline]

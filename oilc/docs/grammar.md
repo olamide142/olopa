@@ -233,7 +233,7 @@ Highest to lowest:
 
 ## Important Current Constraints
 
-- `template` and `policy` declarations are tokenized but skipped by the parser.
 - `require` parsing exists, but full semantics are intentionally still partial.
-- Use `not in` (two tokens). `not_in` is tokenized by lexer but not consumed as an infix operator by the parser.
-- Regex literals are tokenized by lexer, but expression parsing currently uses string/path/list style operands for `matches`.
+- Use `not in` (two tokens). The single token `not_in` is not recognized as an operator.
+- `matches` is accepted by the parser but currently lowers to unsupported runtime behavior in the MIR/runtime path.
+- `template`, `policy`, `around`, `over`, `enforce`, `gather`, `at_least`, `any`, `all`, `window`, `between`, `unusual_for`, `rare`, `annotate`, and `redirect` are not language keywords in this implemented subset.

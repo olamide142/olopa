@@ -1,0 +1,16 @@
+rule "mir_expr_time_numeric" {
+  from network.flow
+  correlate network.connect as n
+
+  # Time-context fields + numeric comparisons + numeric membership.
+  where
+    n.direction == "outbound"
+    and time.weekday in ["monday", "tuesday", "wednesday", "thursday", "friday"]
+    and time.hour >= 9
+    and time.hour < 18
+    and time.minute >= 0
+    and n.dest.port in [80, 443, 8080]
+
+  respond
+    alert informational "MIR test: time + numeric comparisons"
+}

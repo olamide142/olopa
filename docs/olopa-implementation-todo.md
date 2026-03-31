@@ -19,14 +19,19 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
 
 ## P1 - Rule Engine and Compiler Correctness
 
-- [ ] Lower MIR expressions beyond `MirExpr::Raw(...)` into executable ops.
+- [x] Lower MIR expressions beyond `MirExpr::Raw(...)` into executable ops.
+  - `MirExpr` now carries typed executable variants (logical/comparison/string/membership/field/literal).
+  - AST->MIR lowering in `oilc/src/mid/mod.rs` now emits typed MIR directly (no AST passthrough wrapper).
+  - Downstream runtime-IR lowering and Cypher codegen now consume typed MIR expressions directly.
 - [ ] Expand runtime evaluator coverage for currently unsupported expression kinds.
 - [ ] Replace hardcoded/special-case field semantics with generic typed field resolution.
   - Progress: domain/IP comparisons now use a generic typed comparator (no `.domain`-only special case).
-  - Remaining: move field lookup/path aliasing itself to typed schema metadata instead of hardcoded matcher branches.
+  - Progress: runtime field lookup/path aliasing moved to a typed, declarative field-spec table (including suffix alias resolution like `n.dest.port`, `proc.pid`, `time.hour`) instead of one-off matcher branches.
+  - Remaining: emit/consume schema-derived field metadata from compiler artifacts so runtime mapping is generated from schema (not static in agent code).
 - [ ] Complete parser semantics for currently partial/unsupported top-level forms (`template`, `policy`) and remaining clause semantics.
-- [ ] Fix flaky/failing EPL shared-object generation test (`generated_epl_shared_object_is_built`).
-- [ ] Complete EPL generated FFI payload decode path (currently TODO in generated source).
+- [x] Remove legacy compiled-shared-object backend path and references.
+  - Deleted the legacy backend module and removed its dedicated CLI mode.
+  - Removed dormant agent rule-engine implementation file tied to that path.
 
 ## P2 - Kernel/Data Plane Hardening
 

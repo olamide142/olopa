@@ -1,0 +1,16 @@
+rule "mir_expr_in_not_in" {
+  from endpoint.process, network.flow
+  correlate
+    process.spawn as p
+    with network.connect as n on n.process_id == p.id
+
+  # Membership checks against literal lists.
+  where
+    n.direction == "outbound"
+    and n.dest.domain in ["apple.com", "linkedin.com", "google.com"]
+    and p.name not in ["apt", "apt-get", "dnf", "yum"]
+    and p.uid in [0, 1000]
+
+  respond
+    alert high "MIR test: in/not in list membership"
+}

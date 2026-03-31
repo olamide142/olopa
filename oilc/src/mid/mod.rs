@@ -128,7 +128,69 @@ pub enum MirAction {
 /// split this into richer low-level op variants.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MirExpr {
-    Raw(Expr),
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Null,
+    Field {
+        path: String,
+    },
+    List(Vec<MirExpr>),
+    And {
+        lhs: Box<MirExpr>,
+        rhs: Box<MirExpr>,
+    },
+    Or {
+        lhs: Box<MirExpr>,
+        rhs: Box<MirExpr>,
+    },
+    Not {
+        expr: Box<MirExpr>,
+    },
+    Eq {
+        lhs: Box<MirExpr>,
+        rhs: Box<MirExpr>,
+    },
+    Ne {
+        lhs: Box<MirExpr>,
+        rhs: Box<MirExpr>,
+    },
+    Lt {
+        lhs: Box<MirExpr>,
+        rhs: Box<MirExpr>,
+    },
+    Gt {
+        lhs: Box<MirExpr>,
+        rhs: Box<MirExpr>,
+    },
+    Le {
+        lhs: Box<MirExpr>,
+        rhs: Box<MirExpr>,
+    },
+    Ge {
+        lhs: Box<MirExpr>,
+        rhs: Box<MirExpr>,
+    },
+    In {
+        lhs: Box<MirExpr>,
+        rhs: Vec<MirExpr>,
+    },
+    StartsWith {
+        lhs: Box<MirExpr>,
+        rhs: Box<MirExpr>,
+    },
+    EndsWith {
+        lhs: Box<MirExpr>,
+        rhs: Box<MirExpr>,
+    },
+    Contains {
+        lhs: Box<MirExpr>,
+        rhs: Box<MirExpr>,
+    },
+    Unsupported {
+        kind: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -309,7 +371,7 @@ fn lower_rule(rule: &RuleDecl, idx: usize) -> MirRule {
             .as_ref()
             .map(|w| {
                 vec![MirPredicate {
-                    expr: MirExpr::Raw(w.node.clone()),
+                    expr: lower_expr(&w.node),
                     cost: PredicateCost::FieldLookup,
                     nullable: false,
                 }]
@@ -325,7 +387,7 @@ fn lower_rule(rule: &RuleDecl, idx: usize) -> MirRule {
                     .requirements
                     .iter()
                     .map(|req| MirRequire {
-                        expr: MirExpr::Raw(req.node.clone()),
+                        expr: lower_expr(&req.node),
                     })
                     .collect()
             })
@@ -335,7 +397,7 @@ fn lower_rule(rule: &RuleDecl, idx: usize) -> MirRule {
             .iter()
             .map(|b| MirLet {
                 name: b.name.node.clone(),
-                value: MirExpr::Raw(b.value.node.clone()),
+                value: lower_expr(&b.value.node),
             })
             .collect(),
         score: rule
@@ -349,7 +411,7 @@ fn lower_rule(rule: &RuleDecl, idx: usize) -> MirRule {
                     .iter()
                     .map(|m| MirScoreModifier {
                         delta: m.delta,
-                        condition: m.condition.as_ref().map(|c| MirExpr::Raw(c.node.clone())),
+                        condition: m.condition.as_ref().map(|c| lower_expr(&c.node)),
                     })
                     .collect(),
             })
@@ -374,11 +436,7 @@ fn lower_rule(rule: &RuleDecl, idx: usize) -> MirRule {
             .iter()
             .map(|e| MirEmit {
                 fact_name: e.fact_name.node.clone(),
-                args: e
-                    .args
-                    .iter()
-                    .map(|a| MirExpr::Raw(a.node.clone()))
-                    .collect(),
+                args: e.args.iter().map(|a| lower_expr(&a.node)).collect(),
                 expires: e.expires.as_ref().map(|x| x.node),
             })
             .collect(),
@@ -389,7 +447,7 @@ fn lower_rule(rule: &RuleDecl, idx: usize) -> MirRule {
                 .arms
                 .iter()
                 .map(|arm| MirBranch {
-                    condition: arm.condition.as_ref().map(|c| MirExpr::Raw(c.node.clone())),
+                    condition: arm.condition.as_ref().map(|c| lower_expr(&c.node)),
                     actions: arm
                         .actions
                         .iter()
@@ -410,10 +468,10 @@ fn lower_body(body: &RuleBody, within: Option<OilDuration>) -> (Vec<MirJoin>, Op
                     let left = &c.arms[idx - 1];
                     let right = &c.arms[idx];
                     let on = match &right.join {
-                        CorrelateJoin::OnPredicate(expr) => Some(MirExpr::Raw(expr.node.clone())),
-                        CorrelateJoin::ByVariable(v) => {
-                            Some(MirExpr::Raw(Expr::Ident(v.node.clone())))
-                        }
+                        CorrelateJoin::OnPredicate(expr) => Some(lower_expr(&expr.node)),
+                        CorrelateJoin::ByVariable(v) => Some(MirExpr::Field {
+                            path: v.node.clone(),
+                        }),
                         CorrelateJoin::None => None,
                     };
                     joins.push(MirJoin {
@@ -437,10 +495,9 @@ fn lower_body(body: &RuleBody, within: Option<OilDuration>) -> (Vec<MirJoin>, Op
                     else {
                         continue;
                     };
-                    let on = m.steps[idx]
-                        .by
-                        .as_ref()
-                        .map(|b| MirExpr::Raw(Expr::Ident(b.node.clone())));
+                    let on = m.steps[idx].by.as_ref().map(|b| MirExpr::Field {
+                        path: b.node.clone(),
+                    });
                     joins.push(MirJoin {
                         left_alias,
                         right_alias,
@@ -460,6 +517,111 @@ fn lower_source(src: &SourceSpec) -> MirSource {
         domain: src.domain.clone(),
         event: src.event.clone(),
         alias: src.alias.as_ref().map(|a| a.node.clone()),
+    }
+}
+
+fn lower_expr(expr: &Expr) -> MirExpr {
+    match expr {
+        Expr::BoolLit(v) => MirExpr::Bool(*v),
+        Expr::IntLit(v) => MirExpr::Int(*v),
+        Expr::FloatLit(v) => MirExpr::Float(*v),
+        Expr::StrLit(v) => MirExpr::Str(v.clone()),
+        Expr::Null => MirExpr::Null,
+        Expr::Path(parts) => MirExpr::Field {
+            path: parts.join("."),
+        },
+        Expr::Ident(name) => MirExpr::Field { path: name.clone() },
+        Expr::Member { base, field } => {
+            if let MirExpr::Field { path } = lower_expr(&base.node) {
+                MirExpr::Field {
+                    path: format!("{path}.{field}"),
+                }
+            } else {
+                MirExpr::Unsupported {
+                    kind: format!("{expr:?}"),
+                }
+            }
+        }
+        Expr::List(items) => MirExpr::List(items.iter().map(|i| lower_expr(&i.node)).collect()),
+        Expr::And(lhs, rhs) => MirExpr::And {
+            lhs: Box::new(lower_expr(&lhs.node)),
+            rhs: Box::new(lower_expr(&rhs.node)),
+        },
+        Expr::Or(lhs, rhs) => MirExpr::Or {
+            lhs: Box::new(lower_expr(&lhs.node)),
+            rhs: Box::new(lower_expr(&rhs.node)),
+        },
+        Expr::Not(inner) => MirExpr::Not {
+            expr: Box::new(lower_expr(&inner.node)),
+        },
+        Expr::Cmp { op, lhs, rhs } => {
+            let lhs = Box::new(lower_expr(&lhs.node));
+            let rhs = Box::new(lower_expr(&rhs.node));
+            match op {
+                crate::ast::CmpOp::Eq => MirExpr::Eq { lhs, rhs },
+                crate::ast::CmpOp::Ne => MirExpr::Ne { lhs, rhs },
+                crate::ast::CmpOp::Lt => MirExpr::Lt { lhs, rhs },
+                crate::ast::CmpOp::Gt => MirExpr::Gt { lhs, rhs },
+                crate::ast::CmpOp::Le => MirExpr::Le { lhs, rhs },
+                crate::ast::CmpOp::Ge => MirExpr::Ge { lhs, rhs },
+            }
+        }
+        Expr::In { lhs, rhs } => {
+            let rhs_items = if let MirExpr::List(items) = lower_expr(&rhs.node) {
+                items
+            } else {
+                vec![lower_expr(&rhs.node)]
+            };
+            MirExpr::In {
+                lhs: Box::new(lower_expr(&lhs.node)),
+                rhs: rhs_items,
+            }
+        }
+        Expr::NotIn { lhs, rhs } => {
+            let rhs_items = if let MirExpr::List(items) = lower_expr(&rhs.node) {
+                items
+            } else {
+                vec![lower_expr(&rhs.node)]
+            };
+            MirExpr::Not {
+                expr: Box::new(MirExpr::In {
+                    lhs: Box::new(lower_expr(&lhs.node)),
+                    rhs: rhs_items,
+                }),
+            }
+        }
+        Expr::StartsWith { lhs, rhs } => MirExpr::StartsWith {
+            lhs: Box::new(lower_expr(&lhs.node)),
+            rhs: Box::new(lower_expr(&rhs.node)),
+        },
+        Expr::EndsWith { lhs, rhs } => MirExpr::EndsWith {
+            lhs: Box::new(lower_expr(&lhs.node)),
+            rhs: Box::new(lower_expr(&rhs.node)),
+        },
+        Expr::Contains { lhs, rhs } => MirExpr::Contains {
+            lhs: Box::new(lower_expr(&lhs.node)),
+            rhs: Box::new(lower_expr(&rhs.node)),
+        },
+        Expr::Under { path, prefix } => MirExpr::StartsWith {
+            lhs: Box::new(lower_expr(&path.node)),
+            rhs: Box::new(lower_expr(&prefix.node)),
+        },
+        Expr::Between { val, lo, hi } => {
+            let val_expr = lower_expr(&val.node);
+            MirExpr::And {
+                lhs: Box::new(MirExpr::Ge {
+                    lhs: Box::new(val_expr.clone()),
+                    rhs: Box::new(lower_expr(&lo.node)),
+                }),
+                rhs: Box::new(MirExpr::Le {
+                    lhs: Box::new(val_expr),
+                    rhs: Box::new(lower_expr(&hi.node)),
+                }),
+            }
+        }
+        other => MirExpr::Unsupported {
+            kind: format!("{other:?}"),
+        },
     }
 }
 

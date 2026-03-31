@@ -1,4 +1,3 @@
-use crate::ast::{ArithOp, CmpOp, Expr};
 use crate::mid::{MirExpr, MirProgram};
 
 #[derive(Debug, Clone, Default)]
@@ -52,184 +51,118 @@ pub fn emit_cypher_program(mir: &MirProgram) -> CypherProgram {
 }
 
 fn emit_expr(expr: &MirExpr) -> String {
-    match expr {
-        MirExpr::Raw(ast) => emit_bool_expr(ast),
-    }
+    emit_bool_expr(expr)
 }
 
-fn emit_bool_expr(expr: &Expr) -> String {
+fn emit_bool_expr(expr: &MirExpr) -> String {
     match expr {
-        Expr::BoolLit(v) => {
+        MirExpr::Bool(v) => {
             if *v {
                 "true".to_string()
             } else {
                 "false".to_string()
             }
         }
-        Expr::And(lhs, rhs) => {
-            format!(
-                "({}) AND ({})",
-                emit_bool_expr(&lhs.node),
-                emit_bool_expr(&rhs.node)
-            )
+        MirExpr::And { lhs, rhs } => {
+            format!("({}) AND ({})", emit_bool_expr(lhs), emit_bool_expr(rhs))
         }
-        Expr::Or(lhs, rhs) => {
-            format!(
-                "({}) OR ({})",
-                emit_bool_expr(&lhs.node),
-                emit_bool_expr(&rhs.node)
-            )
+        MirExpr::Or { lhs, rhs } => {
+            format!("({}) OR ({})", emit_bool_expr(lhs), emit_bool_expr(rhs))
         }
-        Expr::Not(inner) => format!("NOT ({})", emit_bool_expr(&inner.node)),
-        Expr::Cmp { op, lhs, rhs } => {
-            let op = match op {
-                CmpOp::Eq => "=",
-                CmpOp::Ne => "<>",
-                CmpOp::Lt => "<",
-                CmpOp::Gt => ">",
-                CmpOp::Le => "<=",
-                CmpOp::Ge => ">=",
-            };
-            format!(
-                "({} {} {})",
-                emit_value_expr(&lhs.node),
-                op,
-                emit_value_expr(&rhs.node)
-            )
+        MirExpr::Not { expr } => format!("NOT ({})", emit_bool_expr(expr)),
+        MirExpr::Eq { lhs, rhs } => {
+            format!("({} = {})", emit_value_expr(lhs), emit_value_expr(rhs))
         }
-        Expr::In { lhs, rhs } => {
-            format!(
-                "({} IN {})",
-                emit_value_expr(&lhs.node),
-                emit_value_expr(&rhs.node)
-            )
+        MirExpr::Ne { lhs, rhs } => {
+            format!("({} <> {})", emit_value_expr(lhs), emit_value_expr(rhs))
         }
-        Expr::NotIn { lhs, rhs } => {
-            format!(
-                "(NOT ({} IN {}))",
-                emit_value_expr(&lhs.node),
-                emit_value_expr(&rhs.node)
-            )
+        MirExpr::Lt { lhs, rhs } => {
+            format!("({} < {})", emit_value_expr(lhs), emit_value_expr(rhs))
         }
-        Expr::StartsWith { lhs, rhs } => {
+        MirExpr::Gt { lhs, rhs } => {
+            format!("({} > {})", emit_value_expr(lhs), emit_value_expr(rhs))
+        }
+        MirExpr::Le { lhs, rhs } => {
+            format!("({} <= {})", emit_value_expr(lhs), emit_value_expr(rhs))
+        }
+        MirExpr::Ge { lhs, rhs } => {
+            format!("({} >= {})", emit_value_expr(lhs), emit_value_expr(rhs))
+        }
+        MirExpr::In { lhs, rhs } => {
+            let items = rhs
+                .iter()
+                .map(emit_value_expr)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({} IN [{}])", emit_value_expr(lhs), items)
+        }
+        MirExpr::StartsWith { lhs, rhs } => {
             format!(
                 "({} STARTS WITH {})",
-                emit_value_expr(&lhs.node),
-                emit_value_expr(&rhs.node)
+                emit_value_expr(lhs),
+                emit_value_expr(rhs)
             )
         }
-        Expr::EndsWith { lhs, rhs } => {
+        MirExpr::EndsWith { lhs, rhs } => {
             format!(
                 "({} ENDS WITH {})",
-                emit_value_expr(&lhs.node),
-                emit_value_expr(&rhs.node)
+                emit_value_expr(lhs),
+                emit_value_expr(rhs)
             )
         }
-        Expr::Contains { lhs, rhs } => {
+        MirExpr::Contains { lhs, rhs } => {
             format!(
                 "({} CONTAINS {})",
-                emit_value_expr(&lhs.node),
-                emit_value_expr(&rhs.node)
+                emit_value_expr(lhs),
+                emit_value_expr(rhs)
             )
         }
-        Expr::Matches { lhs, pattern } => {
-            format!(
-                "({} =~ {})",
-                emit_value_expr(&lhs.node),
-                quote_cypher_str(pattern)
-            )
-        }
-        Expr::Under { path, prefix } => {
-            format!(
-                "({} STARTS WITH {})",
-                emit_value_expr(&path.node),
-                emit_value_expr(&prefix.node)
-            )
-        }
-        Expr::Between { val, lo, hi } => {
-            format!(
-                "({} >= {} AND {} <= {})",
-                emit_value_expr(&val.node),
-                emit_value_expr(&lo.node),
-                emit_value_expr(&val.node),
-                emit_value_expr(&hi.node)
-            )
-        }
-        Expr::Rare(inner)
-        | Expr::Count(inner)
-        | Expr::Max(inner)
-        | Expr::Min(inner)
-        | Expr::Sum(inner)
-        | Expr::Avg(inner)
-        | Expr::Distinct(inner)
-        | Expr::UnaryMinus(inner) => emit_bool_expr(&inner.node),
-        // For non-boolean expressions in predicate slots, fall back to true.
-        _ => "true".to_string(),
+        MirExpr::Unsupported { .. } => "true".to_string(),
+        _ => format!("({})", emit_value_expr(expr)),
     }
 }
 
-fn emit_value_expr(expr: &Expr) -> String {
+fn emit_value_expr(expr: &MirExpr) -> String {
     match expr {
-        Expr::StrLit(s) => quote_cypher_str(s),
-        Expr::IntLit(n) => n.to_string(),
-        Expr::FloatLit(n) => n.to_string(),
-        Expr::BoolLit(v) => {
+        MirExpr::Str(s) => quote_cypher_str(s),
+        MirExpr::Int(n) => n.to_string(),
+        MirExpr::Float(n) => n.to_string(),
+        MirExpr::Bool(v) => {
             if *v {
                 "true".to_string()
             } else {
                 "false".to_string()
             }
         }
-        Expr::Null => "null".to_string(),
-        Expr::Path(parts) => format!("e.{}", parts.join("_")),
-        Expr::Ident(name) => format!("e.{name}"),
-        Expr::List(items) => {
+        MirExpr::Null => "null".to_string(),
+        MirExpr::Field { path } => emit_field_path(path),
+        MirExpr::List(items) => {
             let items = items
                 .iter()
-                .map(|i| emit_value_expr(&i.node))
+                .map(emit_value_expr)
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("[{items}]")
         }
-        Expr::Member { base, field } => format!("{}.{}", emit_value_expr(&base.node), field),
-        Expr::Call { .. } => "null".to_string(),
-        Expr::BinOp { op, lhs, rhs } => {
-            let op = match op {
-                ArithOp::Add => "+",
-                ArithOp::Sub => "-",
-                ArithOp::Mul => "*",
-                ArithOp::Div => "/",
-            };
-            format!(
-                "({} {} {})",
-                emit_value_expr(&lhs.node),
-                op,
-                emit_value_expr(&rhs.node)
-            )
-        }
-        Expr::DurationLit(d) => d.value.to_string(),
-        Expr::UnaryMinus(inner) => format!("(-{})", emit_value_expr(&inner.node)),
-        Expr::UnusualFor { val, .. } => emit_value_expr(&val.node),
-        Expr::And(_, _)
-        | Expr::Or(_, _)
-        | Expr::Not(_)
-        | Expr::Cmp { .. }
-        | Expr::In { .. }
-        | Expr::NotIn { .. }
-        | Expr::StartsWith { .. }
-        | Expr::EndsWith { .. }
-        | Expr::Contains { .. }
-        | Expr::Matches { .. }
-        | Expr::Under { .. }
-        | Expr::Between { .. }
-        | Expr::Rare(_)
-        | Expr::Count(_)
-        | Expr::Max(_)
-        | Expr::Min(_)
-        | Expr::Sum(_)
-        | Expr::Avg(_)
-        | Expr::Distinct(_) => format!("({})", emit_bool_expr(expr)),
+        MirExpr::And { .. }
+        | MirExpr::Or { .. }
+        | MirExpr::Not { .. }
+        | MirExpr::Eq { .. }
+        | MirExpr::Ne { .. }
+        | MirExpr::Lt { .. }
+        | MirExpr::Gt { .. }
+        | MirExpr::Le { .. }
+        | MirExpr::Ge { .. }
+        | MirExpr::In { .. }
+        | MirExpr::StartsWith { .. }
+        | MirExpr::EndsWith { .. }
+        | MirExpr::Contains { .. } => format!("({})", emit_bool_expr(expr)),
+        MirExpr::Unsupported { .. } => "null".to_string(),
     }
+}
+
+fn emit_field_path(path: &str) -> String {
+    format!("e.{}", path.replace('.', "_"))
 }
 
 fn quote_cypher_str(value: &str) -> String {

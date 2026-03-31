@@ -17,9 +17,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 // Public exports for downstream consumers/tests.
-pub use codegen::{
-    generate_backends, CodegenOutput, CypherArtifact, CypherProgram, EplArtifact, EplProgram,
-};
+pub use codegen::{generate_backends, CodegenOutput, CypherArtifact, CypherProgram};
 pub use mid::{
     lower_program, validate_program, MirProgram, MirValidationDiagnostic, MirValidationKind,
     MirValidationSeverity,
@@ -349,7 +347,7 @@ fn finalize_unit(
         Vec::new()
     };
 
-    // Stage 7: Generate backend artifacts (e.g., EPL/Cypher) from MIR when requested.
+    // Stage 7: Generate backend artifacts (e.g., Cypher) from MIR when requested.
     let codegen = if config.run_codegen {
         mir.as_ref().map(generate_backends)
     } else {

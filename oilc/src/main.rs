@@ -16,7 +16,6 @@ enum OutputMode {
     Mir,
     RuntimeIr,
     Cypher,
-    Epl,
     Codegen,
 }
 
@@ -95,16 +94,9 @@ fn main() -> Result<()> {
     let json_diagnostics = matches!(args.diagnostics_format, DiagnosticsFormat::Json);
     let mode_requires_mir = matches!(
         args.mode,
-        OutputMode::Mir
-            | OutputMode::RuntimeIr
-            | OutputMode::Cypher
-            | OutputMode::Epl
-            | OutputMode::Codegen
+        OutputMode::Mir | OutputMode::RuntimeIr | OutputMode::Cypher | OutputMode::Codegen
     ) || emit_runtime_ir_requested;
-    let mode_requires_codegen = matches!(
-        args.mode,
-        OutputMode::Cypher | OutputMode::Epl | OutputMode::Codegen
-    );
+    let mode_requires_codegen = matches!(args.mode, OutputMode::Cypher | OutputMode::Codegen);
     if mode_requires_mir && args.no_mir {
         return Err(anyhow::anyhow!(
             "--mode {:?} requires MIR; remove --no-mir",
@@ -404,41 +396,12 @@ fn render_mode_output(mode: OutputMode, file: &Path, output: &oilc::CompileOutpu
                 println!("<no codegen produced>");
             }
         }
-        OutputMode::Epl => {
-            println!("--- mode=epl: {} ---", file.display());
-            if let Some(codegen) = &output.codegen {
-                for artifact in &codegen.epl.artifacts {
-                    println!("### {}", artifact.function_name);
-                    if let Some(path) = &artifact.shared_object_path {
-                        println!("// shared_object: {path}");
-                    }
-                    if let Some(err) = &artifact.compile_error {
-                        println!("// compile_error:");
-                        println!("{err}");
-                    }
-                    println!("{}", artifact.source);
-                }
-            } else {
-                println!("<no codegen produced>");
-            }
-        }
         OutputMode::Codegen => {
             println!("--- mode=codegen: {} ---", file.display());
             if let Some(codegen) = &output.codegen {
                 for artifact in &codegen.cypher.artifacts {
                     println!("### cypher: {}", artifact.trigger_name);
                     println!("{}", artifact.cypher);
-                }
-                for artifact in &codegen.epl.artifacts {
-                    println!("### epl: {}", artifact.function_name);
-                    if let Some(path) = &artifact.shared_object_path {
-                        println!("// shared_object: {path}");
-                    }
-                    if let Some(err) = &artifact.compile_error {
-                        println!("// compile_error:");
-                        println!("{err}");
-                    }
-                    println!("{}", artifact.source);
                 }
             } else {
                 println!("<no codegen produced>");

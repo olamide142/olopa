@@ -1,0 +1,30 @@
+rule "mir_expr_score_branching" {
+  from endpoint.process, network.flow
+  correlate
+    process.spawn as p
+    with network.connect as n on n.process_id == p.id
+
+  where
+    n.direction == "outbound"
+    and n.dest.port in [80, 443, 8080]
+
+  let
+    business = time.is_business_hour == true
+    browser = p.name in ["Chrome_ChildIOT", "chrome", "firefox"]
+    high_port = n.dest.port > 1024
+
+  score
+    30
+    +25 if not business
+    +20 if not browser
+    +10 if high_port
+
+  respond
+    if score >= 70 and not business {
+      alert critical "MIR test: score branch critical path"
+    } else if score >= 50 {
+      alert high "MIR test: score branch high path"
+    } else {
+      alert low "MIR test: score branch low path"
+    }
+}
