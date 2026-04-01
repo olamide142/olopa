@@ -188,6 +188,10 @@ pub enum MirExpr {
         lhs: Box<MirExpr>,
         rhs: Box<MirExpr>,
     },
+    Matches {
+        lhs: Box<MirExpr>,
+        pattern: String,
+    },
     Unsupported {
         kind: String,
     },
@@ -602,6 +606,10 @@ fn lower_expr(expr: &Expr) -> MirExpr {
             lhs: Box::new(lower_expr(&lhs.node)),
             rhs: Box::new(lower_expr(&rhs.node)),
         },
+        Expr::Matches { lhs, pattern } => MirExpr::Matches {
+            lhs: Box::new(lower_expr(&lhs.node)),
+            pattern: pattern.clone(),
+        },
         Expr::Under { path, prefix } => MirExpr::StartsWith {
             lhs: Box::new(lower_expr(&path.node)),
             rhs: Box::new(lower_expr(&prefix.node)),
@@ -695,6 +703,29 @@ rule "r" {
         assert_eq!(r.joins[0].left_alias, "p");
         assert_eq!(r.joins[0].right_alias, "n");
         assert!(r.joins[0].on.is_some());
+    }
+
+    #[test]
+    fn lower_matches_expression_into_typed_mir() {
+        let program = parse_program(
+            r#"
+rule "r" {
+  from endpoint.process
+  correlate process.spawn as p
+  where p.name matches "ba*"
+  respond alert high
+}
+"#,
+        );
+        let mir = lower_program(&program);
+        let expr = &mir.rules[0].predicates[0].expr;
+        match expr {
+            MirExpr::Matches { lhs, pattern } => {
+                assert!(matches!(lhs.as_ref(), MirExpr::Field { .. }));
+                assert_eq!(pattern, "ba*");
+            }
+            other => panic!("expected MirExpr::Matches, got {other:?}"),
+        }
     }
 
     #[test]

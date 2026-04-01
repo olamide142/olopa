@@ -151,6 +151,11 @@ pub enum RuntimeExpr {
         lhs: Box<RuntimeExpr>,
         rhs: Box<RuntimeExpr>,
     },
+    /// Pattern match check.
+    Matches {
+        lhs: Box<RuntimeExpr>,
+        pattern: String,
+    },
     /// Placeholder for operators not yet implemented in runtime.
     Unsupported { kind: String },
 }
@@ -490,6 +495,7 @@ fn expr_uses_time_context(expr: &RuntimeExpr) -> bool {
         | RuntimeExpr::Contains { lhs, rhs } => {
             expr_uses_time_context(lhs) || expr_uses_time_context(rhs)
         }
+        RuntimeExpr::Matches { lhs, .. } => expr_uses_time_context(lhs),
         RuntimeExpr::In { lhs, rhs } => {
             expr_uses_time_context(lhs) || rhs.iter().any(expr_uses_time_context)
         }
@@ -525,6 +531,9 @@ fn eval_bool(expr: &RuntimeExpr, event: &IngestEvent) -> bool {
         }
         RuntimeExpr::Contains { lhs, rhs } => {
             to_string(eval_value(lhs, event)).contains(&to_string(eval_value(rhs, event)))
+        }
+        RuntimeExpr::Matches { lhs, pattern } => {
+            value_matches_pattern(eval_value(lhs, event), pattern)
         }
         RuntimeExpr::Unsupported { .. } => false,
         _ => false,
@@ -678,6 +687,7 @@ fn eval_value(expr: &RuntimeExpr, event: &IngestEvent) -> Value {
         | RuntimeExpr::StartsWith { .. }
         | RuntimeExpr::EndsWith { .. }
         | RuntimeExpr::Contains { .. }
+        | RuntimeExpr::Matches { .. }
         | RuntimeExpr::And { .. }
         | RuntimeExpr::Or { .. }
         | RuntimeExpr::Not { .. } => Value::Bool(eval_bool(expr, event)),
@@ -863,6 +873,138 @@ fn to_string(value: Value) -> String {
         }
         Value::Null => String::new(),
     }
+}
+
+/// Evaluate `matches` against a runtime value using a lightweight pattern engine.
+///
+/// Supported forms:
+/// - wildcard literals: `*` (zero or more), `?` (single char)
+/// - grouped alternation produced by parser list patterns: `(a|b|c)`
+fn value_matches_pattern(value: Value, pattern: &str) -> bool {
+    let candidate = to_string(value);
+    pattern_matches(&candidate, pattern)
+}
+
+fn pattern_matches(candidate: &str, pattern: &str) -> bool {
+    if let Some(parts) = parse_grouped_alternation(pattern) {
+        return parts.iter().any(|p| wildcard_match(candidate, p));
+    }
+    wildcard_match(candidate, pattern)
+}
+
+/// Parse simple top-level alternation group `(a|b|c)` with `\` escaping.
+fn parse_grouped_alternation(pattern: &str) -> Option<Vec<String>> {
+    let trimmed = pattern.trim();
+    if !(trimmed.starts_with('(') && trimmed.ends_with(')')) {
+        return None;
+    }
+
+    let inner = &trimmed[1..trimmed.len() - 1];
+    let mut parts = Vec::new();
+    let mut cur = String::new();
+    let mut escaped = false;
+
+    for ch in inner.chars() {
+        if escaped {
+            cur.push(ch);
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '|' => {
+                parts.push(cur);
+                cur = String::new();
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if escaped {
+        cur.push('\\');
+    }
+    parts.push(cur);
+
+    if parts.len() < 2 {
+        return None;
+    }
+
+    Some(parts.into_iter().map(|p| unescape_pattern_part(&p)).collect())
+}
+
+fn unescape_pattern_part(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut escaped = false;
+    for ch in input.chars() {
+        if escaped {
+            out.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+        } else {
+            out.push(ch);
+        }
+    }
+    if escaped {
+        out.push('\\');
+    }
+    out
+}
+
+/// Glob-like wildcard matcher used by runtime `matches`.
+fn wildcard_match(candidate: &str, pattern: &str) -> bool {
+    wildcard_match_bytes(candidate.as_bytes(), pattern.as_bytes())
+}
+
+fn wildcard_match_bytes(candidate: &[u8], pattern: &[u8]) -> bool {
+    let mut ci = 0usize;
+    let mut pi = 0usize;
+    let mut star_pat_idx: Option<usize> = None;
+    let mut star_candidate_idx = 0usize;
+
+    while ci < candidate.len() {
+        if pi < pattern.len() {
+            match pattern[pi] {
+                b'?' => {
+                    ci += 1;
+                    pi += 1;
+                    continue;
+                }
+                b'*' => {
+                    star_pat_idx = Some(pi);
+                    star_candidate_idx = ci;
+                    pi += 1;
+                    continue;
+                }
+                b'\\' if pi + 1 < pattern.len() && pattern[pi + 1] == candidate[ci] => {
+                    ci += 1;
+                    pi += 2;
+                    continue;
+                }
+                literal if literal == candidate[ci] => {
+                    ci += 1;
+                    pi += 1;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(star_idx) = star_pat_idx {
+            pi = star_idx + 1;
+            star_candidate_idx += 1;
+            ci = star_candidate_idx;
+            continue;
+        }
+
+        return false;
+    }
+
+    while pi < pattern.len() && pattern[pi] == b'*' {
+        pi += 1;
+    }
+    pi == pattern.len()
 }
 
 /// Decode null-terminated process `comm` bytes into UTF-8 string.
@@ -1607,6 +1749,96 @@ rule "uid_7" {
         let matches = engine.evaluate_matches(&event);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].rule_name, "process_name_in_list");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn matches_process_name_with_wildcard_pattern() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "rules": [
+    {
+      "id": "rule:0:process_name_matches_wildcard",
+      "name": "process_name_matches_wildcard",
+      "predicates": [
+        {
+          "op": "matches",
+          "lhs": { "op": "field", "path": "p.name" },
+          "pattern": "ba*"
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+        let mut comm = [0u8; 16];
+        comm[..4].copy_from_slice(b"bash");
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 2001,
+            uid: 0,
+            event_type: 1,
+            vertex_id: 2001,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm,
+            comm_id: 0,
+            risk_score: 0.2,
+        };
+
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule_name, "process_name_matches_wildcard");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn matches_process_name_with_alternation_pattern() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "rules": [
+    {
+      "id": "rule:0:process_name_matches_alternation",
+      "name": "process_name_matches_alternation",
+      "predicates": [
+        {
+          "op": "matches",
+          "lhs": { "op": "field", "path": "p.name" },
+          "pattern": "(zsh|bash|sh)"
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+        let mut comm = [0u8; 16];
+        comm[..4].copy_from_slice(b"bash");
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 2002,
+            uid: 0,
+            event_type: 1,
+            vertex_id: 2002,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm,
+            comm_id: 0,
+            risk_score: 0.2,
+        };
+
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule_name, "process_name_matches_alternation");
 
         let _ = fs::remove_file(path);
     }

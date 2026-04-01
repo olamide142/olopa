@@ -126,6 +126,10 @@ body > *{position:relative;z-index:1}
 @keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(29,185,84,0.4)}50%{opacity:0.6;box-shadow:0 0 0 4px rgba(29,185,84,0)}}
 .top-stat-label{color:var(--text-dim)}
 .top-stat-val{color:var(--text-hi)}
+.top-stat.online .top-stat-val{color:var(--ok)}
+.top-stat.offline{border-color:rgba(255,107,115,0.52);background:rgba(255,107,115,0.08)}
+.top-stat.offline .top-stat-val{color:var(--red)}
+.top-stat-dot.offline{background:var(--red);animation:none;box-shadow:none}
 .top-right{display:flex;align-items:center;gap:0;padding-right:16px;border-left:1px solid var(--border);height:100%;padding-left:16px;margin-left:auto}
 .top-time{
   font-family:var(--mono);font-size:10px;color:var(--text-dim);letter-spacing:0.1em;
@@ -209,6 +213,25 @@ body > *{position:relative;z-index:1}
 
 /* ── CONTENT ── */
 #content{flex:1;overflow:hidden;display:flex;flex-direction:column;background:var(--bg3)}
+.conn-banner{
+  display:flex;align-items:center;gap:8px;
+  padding:8px 14px;
+  border-bottom:1px solid rgba(255,107,115,0.34);
+  background:rgba(255,107,115,0.12);
+  color:var(--red);
+  font-family:var(--mono);
+  font-size:9px;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+}
+.conn-banner::before{
+  content:'!';
+  width:16px;height:16px;border-radius:50%;
+  border:1px solid rgba(255,107,115,0.7);
+  display:flex;align-items:center;justify-content:center;
+  font-size:9px;font-weight:700;
+}
+.conn-banner.hidden{display:none}
 .panel{display:none;flex:1;overflow:hidden;flex-direction:column;background:var(--bg3)}
 .panel.active{display:flex;animation:panelIn 180ms ease}
 
@@ -229,11 +252,35 @@ body > *{position:relative;z-index:1}
   border-radius:var(--radius-xs);
 }
 .btn:hover{background:var(--bg3);border-color:var(--text-dim);color:var(--text-hi);transform:translateY(-1px)}
+.btn.active{border-color:var(--accent);color:var(--accent);background:rgba(88,160,255,0.09)}
 .btn-primary{background:var(--accent-cta);border-color:var(--accent-cta);color:#fff}
 .btn-primary:hover{background:var(--accent-cta-hover);border-color:var(--accent-cta-hover);box-shadow:var(--shadow-soft)}
 .btn-danger{background:rgba(224,48,48,0.1);border-color:rgba(224,48,48,0.3);color:var(--red)}
 .btn-danger:hover{background:rgba(224,48,48,0.2)}
 .btn-ok{background:rgba(29,185,84,0.1);border-color:rgba(29,185,84,0.3);color:var(--ok)}
+.inline-control{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  border:1px solid var(--border2);
+  border-radius:var(--radius-xs);
+  padding:4px 8px;
+  background:var(--bg2);
+  font-family:var(--mono);
+  font-size:9px;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+  color:var(--text-dim);
+}
+.mini-select{
+  border:none;
+  outline:none;
+  background:transparent;
+  color:var(--text);
+  font-family:var(--mono);
+  font-size:9px;
+  letter-spacing:0.08em;
+}
 
 /* ══════════════════════════════════════
    METRICS PANEL
@@ -269,6 +316,62 @@ body > *{position:relative;z-index:1}
 .budget-pct{font-family:var(--mono);font-size:9px;color:var(--text);width:30px;text-align:right}
 
 .events-table{margin:0 16px 16px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;box-shadow:var(--shadow-card)}
+.events-toolbar{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  padding:8px 12px;
+  border-bottom:1px solid var(--border);
+  background:var(--bg3);
+}
+.ev-input{
+  min-width:220px;
+  flex:1 1 260px;
+  border:1px solid var(--border2);
+  background:var(--bg2);
+  color:var(--text);
+  padding:6px 8px;
+  border-radius:var(--radius-xs);
+  font-family:var(--mono);
+  font-size:9px;
+  letter-spacing:0.05em;
+}
+.ev-input::placeholder{color:var(--text-dim)}
+.ev-select{
+  border:1px solid var(--border2);
+  background:var(--bg2);
+  color:var(--text);
+  padding:5px 8px;
+  border-radius:var(--radius-xs);
+  font-family:var(--mono);
+  font-size:9px;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+}
+.ev-toggle{
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  font-family:var(--mono);
+  font-size:9px;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+  color:var(--text-dim);
+  border:1px solid var(--border2);
+  border-radius:var(--radius-xs);
+  padding:5px 8px;
+  background:var(--bg2);
+}
+.ev-toggle input{accent-color:var(--accent)}
+.ev-count{
+  margin-left:auto;
+  font-family:var(--mono);
+  font-size:9px;
+  color:var(--text-dim);
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+}
 .ev-table-head{display:grid;grid-template-columns:80px 120px 1fr 80px 70px;padding:8px 14px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:9px;letter-spacing:0.1em;color:var(--text-dim);text-transform:uppercase;gap:10px}
 .ev-table-body{overflow-y:auto;max-height:180px}
 .ev-row{display:grid;grid-template-columns:80px 120px 1fr 80px 70px;padding:7px 14px;border-bottom:1px solid rgba(26,33,48,0.5);font-family:var(--mono);font-size:10px;gap:10px;align-items:center;transition:background 0.1s;cursor:default}
@@ -542,9 +645,13 @@ body > *{position:relative;z-index:1}
   .sb-item{flex:0 0 auto;margin:0;white-space:nowrap}
   .panel-header{padding:10px 12px;gap:8px;flex-wrap:wrap}
   .panel-actions{width:100%;margin-left:0}
+  .inline-control{padding:4px 7px}
   .metrics-grid{grid-template-columns:1fr;padding:12px}
   .metrics-row{padding:0 12px 12px}
   .events-table{margin:0 12px 12px}
+  .events-toolbar{padding:8px 10px}
+  .ev-input{flex:1 1 100%;min-width:0}
+  .ev-count{margin-left:0}
   .ev-table-head,.ev-row{grid-template-columns:68px 90px 1fr 72px 56px;gap:6px;padding:7px 10px}
   .graph-layout{grid-template-columns:1fr}
   .graph-sidebar{border-left:none;border-top:1px solid var(--border);max-height:260px}
@@ -572,26 +679,30 @@ body > *{position:relative;z-index:1}
     <span class="status-pill">Control Plane</span>
   </div>
   <div class="top-center">
-    <div class="top-stat">
-      <div class="top-stat-dot"></div>
+    <div class="top-stat offline" id="top-agent-chip">
+      <div class="top-stat-dot offline" id="top-agent-dot"></div>
       <span class="top-stat-label">agent</span>
-      <span class="top-stat-val">running</span>
+      <span class="top-stat-val" id="top-agent-state">degraded</span>
+    </div>
+    <div class="top-stat offline" id="top-backend-chip">
+      <span class="top-stat-label">backend</span>
+      <span class="top-stat-val" id="top-backend-state">offline</span>
     </div>
     <div class="top-stat">
       <span class="top-stat-label">events/s</span>
-      <span class="top-stat-val" id="ts-eps">24,871</span>
+      <span class="top-stat-val" id="ts-eps">0</span>
     </div>
     <div class="top-stat">
       <span class="top-stat-label">cpu</span>
-      <span class="top-stat-val" id="ts-cpu">3.2%</span>
+      <span class="top-stat-val" id="ts-cpu">0%</span>
     </div>
     <div class="top-stat">
       <span class="top-stat-label">mem</span>
-      <span class="top-stat-val">41 MB</span>
+      <span class="top-stat-val">0</span>
     </div>
     <div class="top-stat">
       <span class="top-stat-label">alerts open</span>
-      <span class="top-stat-val" style="color:var(--warn)" id="ts-alerts">3</span>
+      <span class="top-stat-val" style="color:var(--warn)" id="ts-alerts">0</span>
     </div>
   </div>
   <div class="top-right">
@@ -645,49 +756,60 @@ body > *{position:relative;z-index:1}
       </div>
       <div class="sb-agent-row">
         <span class="sb-agent-key">BACKEND</span>
-        <span class="sb-agent-val" style="color:var(--ok)">8 ms</span>
+        <span class="sb-agent-val" style="color:var(--ok)" id="sb-backend">offline</span>
       </div>
     </div>
   </div>
 
   <!-- CONTENT -->
   <div id="content">
+    <div class="conn-banner" id="conn-banner">Backend offline. Live telemetry paused.</div>
 
     <!-- ═══ METRICS PANEL ═══ -->
     <div class="panel active" id="panel-metrics">
       <div class="panel-header">
         <span class="panel-title">Metrics</span>
-        <span class="panel-sub">/ live · 5s window</span>
+        <span class="panel-sub" id="metrics-sub">/ live · 5s window</span>
         <div class="panel-actions">
-          <button class="btn">Export CSV</button>
-          <button class="btn">1h</button>
-          <button class="btn btn-primary">5m</button>
+          <button class="btn" id="metrics-export-btn" onclick="exportVisibleEventsCsv()">Export CSV</button>
+          <button class="btn" id="metrics-live-toggle" onclick="toggleLiveFeed()">Pause Live</button>
+          <label class="inline-control">
+            <span>Poll</span>
+            <select class="mini-select" id="metrics-poll-select" onchange="setPollIntervalMs(this.value)">
+              <option value="1000">1s</option>
+              <option value="2500" selected>2.5s</option>
+              <option value="5000">5s</option>
+              <option value="10000">10s</option>
+            </select>
+          </label>
+          <button class="btn" id="metrics-window-1h" onclick="setSparkWindow('1h')">1h</button>
+          <button class="btn btn-primary active" id="metrics-window-5m" onclick="setSparkWindow('5m')">5m</button>
         </div>
       </div>
       <div style="flex:1;overflow-y:auto">
         <div class="metrics-grid">
           <div class="metric-card">
             <div class="mc-label">Events / sec</div>
-            <div class="mc-val"><span id="m-eps">24,871</span><span class="mc-unit">eps</span></div>
-            <div class="mc-delta up" id="m-eps-d">↑ 2.1%</div>
+            <div class="mc-val"><span id="m-eps">0</span><span class="mc-unit">eps</span></div>
+            <!-- <div class="mc-delta up" id="m-eps-d">↑ - %</div> -->
             <div class="mc-sparkline"><canvas id="spark-eps" height="28"></canvas></div>
           </div>
           <div class="metric-card">
             <div class="mc-label">Transmitted</div>
-            <div class="mc-val">98<span class="mc-unit">%</span></div>
-            <div class="mc-delta flat">→ stable</div>
+            <div class="mc-val">0<span class="mc-unit">%</span></div>
+            <!-- <div class="mc-delta flat">→ stable</div> -->
             <div class="mc-sparkline"><canvas id="spark-tx" height="28"></canvas></div>
           </div>
           <div class="metric-card">
             <div class="mc-label">Firewall Decisions</div>
-            <div class="mc-val"><span id="m-fw">3,441</span><span class="mc-unit">/s</span></div>
-            <div class="mc-delta up">↑ 0.4%</div>
+            <div class="mc-val"><span id="m-fw"></span><span class="mc-unit">/s</span></div>
+            <!-- <div class="mc-delta up">↑ 0.4%</div> -->
             <div class="mc-sparkline"><canvas id="spark-fw" height="28"></canvas></div>
           </div>
           <div class="metric-card">
             <div class="mc-label">Alerts Fired</div>
-            <div class="mc-val" style="color:var(--warn)">3<span class="mc-unit">open</span></div>
-            <div class="mc-delta dn">↑ +1 this window</div>
+            <div class="mc-val" style="color:var(--warn)">0<span class="mc-unit">open</span></div>
+            <!-- <div class="mc-delta dn">↑ +1 this window</div> -->
             <div class="mc-sparkline"><canvas id="spark-al" height="28"></canvas></div>
           </div>
         </div>
@@ -708,6 +830,27 @@ body > *{position:relative;z-index:1}
           </div>
         </div>
         <div class="events-table">
+          <div class="events-toolbar">
+            <input id="ev-search" class="ev-input" type="text" placeholder="Search host, description, engine, rule">
+            <select id="ev-severity" class="ev-select">
+              <option value="all">Severity: all</option>
+              <option value="crit">Severity: crit</option>
+              <option value="high">Severity: high</option>
+              <option value="med">Severity: med</option>
+              <option value="low">Severity: low</option>
+            </select>
+            <select id="ev-kind" class="ev-select">
+              <option value="all">Kind: all</option>
+              <option value="rule">Kind: rule</option>
+              <option value="net">Kind: net</option>
+              <option value="file">Kind: file</option>
+              <option value="process_exec">Kind: process</option>
+              <option value="heartbeat">Kind: heartbeat</option>
+            </select>
+            <label class="ev-toggle"><input id="ev-alert-only" type="checkbox">alerts only</label>
+            <button class="btn" id="ev-clear-filters">Clear</button>
+            <span class="ev-count" id="ev-count">0 shown</span>
+          </div>
           <div class="ev-table-head">
             <span>Timestamp</span><span>Host</span><span>Description</span><span>Severity</span><span>Engine</span>
           </div>
@@ -785,10 +928,11 @@ body > *{position:relative;z-index:1}
     <div class="panel" id="panel-incidents">
       <div class="panel-header">
         <span class="panel-title">Incidents</span>
-        <span class="panel-sub">/ 3 open · sorted by severity</span>
+        <span class="panel-sub" id="incidents-sub">/ 0 open · live rule matches</span>
         <div class="panel-actions">
-          <button class="btn">Export</button>
-          <button class="btn btn-danger">Triage All</button>
+          <button class="btn" onclick="exportIncidentsJson()">Export</button>
+          <button class="btn" id="inc-reset-btn" onclick="clearIncidentSuppressions()">Reset Suppressions</button>
+          <button class="btn btn-danger" onclick="triageAllIncidents()">Triage All</button>
         </div>
       </div>
       <div class="incidents-layout">
@@ -933,6 +1077,151 @@ for(let i=0;i<30;i++) {
   sparkData.al.push(Math.random()>0.85?1:0);
 }
 
+const executionState = {
+  connected: false,
+  lastTotalRows: null,
+  lastPollMs: null,
+  epsSmoothed: null,
+  pollMs: 2500,
+  pollTimer: null,
+  paused: false,
+  sparkWindow: 120,
+  sparkWindowLabel: '5m',
+  recentLimit: 240,
+  lastKnownRows: 0,
+};
+const eventUiState = {
+  rawRows: [],
+  severity: 'all',
+  kind: 'all',
+  search: '',
+  alertsOnly: false,
+  visibleRows: [],
+};
+
+function trimTrailingSlash(v){ return (v||'').replace(/\/+$/,''); }
+function resolveApiBase() {
+  const params = new URLSearchParams(window.location.search);
+  const fromQuery = trimTrailingSlash(params.get('api'));
+  if (fromQuery) {
+    try { localStorage.setItem('olopa_api_base', fromQuery); } catch (_) {}
+    return fromQuery;
+  }
+  let fromStorage = '';
+  try { fromStorage = trimTrailingSlash(localStorage.getItem('olopa_api_base')); } catch (_) {}
+  if (fromStorage) return fromStorage;
+  if (window.location.protocol.startsWith('http')) return trimTrailingSlash(window.location.origin);
+  return 'http://127.0.0.1:8000';
+}
+const API_BASE = resolveApiBase();
+function apiUrl(path){ return `${API_BASE}${path}`; }
+
+async function fetchApiJson(path){
+  const start = performance.now();
+  const resp = await fetch(apiUrl(path), { cache: 'no-store' });
+  if (!resp.ok) throw new Error(`${path} -> HTTP ${resp.status}`);
+  const data = await resp.json();
+  const latencyMs = Math.round(performance.now() - start);
+  return { data, latencyMs };
+}
+
+function csvEscape(v){
+  const s = String(v ?? '');
+  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+function downloadTextFile(filename, content, mimeType){
+  const blob = new Blob([content], { type: mimeType || 'text/plain;charset=utf-8' });
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 0);
+}
+function pollLabel(ms){
+  if (ms >= 1000 && ms % 1000 === 0) return `${ms / 1000}s`;
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${ms}ms`;
+}
+function trimSparkData(){
+  ['eps', 'tx', 'fw', 'al'].forEach(k => {
+    while (sparkData[k].length > executionState.sparkWindow) sparkData[k].shift();
+  });
+}
+function updateMetricsSubText(){
+  const sub = document.getElementById('metrics-sub');
+  if (!sub) return;
+  if (!executionState.connected) {
+    sub.textContent = `/ backend offline · telemetry paused (${API_BASE})`;
+    return;
+  }
+  if (executionState.paused) {
+    sub.textContent = `/ live paused · ${executionState.lastKnownRows} rows cached · poll ${pollLabel(executionState.pollMs)} · window ${executionState.sparkWindowLabel}`;
+    return;
+  }
+  sub.textContent = `/ live ingest · ${executionState.lastKnownRows} rows · poll ${pollLabel(executionState.pollMs)} · window ${executionState.sparkWindowLabel}`;
+}
+function updateWindowButtons(){
+  const isOneHour = executionState.sparkWindowLabel === '1h';
+  const b1h = document.getElementById('metrics-window-1h');
+  const b5m = document.getElementById('metrics-window-5m');
+  if (b1h) {
+    b1h.classList.toggle('active', isOneHour);
+    b1h.classList.toggle('btn-primary', isOneHour);
+  }
+  if (b5m) {
+    b5m.classList.toggle('active', !isOneHour);
+    b5m.classList.toggle('btn-primary', !isOneHour);
+  }
+}
+function scheduleExecutionPolling(){
+  if (executionState.pollTimer) {
+    clearInterval(executionState.pollTimer);
+    executionState.pollTimer = null;
+  }
+  if (executionState.paused) return;
+  executionState.pollTimer = setInterval(refreshExecutionFeed, executionState.pollMs);
+}
+function setPollIntervalMs(value){
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 250) return;
+  executionState.pollMs = parsed;
+  scheduleExecutionPolling();
+  updateMetricsSubText();
+}
+function setSparkWindow(windowLabel){
+  if (windowLabel === '1h') {
+    executionState.sparkWindow = 600;
+    executionState.sparkWindowLabel = '1h';
+    executionState.recentLimit = 600;
+  } else {
+    executionState.sparkWindow = 120;
+    executionState.sparkWindowLabel = '5m';
+    executionState.recentLimit = 240;
+  }
+  trimSparkData();
+  updateWindowButtons();
+  renderEventsFromState();
+  updateMetricsSubText();
+}
+function setLivePaused(paused){
+  executionState.paused = !!paused;
+  const btn = document.getElementById('metrics-live-toggle');
+  if (btn) {
+    btn.textContent = executionState.paused ? 'Resume Live' : 'Pause Live';
+    btn.classList.toggle('btn-primary', executionState.paused);
+  }
+  scheduleExecutionPolling();
+  updateMetricsSubText();
+  if (!executionState.paused) refreshExecutionFeed();
+}
+function toggleLiveFeed(){
+  setLivePaused(!executionState.paused);
+}
+
 function drawSparkline(canvasId, data, color) {
   const c = document.getElementById(canvasId);
   if(!c) return;
@@ -956,18 +1245,7 @@ function drawSparkline(canvasId, data, color) {
 }
 
 function liveUpdate() {
-  const eps = jitter(epsBase, 0.04);
-  sparkData.eps.push(eps); if(sparkData.eps.length>30)sparkData.eps.shift();
-  sparkData.fw.push(jitter(3441,0.05)); if(sparkData.fw.length>30)sparkData.fw.shift();
-  sparkData.tx.push(jitter(98,0.01)); if(sparkData.tx.length>30)sparkData.tx.shift();
-
-  document.getElementById('m-eps').textContent = eps.toLocaleString();
-  document.getElementById('ts-eps').textContent = eps.toLocaleString();
-  const cpu = (2.8+Math.random()*0.8).toFixed(1)+'%';
-  document.getElementById('ts-cpu').textContent = cpu;
-  document.getElementById('sb-cpu').textContent = cpu;
-  document.getElementById('sb-cpu-bar').style.width = (parseFloat(cpu)*6.4)+'%';
-
+  if (!executionState.connected) return;
   drawSparkline('spark-eps',sparkData.eps,'#2d7dd2');
   drawSparkline('spark-tx',sparkData.tx,'#1db954');
   drawSparkline('spark-fw',sparkData.fw,'#e8a020');
@@ -1008,30 +1286,317 @@ function drawVerdictChart() {
   });
 }
 
-/* events table */
-const EVENTS_DATA = [
-  {ts:'14:32:07',host:'prod-web-01',desc:'nginx:1241 spawned bash:4821',sev:'crit',eng:'RuntimeIR'},
-  {ts:'14:31:58',host:'prod-web-01',desc:'bash:4821 connected to 185.220.101.x:4444',sev:'crit',eng:'Graph'},
-  {ts:'14:31:44',host:'prod-db-03',desc:'python:8821 read /etc/shadow',sev:'high',eng:'eBPF'},
-  {ts:'14:30:21',host:'agent-svc',  desc:'AgentSession:abc called send_email external',sev:'high',eng:'Firewall'},
-  {ts:'14:29:33',host:'prod-api-02',desc:'uid 0→1000 after SUID exec',sev:'high',eng:'RuntimeIR'},
-  {ts:'14:28:11',host:'prod-web-01',desc:'DNS query entropy 4.8 — dga_suspect',sev:'med',eng:'Stream'},
-  {ts:'14:27:50',host:'prod-db-03', desc:'10 internal hosts reached via SSH',sev:'high',eng:'Graph'},
-  {ts:'14:26:39',host:'prod-api-02',desc:'Outbound bytes > 500KB to ASN 60781',sev:'med',eng:'ClickHouse'},
-  {ts:'14:25:02',host:'worker-11',  desc:'Container escape attempt — ns_change',sev:'high',eng:'eBPF'},
-  {ts:'14:24:18',host:'prod-web-01',desc:'Low-prevalence binary from /tmp',sev:'low',eng:'RuntimeIR'},
-];
-(function buildEventsTable(){
+/* events table (live ingest feed) */
+function severityClass(sev){
+  return sev==='crit'?'sev-crit':sev==='high'?'sev-high':sev==='med'?'sev-med':'sev-low';
+}
+function severityLabel(sev){
+  return sev==='crit'?'CRIT':sev==='high'?'HIGH':sev==='med'?'MED':'LOW';
+}
+function toRowTime(unixMs){
+  const d = new Date(unixMs || Date.now());
+  return d.toTimeString().slice(0,8);
+}
+function ruleNameFromEvent(ev){
+  const attrs = (ev && ev.attrs) || {};
+  return attrs.rule_name || attrs.rule_id || '';
+}
+function parseRisk(ev){
+  const attrs = (ev && ev.attrs) || {};
+  const v = parseFloat(attrs.risk_score || '0');
+  return Number.isFinite(v) ? v : 0;
+}
+function smoothEps(rawEps){
+  const raw = Number.isFinite(rawEps) ? Math.max(0, rawEps) : 0;
+  const prev = executionState.epsSmoothed;
+  if (prev === null) {
+    executionState.epsSmoothed = raw;
+    return Math.round(raw);
+  }
+  const target = (raw === 0 && prev > 0) ? (prev * 0.82) : raw;
+  const alpha = 0.28;
+  const next = (alpha * target) + ((1 - alpha) * prev);
+  executionState.epsSmoothed = next;
+  return Math.round(next);
+}
+function toDisplayEvent(row){
+  const ev = row.event || {};
+  const attrs = ev.attrs || {};
+  const rule = ruleNameFromEvent(ev);
+  const risk = parseRisk(ev);
+
+  if (rule) {
+    return {
+      ts: toRowTime(row.ingested_at_unix_ms),
+      host: row.host_id || '-',
+      desc: `rule ${rule} matched (pid=${ev.pid ?? 'n/a'})`,
+      sev: risk >= 0.8 ? 'crit' : (risk >= 0.4 ? 'high' : 'med'),
+      eng: 'RuntimeIR',
+    };
+  }
+
+  if (row.event_kind === 'net') {
+    const dst = ev.dst_ip ? `${ev.dst_ip}${ev.dst_port ? ':' + ev.dst_port : ''}` : 'unknown-dst';
+    return {
+      ts: toRowTime(row.ingested_at_unix_ms),
+      host: row.host_id || '-',
+      desc: `${ev.comm || 'proc'} ${ev.direction || 'net'} ${dst}`,
+      sev: 'med',
+      eng: attrs.wire === 'alert_binary' ? 'RuntimeIR' : 'eBPF',
+    };
+  }
+
+  if (row.event_kind === 'file') {
+    const path = ev.path || '';
+    const high = /shadow|authorized_keys|id_rsa/i.test(path);
+    return {
+      ts: toRowTime(row.ingested_at_unix_ms),
+      host: row.host_id || '-',
+      desc: `${ev.comm || 'proc'} ${ev.operation || 'file_op'} ${path}`.trim(),
+      sev: high ? 'high' : 'low',
+      eng: attrs.wire === 'alert_binary' ? 'RuntimeIR' : 'eBPF',
+    };
+  }
+
+  if (row.event_kind === 'process_exec') {
+    return {
+      ts: toRowTime(row.ingested_at_unix_ms),
+      host: row.host_id || '-',
+      desc: `${ev.comm || 'proc'} exec ${ev.filename || ''}`.trim(),
+      sev: 'low',
+      eng: attrs.wire === 'alert_binary' ? 'RuntimeIR' : 'eBPF',
+    };
+  }
+
+  return {
+    ts: toRowTime(row.ingested_at_unix_ms),
+    host: row.host_id || '-',
+    desc: `heartbeat read=${ev.events_read_total || 0} dropped=${ev.events_dropped_total || 0}`,
+    sev: 'low',
+    eng: 'Agent',
+  };
+}
+function toDisplayEventWithMeta(row){
+  const ev = (row && row.event) || {};
+  const rule = ruleNameFromEvent(ev);
+  const display = toDisplayEvent(row);
+  return {
+    ...display,
+    kind: rule ? 'rule' : (row.event_kind || 'heartbeat'),
+    rule,
+  };
+}
+function readEventFilters(){
+  const severity = document.getElementById('ev-severity')?.value || 'all';
+  const kind = document.getElementById('ev-kind')?.value || 'all';
+  const search = (document.getElementById('ev-search')?.value || '').trim().toLowerCase();
+  const alertsOnly = !!document.getElementById('ev-alert-only')?.checked;
+  eventUiState.severity = severity;
+  eventUiState.kind = kind;
+  eventUiState.search = search;
+  eventUiState.alertsOnly = alertsOnly;
+  return { severity, kind, search, alertsOnly };
+}
+function applyEventFilters(rows){
+  const filters = readEventFilters();
+  return (rows || []).map(toDisplayEventWithMeta).filter(e => {
+    if (filters.alertsOnly && !e.rule) return false;
+    if (filters.severity !== 'all' && e.sev !== filters.severity) return false;
+    if (filters.kind !== 'all' && e.kind !== filters.kind) return false;
+    if (!filters.search) return true;
+    const hay = `${e.ts} ${e.host} ${e.desc} ${e.eng} ${e.kind} ${e.rule}`.toLowerCase();
+    return hay.includes(filters.search);
+  });
+}
+function renderEventsTable(displayRows){
   const tb = document.getElementById('events-tbody');
-  EVENTS_DATA.forEach(e=>{
+  tb.innerHTML = '';
+  const shownCounter = document.getElementById('ev-count');
+  const rows = displayRows || [];
+  const visibleRows = rows.slice(0, executionState.recentLimit);
+  eventUiState.visibleRows = visibleRows;
+  if (shownCounter) shownCounter.textContent = `${visibleRows.length} / ${rows.length} shown`;
+  if (rows.length === 0) {
     const r = document.createElement('div');
-    r.className='ev-row';
-    const sc = e.sev==='crit'?'sev-crit':e.sev==='high'?'sev-high':e.sev==='med'?'sev-med':'sev-low';
-    const sl = e.sev==='crit'?'CRIT':e.sev==='high'?'HIGH':e.sev==='med'?'MED':'LOW';
-    r.innerHTML=`<span class="ev-ts">${e.ts}</span><span class="ev-host">${e.host}</span><span class="ev-desc">${e.desc}</span><span class="sev ${sc}">${sl}</span><span class="ev-engine">${e.eng}</span>`;
+    r.className = 'ev-row';
+    const noDataText = eventUiState.rawRows.length === 0
+      ? 'No execution rows yet'
+      : 'No rows match current filters';
+    r.innerHTML = `<span class="ev-ts">--:--:--</span><span class="ev-host">-</span><span class="ev-desc">${noDataText}</span><span class="sev sev-low">LOW</span><span class="ev-engine">-</span>`;
+    tb.appendChild(r);
+    return;
+  }
+
+  visibleRows.forEach(e => {
+    const r = document.createElement('div');
+    r.className = 'ev-row';
+    const sc = severityClass(e.sev);
+    const sl = severityLabel(e.sev);
+    r.innerHTML = `<span class="ev-ts">${e.ts}</span><span class="ev-host">${e.host}</span><span class="ev-desc">${e.desc}</span><span class="sev ${sc}">${sl}</span><span class="ev-engine">${e.eng}</span>`;
     tb.appendChild(r);
   });
-})();
+}
+function renderEventsFromState(){
+  renderEventsTable(applyEventFilters(eventUiState.rawRows));
+}
+function wireEventControls(){
+  const search = document.getElementById('ev-search');
+  const severity = document.getElementById('ev-severity');
+  const kind = document.getElementById('ev-kind');
+  const alertsOnly = document.getElementById('ev-alert-only');
+  const clearBtn = document.getElementById('ev-clear-filters');
+  if (search) search.addEventListener('input', () => renderEventsFromState());
+  if (severity) severity.addEventListener('change', () => renderEventsFromState());
+  if (kind) kind.addEventListener('change', () => renderEventsFromState());
+  if (alertsOnly) alertsOnly.addEventListener('change', () => renderEventsFromState());
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      if (search) search.value = '';
+      if (severity) severity.value = 'all';
+      if (kind) kind.value = 'all';
+      if (alertsOnly) alertsOnly.checked = false;
+      renderEventsFromState();
+    });
+  }
+}
+function exportVisibleEventsCsv(){
+  const rows = eventUiState.visibleRows || [];
+  if (!rows.length) return;
+  const header = ['timestamp', 'host', 'description', 'severity', 'engine', 'kind', 'rule'];
+  const lines = [header.join(',')];
+  rows.forEach(e => {
+    lines.push([
+      csvEscape(e.ts),
+      csvEscape(e.host),
+      csvEscape(e.desc),
+      csvEscape(severityLabel(e.sev)),
+      csvEscape(e.eng),
+      csvEscape(e.kind),
+      csvEscape(e.rule || ''),
+    ].join(','));
+  });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  downloadTextFile(`olopa-events-${stamp}.csv`, lines.join('\n'), 'text/csv;charset=utf-8');
+}
+
+function setBackendStatus(text, ok){
+  const sb = document.getElementById('sb-backend');
+  const agentChip = document.getElementById('top-agent-chip');
+  const backendChip = document.getElementById('top-backend-chip');
+  const agentDot = document.getElementById('top-agent-dot');
+  const agentState = document.getElementById('top-agent-state');
+  const backendState = document.getElementById('top-backend-state');
+  const banner = document.getElementById('conn-banner');
+
+  if (sb) {
+    sb.textContent = text;
+    sb.style.color = ok ? 'var(--ok)' : 'var(--red)';
+  }
+
+  if (ok) {
+    if (agentChip) { agentChip.classList.remove('offline'); agentChip.classList.add('online'); }
+    if (backendChip) { backendChip.classList.remove('offline'); backendChip.classList.add('online'); }
+    if (agentDot) { agentDot.classList.remove('offline'); }
+    if (agentState) { agentState.textContent = 'running'; }
+    if (backendState) { backendState.textContent = 'online'; }
+    if (banner) { banner.classList.add('hidden'); }
+    return;
+  }
+
+  if (agentChip) { agentChip.classList.remove('online'); agentChip.classList.add('offline'); }
+  if (backendChip) { backendChip.classList.remove('online'); backendChip.classList.add('offline'); }
+  if (agentDot) { agentDot.classList.add('offline'); }
+  if (agentState) { agentState.textContent = 'degraded'; }
+  if (backendState) { backendState.textContent = 'offline'; }
+  if (banner) {
+    banner.textContent = `Backend offline (${API_BASE}). Live telemetry paused.`;
+    banner.classList.remove('hidden');
+  }
+
+  if (graphInited) {
+    graphNodes.forEach(n => { if (n.alert) n._pulse = 0.7; });
+    drawGraph();
+  }
+}
+
+async function refreshExecutionFeed(){
+  if (executionState.paused) return;
+  try {
+    const recentLimit = Math.max(40, Math.min(2000, Number(executionState.recentLimit) || 240));
+    const [stats, summary, recent] = await Promise.all([
+      fetchApiJson('/api/v1/ingest/stats'),
+      fetchApiJson('/api/v1/ingest/summary'),
+      fetchApiJson(`/api/v1/ingest/recent?limit=${recentLimit}`),
+    ]);
+
+    const nowMs = Date.now();
+    let rawEps = 0;
+    if (executionState.lastTotalRows !== null && executionState.lastPollMs !== null) {
+      const deltaRows = Math.max(0, (summary.data.total_rows || 0) - executionState.lastTotalRows);
+      const deltaSec = Math.max(0.001, (nowMs - executionState.lastPollMs) / 1000);
+      rawEps = deltaRows / deltaSec;
+    }
+    const eps = smoothEps(rawEps);
+    executionState.lastTotalRows = summary.data.total_rows || 0;
+    executionState.lastPollMs = nowMs;
+    executionState.lastKnownRows = executionState.lastTotalRows;
+    executionState.connected = true;
+
+    const rows = recent.data.rows || [];
+    const alertRows = rows.filter(r => ruleNameFromEvent(r.event));
+    const alertCount = alertRows.length;
+    const cpu = (2.8 + Math.random() * 0.8).toFixed(1) + '%';
+    const txPct = (() => {
+      const ok = stats.data.accepted_total || 0;
+      const rej = stats.data.rejected_total || 0;
+      const den = ok + rej;
+      return den > 0 ? Math.round((ok * 100) / den) : 100;
+    })();
+
+    document.getElementById('m-eps').textContent = (eps || 0).toLocaleString();
+    document.getElementById('ts-eps').textContent = (eps || 0).toLocaleString();
+    document.getElementById('m-fw').textContent = ((summary.data.by_kind && summary.data.by_kind.net) || 0).toLocaleString();
+    document.getElementById('ts-alerts').textContent = alertCount.toLocaleString();
+    document.getElementById('sb-inc-badge').textContent = alertCount.toLocaleString();
+    document.getElementById('ts-cpu').textContent = cpu;
+    document.getElementById('sb-cpu').textContent = cpu;
+    document.getElementById('sb-cpu-bar').style.width = (parseFloat(cpu) * 6.4) + '%';
+    updateMetricsSubText();
+
+    sparkData.eps.push(Math.max(eps, 0));
+    sparkData.tx.push(txPct);
+    sparkData.fw.push((summary.data.by_kind && summary.data.by_kind.net) || 0);
+    sparkData.al.push(alertCount);
+    trimSparkData();
+
+    eventUiState.rawRows = rows;
+    renderEventsFromState();
+    refreshIncidents(rows);
+    setBackendStatus(`${stats.latencyMs} ms`, true);
+    drawSparkline('spark-eps',sparkData.eps,'#2d7dd2');
+    drawSparkline('spark-tx',sparkData.tx,'#1db954');
+    drawSparkline('spark-fw',sparkData.fw,'#e8a020');
+    drawSparkline('spark-al',sparkData.al,'#e03030');
+    drawVerdictChart();
+  } catch (err) {
+    executionState.connected = false;
+    setBackendStatus('offline', false);
+    updateMetricsSubText();
+    eventUiState.rawRows = [];
+    renderEventsFromState();
+    refreshIncidents([]);
+  }
+}
+function initLiveFeed(){
+  wireEventControls();
+  updateWindowButtons();
+  const pollSelect = document.getElementById('metrics-poll-select');
+  if (pollSelect) pollSelect.value = String(executionState.pollMs);
+  renderEventsFromState();
+  scheduleExecutionPolling();
+  setTimeout(refreshExecutionFeed, 150);
+}
+initLiveFeed();
 
 /* ════════════════════════════════════════════════
    GRAPH ENGINE
@@ -1041,6 +1606,8 @@ let graphDragging=false, gdx=0, gdy=0, selectedNode=null;
 let graphInited=false;
 
 const NODE_COLORS={Process:'#2d7dd2',NetworkEndpoint:'#e8a020',File:'#7c5cbf',User:'#1db954',Secret:'#e03030',AgentSession:'#4ecdc4'};
+setBackendStatus('offline', false);
+updateMetricsSubText();
 
 function makeNodes() {
   const W=700,H=450;
@@ -1115,7 +1682,10 @@ function initGraph() {
   });
   graphInited=true;
   drawGraph();
-  setInterval(()=>{ if(document.getElementById('panel-graph').classList.contains('active')) animateGraph(); },100);
+  setInterval(()=>{
+    if (!executionState.connected) return;
+    if (document.getElementById('panel-graph').classList.contains('active')) animateGraph();
+  },100);
 }
 
 let animT=0;
@@ -1239,103 +1809,383 @@ function highlightPath(idx){
 /* ════════════════════════════════════════════════
    INCIDENTS
 ════════════════════════════════════════════════ */
-const INCIDENTS=[
-  {id:'INC-0041',sev:'crit',ttp:'T1059',host:'prod-web-01',engine:'Graph+RuntimeIR',
-   title:'Web Shell → Reverse Shell Confirmed',
-   ts:'2024-01-15 14:32:07',confidence:0.94,
-   mitre:['T1059','T1190'],
-   summary:'nginx:1241 spawned bash:4821 which established an outbound connection to 185.220.101.x:4444 within 2 seconds. Cypher trigger fired on SPAWNED edge write. GNN confidence 0.94. Three engines corroborated.',
-   timeline:[
-     {type:'alert',ts:'14:32:07',text:'Runtime-IR rule webshell_spawn_detect fired — nginx→bash SPAWNED edge'},
-     {type:'alert',ts:'14:32:07',text:'Graph trigger webshell_chain fired — bash→ext CONNECTED_TO edge'},
-     {type:'alert',ts:'14:32:09',text:'GNN inference: attack_class=webshell, confidence=0.94'},
-     {type:'info', ts:'14:32:10',text:'Detection Orchestrator fused 3 signals → CRITICAL alert'},
-     {type:'info', ts:'14:32:10',text:'Snapshot: process_tree(bash:4821) captured'},
-   ],
-   evidence:{pid:'4821',ppid:'1241',comm:'bash',uid:'33',dst_ip:'185.220.101.47',dst_port:'4444',duration_ms:'2041ms'}
-  },
-  {id:'INC-0040',sev:'high',ttp:'T1552',host:'prod-db-03',engine:'eBPF+Graph',
-   title:'Credential File Access + Exfil Path',
-   ts:'2024-01-15 14:31:44',confidence:0.78,
-   mitre:['T1552','T1041'],
-   summary:'python:8821 read /etc/shadow (uid=0). Graph path traced from Secret node to external NetworkEndpoint via curl subprocess. Risk score 78.',
-   timeline:[
-     {type:'alert',ts:'14:31:44',text:'eBPF openat probe — /etc/shadow opened by python:8821'},
-     {type:'info', ts:'14:31:46',text:'Graph secret exfiltration path query matched'},
-     {type:'alert',ts:'14:31:51',text:'curl:9921 subprocess launched, connected to 45.33.x.x:443'},
-     {type:'info', ts:'14:31:52',text:'Temporal correlate rule credential_access_exfil fired'},
-   ],
-   evidence:{pid:'8821',file:'/etc/shadow',uid:'0',child_proc:'curl:9921',dst_ip:'45.33.32.156'}
-  },
-  {id:'INC-0039',sev:'high',ttp:'LLM01',host:'agent-svc',engine:'Firewall',
-   title:'Agentic Session Data Exfiltration Chain',
-   ts:'2024-01-15 14:30:21',confidence:0.71,
-   mitre:['LLM01','LLM06'],
-   summary:'AgentSession:abc accessed internal Google Drive file, queried customer DB, then attempted send_email to external domain. Firewall DENIED at step 5. Sequence-aware policy exfil-chain-001 matched.',
-   timeline:[
-     {type:'info', ts:'14:30:01',text:'Tool call: read_gdrive("Q4_revenue.xlsx") — ALLOW'},
-     {type:'info', ts:'14:30:08',text:'Tool call: query_customer_db("SELECT * FROM contacts") — ALLOW'},
-     {type:'alert',ts:'14:30:21',text:'Tool call: send_email(to=external@domain.com) — DENY by exfil-chain-001'},
-     {type:'ok',   ts:'14:30:21',text:'Firewall blocked. Alert generated. Session flagged.'},
-   ],
-   evidence:{session_id:'abc',agent:'gpt-4o',rule:'exfil-chain-001',verdict:'DENY',chain_len:'5'}
-  },
-];
+const incidentState = {
+  selectedId: null,
+  incidents: [],
+  dismissedAfterMsById: {},
+};
+const INCIDENT_STORAGE_KEY = 'olopa_incidents_v1';
+const INCIDENT_DISMISS_KEY = 'olopa_incident_dismissed_after_v1';
 
-(function buildIncidents(){
-  const list=document.getElementById('incident-list');
-  INCIDENTS.forEach((inc,i)=>{
-    const el=document.createElement('div');
-    el.className=`incident-item${inc.sev==='crit'?' crit':''}`;
-    el.innerHTML=`
+function loadJsonStorage(key, fallback){
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+function saveJsonStorage(key, value){
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {}
+}
+function saveIncidentState(){
+  saveJsonStorage(INCIDENT_STORAGE_KEY, {
+    selectedId: incidentState.selectedId,
+    incidents: incidentState.incidents,
+  });
+  saveJsonStorage(INCIDENT_DISMISS_KEY, incidentState.dismissedAfterMsById);
+}
+function loadIncidentState(){
+  const saved = loadJsonStorage(INCIDENT_STORAGE_KEY, null);
+  const dismissed = loadJsonStorage(INCIDENT_DISMISS_KEY, {});
+  if (saved && Array.isArray(saved.incidents)) {
+    incidentState.incidents = saved.incidents;
+    incidentState.selectedId = saved.selectedId || null;
+  }
+  incidentState.dismissedAfterMsById = (dismissed && typeof dismissed === 'object') ? dismissed : {};
+}
+
+function escapeHtml(value){
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+function toTsFull(unixMs){
+  const d = new Date(unixMs || Date.now());
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+}
+function incidentSeverityLabel(sev){
+  return sev === 'crit' ? 'CRITICAL' : (sev === 'high' ? 'HIGH' : (sev === 'med' ? 'MEDIUM' : 'LOW'));
+}
+function incidentSeverityFromRisk(risk){
+  if (risk >= 0.8) return 'crit';
+  if (risk >= 0.45) return 'high';
+  if (risk >= 0.2) return 'med';
+  return 'low';
+}
+function stableIncidentId(key){
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const n = (h >>> 0) % 100000;
+  return `INC-${String(n).padStart(5, '0')}`;
+}
+function parseMitre(attrs){
+  const keys = ['mitre', 'mitre_ids', 'mitre_techniques', 'ttp'];
+  const out = [];
+  keys.forEach(k => {
+    const raw = attrs[k];
+    if (!raw) return;
+    String(raw)
+      .split(/[,\s]+/)
+      .map(v => v.trim())
+      .filter(Boolean)
+      .forEach(v => {
+        if (/^[A-Za-z0-9.-]+$/.test(v)) out.push(v);
+      });
+  });
+  return Array.from(new Set(out));
+}
+function eventSummary(row){
+  const ev = row.event || {};
+  if (row.event_kind === 'net') {
+    const dst = ev.dst_ip ? `${ev.dst_ip}${ev.dst_port ? ':' + ev.dst_port : ''}` : 'unknown-dst';
+    return `${ev.comm || 'proc'} ${ev.direction || 'net'} ${dst}`;
+  }
+  if (row.event_kind === 'file') {
+    return `${ev.comm || 'proc'} ${ev.operation || 'file_op'} ${ev.path || ''}`.trim();
+  }
+  if (row.event_kind === 'process_exec') {
+    return `${ev.comm || 'proc'} exec ${ev.filename || ''}`.trim();
+  }
+  return `${row.event_kind || 'event'} observed`;
+}
+function buildIncidentEvidence(row, matchCount){
+  const ev = row.event || {};
+  const attrs = ev.attrs || {};
+  const out = {
+    host: row.host_id || '-',
+    tenant: row.tenant_id || '-',
+    rule: ruleNameFromEvent(ev) || '-',
+    matches: String(matchCount),
+    last_seen: toTsFull(row.ingested_at_unix_ms),
+  };
+  if (ev.pid !== undefined) out.pid = String(ev.pid);
+  if (ev.tgid !== undefined) out.tgid = String(ev.tgid);
+  if (ev.ppid !== undefined) out.ppid = String(ev.ppid);
+  if (ev.uid !== undefined) out.uid = String(ev.uid);
+  if (ev.comm) out.comm = ev.comm;
+  if (ev.filename) out.filename = ev.filename;
+  if (ev.path) out.path = ev.path;
+  if (ev.operation) out.operation = ev.operation;
+  if (ev.direction) out.direction = ev.direction;
+  if (ev.protocol) out.protocol = ev.protocol;
+  if (ev.src_ip || ev.src_port) out.src = `${ev.src_ip || '-'}${ev.src_port ? ':' + ev.src_port : ''}`;
+  if (ev.dst_ip || ev.dst_port) out.dst = `${ev.dst_ip || '-'}${ev.dst_port ? ':' + ev.dst_port : ''}`;
+  if (attrs.risk_score) out.risk_score = attrs.risk_score;
+  if (attrs.verdict) out.verdict = attrs.verdict;
+  if (row.batch_id) out.batch_id = row.batch_id;
+  return out;
+}
+function buildIncidents(rows){
+  const groups = new Map();
+
+  (rows || []).forEach(row => {
+    const ev = row.event || {};
+    const attrs = ev.attrs || {};
+    const rule = ruleNameFromEvent(ev);
+    if (!rule) return;
+
+    const host = row.host_id || '-';
+    const key = `${host}::${rule}`;
+    const risk = parseRisk(ev);
+    const ts = row.ingested_at_unix_ms || Date.now();
+    const mitre = parseMitre(attrs);
+
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        rule,
+        host,
+        rows: [],
+        latestTs: 0,
+        maxRisk: 0,
+        mitre: new Set(),
+        kinds: new Set(),
+      });
+    }
+
+    const g = groups.get(key);
+    g.rows.push(row);
+    g.latestTs = Math.max(g.latestTs, ts);
+    g.maxRisk = Math.max(g.maxRisk, risk);
+    g.kinds.add(row.event_kind || 'event');
+    mitre.forEach(m => g.mitre.add(m));
+  });
+
+  return Array.from(groups.values())
+    .map(g => {
+      g.rows.sort((a, b) => (a.ingested_at_unix_ms || 0) - (b.ingested_at_unix_ms || 0));
+      const latest = g.rows[g.rows.length - 1];
+      const sev = incidentSeverityFromRisk(g.maxRisk);
+      const mitre = Array.from(g.mitre);
+      const confidence = Math.max(0.2, Math.min(0.99, g.maxRisk || 0.5));
+      const timeline = g.rows.slice(-8).map((row, i, arr) => {
+        const ev = row.event || {};
+        const attrs = ev.attrs || {};
+        const risk = parseRisk(ev);
+        let text = eventSummary(row);
+        if (attrs.verdict) text += ` · verdict=${attrs.verdict}`;
+        if (risk > 0) text += ` · risk=${risk.toFixed(2)}`;
+        return {
+          type: i === arr.length - 1 ? 'alert' : 'info',
+          ts: toRowTime(row.ingested_at_unix_ms),
+          text,
+        };
+      });
+      return {
+        id: stableIncidentId(g.key),
+        sev,
+        host: g.host,
+        engine: 'RuntimeIR',
+        title: `Rule ${g.rule} matched`,
+        ts: toTsFull(g.latestTs),
+        confidence,
+        mitre,
+        summary: `Rule ${g.rule} fired ${g.rows.length} time(s) on ${g.host}. Event kinds: ${Array.from(g.kinds).join(', ')}.`,
+        timeline,
+        evidence: buildIncidentEvidence(latest, g.rows.length),
+        latestTs: g.latestTs,
+      };
+    })
+    .sort((a, b) => b.latestTs - a.latestTs);
+}
+function mergeIncidentTimeline(prevTimeline, nextTimeline){
+  const out = [];
+  const seen = new Set();
+  [...(prevTimeline || []), ...(nextTimeline || [])].forEach(item => {
+    const key = `${item.ts}|${item.text}|${item.type}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(item);
+  });
+  return out.slice(-12);
+}
+function isIncidentSuppressed(inc){
+  const dismissedAfter = incidentState.dismissedAfterMsById[inc.id];
+  if (!dismissedAfter) return false;
+  return (inc.latestTs || 0) <= dismissedAfter;
+}
+function mergeIncidentsSticky(freshIncidents){
+  const filteredFresh = (freshIncidents || []).filter(inc => !isIncidentSuppressed(inc));
+  if (filteredFresh.length === 0) {
+    return incidentState.incidents.slice().sort((a, b) => b.latestTs - a.latestTs);
+  }
+
+  const prevById = new Map(incidentState.incidents.map(inc => [inc.id, inc]));
+  const mergedFresh = filteredFresh.map(inc => {
+    const prev = prevById.get(inc.id);
+    if (!prev) return inc;
+    return {
+      ...prev,
+      ...inc,
+      latestTs: Math.max(prev.latestTs || 0, inc.latestTs || 0),
+      confidence: Math.max(prev.confidence || 0, inc.confidence || 0),
+      timeline: mergeIncidentTimeline(prev.timeline, inc.timeline),
+      evidence: { ...(prev.evidence || {}), ...(inc.evidence || {}) },
+    };
+  });
+
+  const freshIds = new Set(mergedFresh.map(inc => inc.id));
+  const retainedOld = incidentState.incidents.filter(inc => !freshIds.has(inc.id));
+
+  return [...mergedFresh, ...retainedOld].sort((a, b) => b.latestTs - a.latestTs);
+}
+function syncIncidentCounters(){
+  const openCount = incidentState.incidents.length;
+  document.getElementById('incidents-sub').textContent = `/ ${openCount} open · awaiting manual resolve`;
+  document.getElementById('sb-inc-badge').textContent = openCount.toLocaleString();
+}
+function dismissIncident(incidentId){
+  incidentState.dismissedAfterMsById[incidentId] = Date.now();
+  incidentState.incidents = incidentState.incidents.filter(inc => inc.id !== incidentId);
+  if (incidentState.selectedId === incidentId) {
+    incidentState.selectedId = incidentState.incidents[0]?.id || null;
+  }
+  renderIncidentList(incidentState.incidents);
+  syncIncidentCounters();
+  if (incidentState.selectedId) {
+    openIncident(incidentState.selectedId);
+  } else {
+    document.getElementById('incident-detail').innerHTML = `<div class="id-empty">Waiting for live rule matches…</div>`;
+  }
+  saveIncidentState();
+}
+function exportIncidentsJson(){
+  const payload = {
+    exported_at: new Date().toISOString(),
+    open_incident_count: incidentState.incidents.length,
+    incidents: incidentState.incidents,
+  };
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  downloadTextFile(
+    `olopa-incidents-${stamp}.json`,
+    JSON.stringify(payload, null, 2),
+    'application/json;charset=utf-8'
+  );
+}
+function triageAllIncidents(){
+  if (!incidentState.incidents.length) return;
+  const now = Date.now();
+  incidentState.incidents.forEach(inc => {
+    incidentState.dismissedAfterMsById[inc.id] = now;
+  });
+  incidentState.incidents = [];
+  incidentState.selectedId = null;
+  renderIncidentList([]);
+  syncIncidentCounters();
+  document.getElementById('incident-detail').innerHTML = `<div class="id-empty">All incidents triaged. Waiting for new rule matches…</div>`;
+  saveIncidentState();
+}
+function clearIncidentSuppressions(){
+  incidentState.dismissedAfterMsById = {};
+  saveIncidentState();
+  const btn = document.getElementById('inc-reset-btn');
+  if (btn) {
+    const prev = btn.textContent;
+    btn.textContent = 'Suppressions Cleared';
+    setTimeout(() => { btn.textContent = prev; }, 1200);
+  }
+  refreshIncidents(eventUiState.rawRows || []);
+}
+function renderIncidentList(incidents){
+  const list = document.getElementById('incident-list');
+  list.innerHTML = '';
+
+  if (incidents.length === 0) {
+    list.innerHTML = `<div class="id-empty" style="min-height:120px;padding:16px">No incidents yet</div>`;
+    return;
+  }
+
+  incidents.forEach(inc => {
+    const sc = severityClass(inc.sev);
+    const sl = severityLabel(inc.sev);
+    const el = document.createElement('div');
+    el.className = `incident-item${inc.sev === 'crit' ? ' crit' : ''}`;
+    el.dataset.incidentId = inc.id;
+    el.innerHTML = `
       <div class="ii-head">
-        <span class="ii-id">${inc.id}</span>
-        <span class="sev ${inc.sev==='crit'?'sev-crit':inc.sev==='high'?'sev-high':'sev-med'}">${inc.sev.toUpperCase()}</span>
+        <span class="ii-id">${escapeHtml(inc.id)}</span>
+        <span class="sev ${sc}">${sl}</span>
       </div>
-      <div class="ii-title">${inc.title}</div>
+      <div class="ii-title">${escapeHtml(inc.title)}</div>
       <div class="ii-meta">
-        <span class="ii-ttp">${inc.mitre.join(' · ')}</span>
-        <span class="ii-host">${inc.host}</span>
+        <span class="ii-ttp">${escapeHtml(inc.mitre.length ? inc.mitre.join(' · ') : 'NO-TTP')}</span>
+        <span class="ii-host">${escapeHtml(inc.host)}</span>
       </div>`;
-    el.onclick=()=>openIncident(inc,el);
+    el.onclick = () => openIncident(inc.id);
     list.appendChild(el);
   });
-})();
+}
+function openIncident(incidentId){
+  const inc = incidentState.incidents.find(i => i.id === incidentId);
+  const detail = document.getElementById('incident-detail');
+  if (!inc) {
+    detail.innerHTML = `<div class="id-empty">← Select an incident</div>`;
+    return;
+  }
 
-function openIncident(inc,el){
-  document.querySelectorAll('.incident-item').forEach(e=>e.classList.remove('active'));
-  el.classList.add('active');
-  const sc=inc.sev==='crit'?'sev-crit':inc.sev==='high'?'sev-high':'sev-med';
-  const sl=inc.sev.toUpperCase();
-  const evHtml=Object.entries(inc.evidence).map(([k,v])=>`
-    <div class="ev-box"><div class="ev-box-label">${k}</div><div class="ev-box-val">${v}</div></div>
+  incidentState.selectedId = incidentId;
+  document.querySelectorAll('#incident-list .incident-item').forEach(e => {
+    e.classList.toggle('active', e.dataset.incidentId === incidentId);
+  });
+  saveIncidentState();
+
+  const sc = severityClass(inc.sev);
+  const sl = incidentSeverityLabel(inc.sev);
+  const evHtml = Object.entries(inc.evidence).map(([k, v]) => `
+    <div class="ev-box"><div class="ev-box-label">${escapeHtml(k)}</div><div class="ev-box-val">${escapeHtml(v)}</div></div>
   `).join('');
-  const tlHtml=inc.timeline.map(t=>`
+  const tlHtml = inc.timeline.map(t => `
     <div class="tl-item">
-      <div class="tl-dot ${t.type}">${t.type==='alert'?'!':t.type==='ok'?'✓':'i'}</div>
+      <div class="tl-dot ${t.type}">${t.type === 'alert' ? '!' : (t.type === 'ok' ? '✓' : 'i')}</div>
       <div class="tl-content">
-        <div class="tl-ts">${t.ts}</div>
-        <div class="tl-text">${t.text}</div>
+        <div class="tl-ts">${escapeHtml(t.ts)}</div>
+        <div class="tl-text">${escapeHtml(t.text)}</div>
       </div>
     </div>
   `).join('');
-  document.getElementById('incident-detail').innerHTML=`
+
+  detail.innerHTML = `
     <div class="id-section">
       <div class="id-alert-box">
         <div class="id-alert-head">
           <span class="sev ${sc}">${sl}</span>
-          <span class="id-alert-title">${inc.title}</span>
+          <span class="id-alert-title">${escapeHtml(inc.title)}</span>
         </div>
         <div class="id-props">
-          <div class="id-prop"><div class="id-prop-k">Incident ID</div><div class="id-prop-v">${inc.id}</div></div>
-          <div class="id-prop"><div class="id-prop-k">Timestamp</div><div class="id-prop-v">${inc.ts}</div></div>
-          <div class="id-prop"><div class="id-prop-k">Host</div><div class="id-prop-v">${inc.host}</div></div>
-          <div class="id-prop"><div class="id-prop-k">Engine</div><div class="id-prop-v">${inc.engine}</div></div>
-          <div class="id-prop"><div class="id-prop-k">Confidence</div><div class="id-prop-v">${(inc.confidence*100).toFixed(0)}%</div></div>
-          <div class="id-prop"><div class="id-prop-k">MITRE</div><div class="id-prop-v">${inc.mitre.join(', ')}</div></div>
+          <div class="id-prop"><div class="id-prop-k">Incident ID</div><div class="id-prop-v">${escapeHtml(inc.id)}</div></div>
+          <div class="id-prop"><div class="id-prop-k">Timestamp</div><div class="id-prop-v">${escapeHtml(inc.ts)}</div></div>
+          <div class="id-prop"><div class="id-prop-k">Host</div><div class="id-prop-v">${escapeHtml(inc.host)}</div></div>
+          <div class="id-prop"><div class="id-prop-k">Engine</div><div class="id-prop-v">${escapeHtml(inc.engine)}</div></div>
+          <div class="id-prop"><div class="id-prop-k">Confidence</div><div class="id-prop-v">${(inc.confidence * 100).toFixed(0)}%</div></div>
+          <div class="id-prop"><div class="id-prop-k">MITRE</div><div class="id-prop-v">${escapeHtml(inc.mitre.join(', ') || '-')}</div></div>
         </div>
       </div>
-      <p style="font-family:var(--mono);font-size:9px;color:var(--text-dim);line-height:1.7">${inc.summary}</p>
+      <p style="font-family:var(--mono);font-size:9px;color:var(--text-dim);line-height:1.7">${escapeHtml(inc.summary)}</p>
     </div>
     <div class="id-section">
       <div class="id-section-title">Timeline</div>
@@ -1351,10 +2201,40 @@ function openIncident(inc,el){
         <button class="btn btn-danger" onclick="this.textContent='Isolating…';setTimeout(()=>this.textContent='✓ Isolated',1200)">Isolate Host</button>
         <button class="btn" onclick="this.textContent='Snapshotting…';setTimeout(()=>this.textContent='✓ Captured',1000)">Snapshot Graph</button>
         <button class="btn" onclick="this.textContent='Opening…';setTimeout(()=>this.textContent='✓ Case #224',900)">Open Case</button>
-        <button class="btn btn-ok">Mark False Positive</button>
+        <button class="btn btn-ok" onclick="dismissIncident('${escapeHtml(inc.id)}')">Resolve Incident</button>
       </div>
     </div>
   `;
+}
+function refreshIncidents(rows){
+  const freshIncidents = buildIncidents(rows || []);
+  const incidents = mergeIncidentsSticky(freshIncidents);
+  incidentState.incidents = incidents;
+
+  renderIncidentList(incidents);
+  syncIncidentCounters();
+
+  if (incidents.length === 0) {
+    incidentState.selectedId = null;
+    document.getElementById('incident-detail').innerHTML = `<div class="id-empty">Waiting for live rule matches…</div>`;
+    saveIncidentState();
+    return;
+  }
+
+  const selectedStillExists = incidents.some(i => i.id === incidentState.selectedId);
+  const nextId = selectedStillExists ? incidentState.selectedId : incidents[0].id;
+  openIncident(nextId);
+  saveIncidentState();
+}
+
+loadIncidentState();
+renderIncidentList(incidentState.incidents);
+syncIncidentCounters();
+if (incidentState.incidents.length > 0) {
+  const selectedStillExists = incidentState.incidents.some(i => i.id === incidentState.selectedId);
+  openIncident(selectedStillExists ? incidentState.selectedId : incidentState.incidents[0].id);
+} else {
+  document.getElementById('incident-detail').innerHTML = `<div class="id-empty">Waiting for live rule matches…</div>`;
 }
 
 /* ════════════════════════════════════════════════

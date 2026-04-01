@@ -1,0 +1,10 @@
+rule "matches_process_wildcard" {
+  from endpoint.process
+  correlate process.exec as p
+
+  # Wildcard: * = zero or more chars
+  where p.name matches "ba*"
+
+  respond
+    alert high "matches test: wildcard ba*"
+}

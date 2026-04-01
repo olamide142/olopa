@@ -1,0 +1,10 @@
+rule "matches_process_single_char" {
+  from endpoint.process
+  correlate process.exec as p
+
+  # Wildcard: ? = exactly one char
+  where p.name matches "b?sh"
+
+  respond
+    alert medium "matches test: single-char b?sh"
+}

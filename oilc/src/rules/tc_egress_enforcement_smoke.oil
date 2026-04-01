@@ -1,0 +1,58 @@
+// TC egress enforcement smoke pack.
+// Every rule below includes `block egress ...` so the agent marks the match as
+// enforceable and executes the egress-block path.
+
+// Rule 1: any outbound flow to domains in this set should be blocked.
+rule "tc_block_domain_list" {
+  from network.flow
+  correlate
+    network.connect as n
+
+  where
+    n.direction == "outbound"
+    and n.dest.domain in ["apple.com", "linkedin.com", "wwe.com"]
+
+  respond
+    alert critical "TC smoke: blocked outbound domain from set"
+    block egress n.dest.domain
+    open case "TC smoke: outbound domain blocked"
+}
+
+// Rule 2: direct IP+port control for packet-level validation scenarios.
+rule "tc_block_ip_and_port" {
+  from network.flow
+  correlate
+    network.connect as n
+
+  where
+    n.direction == "outbound"
+    and n.dest.ip in ["142.250.129.94", "1.1.1.1"]
+    and n.dest.port in [80, 443, 8080]
+
+  respond
+    alert critical "TC smoke: blocked outbound destination IP+port"
+    block egress n.dest.ip
+    open case "TC smoke: outbound ip/port blocked"
+}
+
+// Rule 3: example time-scoped policy for dev users during office hours.
+rule "tc_block_dev_business_hours" {
+  from endpoint.process, network.flow
+
+  correlate
+    process.spawn as p
+    with network.connect as n on n.process_id == p.id
+
+  where
+    n.direction == "outbound"
+    and p.uid in [1000]
+    and n.dest.domain in ["linkedin.com"]
+    and time.weekday in ["monday", "tuesday", "wednesday", "thursday", "friday"]
+    and time.hour >= 9
+    and time.hour < 17
+
+  respond
+    alert high "TC smoke: business-hours dev outbound block"
+    block egress n.dest.domain
+    open case "TC smoke: business-hours outbound blocked"
+}

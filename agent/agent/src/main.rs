@@ -13,15 +13,18 @@ mod probe_manager;
 mod runtime_ir;
 mod transport;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+use aya::maps::HashMap as BpfHashMap;
 use clap::Parser;
 use log::{info, warn};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::net::Ipv4Addr;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use olopa_common::{TcEgressPolicyKey, TC_POLICY_ACTION_DENY};
 
 use crate::agent::{
     BatcherLike, BatcherPush, EventStoreLike, GraphLike, IngestEvent, MetricAggregatorLike,
@@ -116,6 +119,13 @@ async fn main() -> Result<()> {
         .map(ProbeEventArg::as_selection)
         .collect::<Vec<_>>();
     probe_manager.attach_selected(agent.bpf_mut(), &opt.iface, &probe_selections)?;
+    if probe_selections.contains(&ProbeSelection::Tc) {
+        install_tc_deny_rules_from_env(agent.bpf_mut())?;
+    } else if std::env::var("OLOPA_TC_DENY_RULES").is_ok() {
+        warn!(
+            "OLOPA_TC_DENY_RULES is set but tc probe was not selected; deny rules are not enforced"
+        );
+    }
     info!(
         "olopa-agent initialized and probes attached | probe_events={}",
         format_probe_selections(&probe_selections)
@@ -508,6 +518,218 @@ fn env_flag(key: &str) -> bool {
             matches!(value.as_str(), "1" | "true" | "yes" | "on")
         }
         Err(_) => false,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+/// Parsed userspace representation of one deny rule from `OLOPA_TC_DENY_RULES`.
+struct TcDenyRule {
+    /// Process id to match in TC enforcement key.
+    pid: u32,
+    /// Canonical IPv4 `u32` form (`u32::from(Ipv4Addr)`).
+    dst_ip: u32,
+    /// Host-order destination port.
+    dst_port: u16,
+    /// Layer-4 protocol number (6=tcp, 17=udp).
+    proto: u8,
+}
+
+impl TcDenyRule {
+    /// Convert parsed userspace rule into shared map key format.
+    fn as_policy_key(self) -> TcEgressPolicyKey {
+        TcEgressPolicyKey {
+            pid: self.pid,
+            dst_ip: self.dst_ip,
+            dst_port: self.dst_port,
+            proto: self.proto,
+            _pad: 0,
+        }
+    }
+}
+
+/// Load deny policy rules from environment into the kernel TC policy map.
+///
+/// Env format:
+/// - `OLOPA_TC_DENY_RULES='pid=123,ip=1.2.3.4,port=443,proto=tcp;pid=77,ip=8.8.8.8,port=53,proto=udp'`
+///
+/// Behavior:
+/// - Missing env var: no-op.
+/// - Parse errors: startup fails loudly to avoid silently partial policy.
+/// - Successful parse: each rule inserted with deny action byte.
+fn install_tc_deny_rules_from_env(bpf: &mut aya::Ebpf) -> Result<()> {
+    let raw = match std::env::var("OLOPA_TC_DENY_RULES") {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+
+    let rules = parse_tc_deny_rules(&raw)?;
+    if rules.is_empty() {
+        warn!("OLOPA_TC_DENY_RULES is set but no rules were parsed");
+        return Ok(());
+    }
+
+    let map_data = bpf
+        .map_mut("TC_EGRESS_POLICY")
+        .context("TC_EGRESS_POLICY map not found in loaded eBPF object")?;
+    let mut policy_map: BpfHashMap<_, TcEgressPolicyKey, u8> =
+        BpfHashMap::try_from(map_data).context("failed to open TC_EGRESS_POLICY map")?;
+
+    for rule in rules {
+        let key = rule.as_policy_key();
+        policy_map
+            .insert(key, TC_POLICY_ACTION_DENY, 0)
+            .with_context(|| {
+                format!(
+                    "failed to insert tc deny rule pid={} dst_ip={} dst_port={} proto={}",
+                    rule.pid,
+                    Ipv4Addr::from(rule.dst_ip),
+                    rule.dst_port,
+                    rule.proto
+                )
+            })?;
+        info!(
+            "tc-policy deny installed pid={} dst={}:{} proto={}",
+            rule.pid,
+            Ipv4Addr::from(rule.dst_ip),
+            rule.dst_port,
+            rule.proto
+        );
+    }
+
+    Ok(())
+}
+
+/// Parse deny rule spec string into normalized rule structs.
+///
+/// Grammar (semicolon-separated entries):
+/// - entry = `pid=<u32>,ip=<ipv4>,port=<u16>[,proto=<tcp|udp|6|17>]`
+/// - supported key aliases: `dst_ip`, `dst_port`
+///
+/// Notes:
+/// - `proto` defaults to tcp (`6`) when omitted.
+/// - unknown keys and missing required keys are treated as hard errors.
+fn parse_tc_deny_rules(raw: &str) -> Result<Vec<TcDenyRule>> {
+    let mut out = Vec::new();
+    for (idx, entry_raw) in raw.split(';').enumerate() {
+        let entry = entry_raw.trim();
+        if entry.is_empty() {
+            continue;
+        }
+
+        let mut pid: Option<u32> = None;
+        let mut dst_ip: Option<u32> = None;
+        let mut dst_port: Option<u16> = None;
+        let mut proto: Option<u8> = None;
+
+        for part in entry.split(',') {
+            let token = part.trim();
+            if token.is_empty() {
+                continue;
+            }
+            let Some((k, v)) = token.split_once('=') else {
+                bail!(
+                    "invalid TC deny rule token '{}': expected key=value format in rule '{}'",
+                    token,
+                    entry
+                );
+            };
+            let key = k.trim().to_ascii_lowercase();
+            let value = v.trim();
+            match key.as_str() {
+                "pid" => {
+                    pid = Some(value.parse::<u32>().with_context(|| {
+                        format!("invalid pid '{}' in TC deny rule '{}'", value, entry)
+                    })?);
+                }
+                "ip" | "dst_ip" => {
+                    let ip = value.parse::<Ipv4Addr>().with_context(|| {
+                        format!("invalid IPv4 '{}' in TC deny rule '{}'", value, entry)
+                    })?;
+                    dst_ip = Some(u32::from(ip));
+                }
+                "port" | "dst_port" => {
+                    dst_port = Some(value.parse::<u16>().with_context(|| {
+                        format!("invalid port '{}' in TC deny rule '{}'", value, entry)
+                    })?);
+                }
+                "proto" => {
+                    proto = Some(parse_l4_proto(value).with_context(|| {
+                        format!("invalid proto '{}' in TC deny rule '{}'", value, entry)
+                    })?);
+                }
+                _ => {
+                    bail!(
+                        "unsupported key '{}' in TC deny rule '{}' (supported: pid, ip, port, proto)",
+                        key,
+                        entry
+                    );
+                }
+            }
+        }
+
+        let pid = pid.with_context(|| format!("missing pid in TC deny rule '{}'", entry))?;
+        let dst_ip = dst_ip.with_context(|| format!("missing ip in TC deny rule '{}'", entry))?;
+        let dst_port =
+            dst_port.with_context(|| format!("missing port in TC deny rule '{}'", entry))?;
+        let proto = proto.unwrap_or(6);
+
+        out.push(TcDenyRule {
+            pid,
+            dst_ip,
+            dst_port,
+            proto,
+        });
+
+        if out.len() > 32_768 {
+            bail!("too many TC deny rules parsed (>{}) at rule index {}", 32_768, idx);
+        }
+    }
+
+    Ok(out)
+}
+
+/// Parse protocol string token into numeric protocol id used by TC map keys.
+fn parse_l4_proto(raw: &str) -> Result<u8> {
+    let value = raw.trim().to_ascii_lowercase();
+    match value.as_str() {
+        "tcp" | "6" => Ok(6),
+        "udp" | "17" => Ok(17),
+        _ => bail!("unsupported proto '{}', expected tcp|udp|6|17", raw),
+    }
+}
+
+#[cfg(test)]
+mod tc_policy_tests {
+    use super::*;
+
+    #[test]
+    fn parse_tc_deny_rules_accepts_valid_entries() {
+        let spec = "pid=123,ip=1.2.3.4,port=443,proto=tcp;pid=7,ip=8.8.8.8,port=53,proto=17";
+        let rules = parse_tc_deny_rules(spec).expect("valid tc deny rule spec should parse");
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].pid, 123);
+        assert_eq!(rules[0].dst_ip, u32::from(Ipv4Addr::new(1, 2, 3, 4)));
+        assert_eq!(rules[0].dst_port, 443);
+        assert_eq!(rules[0].proto, 6);
+        assert_eq!(rules[1].proto, 17);
+    }
+
+    #[test]
+    fn parse_tc_deny_rules_rejects_missing_required_fields() {
+        let spec = "pid=123,port=443,proto=tcp";
+        let err = parse_tc_deny_rules(spec).expect_err("missing ip should fail");
+        assert!(
+            err.to_string().contains("missing ip"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn parse_l4_proto_supports_names_and_numbers() {
+        assert_eq!(parse_l4_proto("tcp").expect("tcp should parse"), 6);
+        assert_eq!(parse_l4_proto("17").expect("17 should parse"), 17);
+        assert!(parse_l4_proto("icmp").is_err());
     }
 }
 

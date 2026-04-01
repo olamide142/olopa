@@ -230,6 +230,10 @@ pub enum RuntimeExpr {
         lhs: Box<RuntimeExpr>,
         rhs: Box<RuntimeExpr>,
     },
+    Matches {
+        lhs: Box<RuntimeExpr>,
+        pattern: String,
+    },
     Unsupported {
         kind: String,
     },
@@ -409,6 +413,10 @@ fn lower_mir_expr(expr: &MirExpr) -> RuntimeExpr {
             lhs: Box::new(lower_mir_expr(lhs)),
             rhs: Box::new(lower_mir_expr(rhs)),
         },
+        MirExpr::Matches { lhs, pattern } => RuntimeExpr::Matches {
+            lhs: Box::new(lower_mir_expr(lhs)),
+            pattern: pattern.clone(),
+        },
         MirExpr::List(_) => RuntimeExpr::Unsupported {
             kind: "list_literal".to_string(),
         },
@@ -575,5 +583,30 @@ rule "runtime_ir" {
         assert_eq!(rule.score.modifiers.len(), 4);
         assert_eq!(rule.emit.len(), 1);
         assert_eq!(rule.respond.branches.len(), 2);
+    }
+
+    #[test]
+    fn lowers_matches_operator_into_runtime_ir() {
+        let src = r#"
+rule "runtime_ir_matches" {
+  from endpoint.process
+  correlate process.spawn as p
+  where p.name matches "ba*"
+  respond alert high
+}
+"#;
+        let tokens = Lexer::new(src).tokenize().expect("lex");
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().expect("parse");
+        let mir = lower_program(&program);
+        let runtime = lower_runtime_program(&mir);
+        let pred = &runtime.rules[0].predicates[0];
+        match pred {
+            RuntimeExpr::Matches { lhs, pattern } => {
+                assert!(matches!(lhs.as_ref(), RuntimeExpr::Field { .. }));
+                assert_eq!(pattern, "ba*");
+            }
+            other => panic!("expected RuntimeExpr::Matches, got {other:?}"),
+        }
     }
 }

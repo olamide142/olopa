@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-// ── Constants ────────────────────────────────────────────────
+// ── Constants 
 // Default dead-band: suppress events where risk changed < 5%
 const DEFAULT_DEAD_BAND: f32 = 0.05;
 
@@ -53,7 +53,7 @@ const W_CONTEXT: f32 = 0.10;
 
 const _: () = assert!(((W_SEVERITY + W_DELTA + W_RECENCY + W_CONTEXT) - 1.0).abs() < 1e-6);
 
-// ── Per-process state ────────────────────────────────────────
+// ── Per-process state
 // One entry per vertex_id seen since last eviction pass.
 // Kept in a plain HashMap — no locking because the scorer is
 // owned by a single ingest worker thread.
@@ -64,7 +64,7 @@ struct ProcessState {
     event_count: u32,   // total events seen (used for novelty scoring)
 }
 
-// ── ScoredEvent — output of the scorer ───────────────────────
+// ── ScoredEvent — output of the scorer
 // Carries the relevance score and the estimated resource cost
 // so the caller can construct a TelemetryItem directly.
 #[derive(Debug, Clone)]
@@ -76,7 +76,7 @@ pub struct ScoredEvent {
     pub components: ScoreComponents, // breakdown for observability
 }
 
-// ── Score breakdown — for Prometheus metrics and debugging ───
+// ── Score breakdown — for Prometheus metrics and debugging 
 #[derive(Debug, Clone, Copy)]
 pub struct ScoreComponents {
     pub severity: f32,
@@ -94,7 +94,7 @@ impl ScoreComponents {
     }
 }
 
-// ── RelevanceScorer ───────────────────────────────────────────
+// ── RelevanceScorer 
 pub struct RelevanceScorer {
     // Per-process state: vertex_id → ProcessState
     state: HashMap<u32, ProcessState>,
@@ -127,7 +127,7 @@ impl RelevanceScorer {
         Self::new(DEFAULT_DEAD_BAND)
     }
 
-    // ── Main entry point ─────────────────────────────────────
+    // ── Main entry point 
     // Called for every event coming off the ring buffer.
     // Returns None if the event is dead-band suppressed.
     // Returns Some(ScoredEvent) otherwise.
@@ -151,7 +151,7 @@ impl RelevanceScorer {
         let now = Instant::now();
         let risk_score = risk_score.clamp(0.0, 1.0);
 
-        // ── Look up or create per-process state ──────────────
+        // ── Look up or create per-process state 
         let entry = self.state.entry(vertex_id).or_insert_with(|| {
             // First time we've seen this process.
             // Treat as maximum delta — new process is always interesting.
@@ -162,10 +162,10 @@ impl RelevanceScorer {
             }
         });
 
-        // ── Compute delta ─────────────────────────────────────
+        // ── Compute delta 
         let risk_delta = risk_score - entry.last_risk;
 
-        // ── Dead-band filter ──────────────────────────────────
+        // ── Dead-band filter 
         // Suppress if risk hasn't changed significantly AND this
         // process has been seen before (not a new process).
         // New processes always pass regardless of epsilon.
@@ -178,13 +178,13 @@ impl RelevanceScorer {
             return None;
         }
 
-        // ── Event age in milliseconds ─────────────────────────
+        // ── Event age in milliseconds 
         // ts_ns is the kernel-side nanosecond timestamp.
         // age = wall-clock now - kernel event time.
         // We approximate using the time since last ProcessState update.
         let age_ms = now.duration_since(entry.last_seen).as_millis() as f32;
 
-        // ── Score components ──────────────────────────────────
+        // ── Score components 
 
         // Severity (30%): raw risk score — higher risk = more important
         let severity = risk_score;
@@ -219,7 +219,7 @@ impl RelevanceScorer {
         };
         let relevance = components.total().clamp(0.0, 1.0);
 
-        // ── Update state ──────────────────────────────────────
+        // ── Update state 
         entry.last_risk = risk_score;
         entry.last_seen = now;
         entry.event_count += 1;
@@ -235,7 +235,7 @@ impl RelevanceScorer {
         })
     }
 
-    // ── Convenience: score from a HotEvent directly ──────────
+    // ── Convenience: score from a HotEvent directly 
     // Used by the ingest loop so it doesn't have to unpack fields.
     pub fn score_hot(
         &mut self,
@@ -249,7 +249,7 @@ impl RelevanceScorer {
         self.score(event_id, vertex_id, hot.risk_score, hot.ts_ns, chain_depth)
     }
 
-    // ── Evict stale per-process state ─────────────────────────
+    // ── Evict stale per-process state 
     // Called by the housekeeping loop every 5 seconds.
     // Removes entries for processes that haven't been seen in
     // STALE_THRESHOLD. Short-lived processes (scripts, one-shot
@@ -266,7 +266,7 @@ impl RelevanceScorer {
         }
     }
 
-    // ── Reset a specific process's state ─────────────────────
+    // ── Reset a specific process's state 
     // Called when the graph sync service detects that a process
     // has exited (PROC_EXIT event). Removes the entry so if a
     // new process reuses the same vertex_id it is treated as new.
@@ -274,7 +274,7 @@ impl RelevanceScorer {
         self.state.remove(&vertex_id);
     }
 
-    // ── Current filter rate ───────────────────────────────────
+    // ── Current filter rate 
     // Fraction of incoming events suppressed by dead-band.
     // Healthy range: 0.70–0.95 (70–95% suppression).
     // If below 0.70: epsilon may be too low, sending too much.
@@ -323,7 +323,7 @@ pub struct ScorerStats {
     pub dead_band_epsilon: f32,
 }
 
-// ── Tests ─────────────────────────────────────────────────────
+// ── Tests 
 #[cfg(test)]
 mod tests {
     use super::*;

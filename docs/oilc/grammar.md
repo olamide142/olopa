@@ -213,7 +213,7 @@ This section explains what each implemented clause/keyword does in practice.
 | `contains` | Substring or collection containment check. | `p.cmdline contains "curl"` |
 | `starts_with` | Prefix check. | `p.path starts_with "/tmp"` |
 | `ends_with` | Suffix check. | `file.path ends_with ".sh"` |
-| `matches` | Pattern match operator (runtime subset applies). | `p.name matches "bash"` |
+| `matches` | Pattern match operator (runtime supports wildcard `*`/`?` and grouped alternation like `(a|b|c)`). | `p.name matches "ba*"` |
 | `under` | Path/prefix ancestry-style check. | `file.path under "/etc"` |
 | `true`, `false` | Boolean literals. | `where is_admin == true` |
 | `null` | Null literal. | `where maybe_value == null` |
@@ -231,9 +231,3 @@ Highest to lowest:
 3. `and`
 4. `or`
 
-## Important Current Constraints
-
-- `require` parsing exists, but full semantics are intentionally still partial.
-- Use `not in` (two tokens). The single token `not_in` is not recognized as an operator.
-- `matches` is accepted by the parser but currently lowers to unsupported runtime behavior in the MIR/runtime path.
-- `template`, `policy`, `around`, `over`, `enforce`, `gather`, `at_least`, `any`, `all`, `window`, `between`, `unusual_for`, `rare`, `annotate`, and `redirect` are not language keywords in this implemented subset.

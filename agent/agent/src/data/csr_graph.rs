@@ -17,8 +17,15 @@
 
 use crossbeam_utils::CachePadded;
 use log::warn;
+use std::cell::Cell;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+thread_local! {
+    static DELTA_SHARD_HINT: Cell<usize> = Cell::new(usize::MAX);
+}
 
 // -- Compile-time size guards
 const _: () = assert!(std::mem::size_of::<NodeProps>() == 32);
@@ -281,9 +288,10 @@ pub struct CsrGraph {
     // Current live snapshot - read by detection workers constantly
     current: Arc<parking_lot::RwLock<Arc<CsrSnapshot>>>,
 
-    // Per-thread delta buffers — written by ingest workers, never shared
-    // In production: thread_local! or indexed by core ID
-    delta: parking_lot::Mutex<DeltaBuffer>,
+    // Sharded delta buffers reduce hot-path lock contention.
+    // Each writer thread maps to a stable shard (cached in thread-local storage).
+    // Merge drains all shards and rebuilds a fresh snapshot.
+    delta_shards: Vec<CachePadded<parking_lot::Mutex<DeltaBuffer>>>,
 
     // Metrics
     merge_count: CachePadded<AtomicU64>,
@@ -293,6 +301,19 @@ pub struct CsrGraph {
 
 impl CsrGraph {
     pub fn new(initial_capacity_nodes: usize, initial_capacity_edges: usize) -> Self {
+        let shard_count = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .saturating_mul(2)
+            .clamp(4, 128);
+        let per_shard_capacity = (65_536 / shard_count).max(1_024);
+        let mut delta_shards = Vec::with_capacity(shard_count);
+        for _ in 0..shard_count {
+            delta_shards.push(CachePadded::new(parking_lot::Mutex::new(
+                DeltaBuffer::with_capacity(per_shard_capacity),
+            )));
+        }
+
         let empty = Arc::new(CsrSnapshot {
             offsets: vec![0u32; initial_capacity_nodes + 1],
             adjacency: Vec::with_capacity(initial_capacity_edges),
@@ -317,11 +338,56 @@ impl CsrGraph {
 
         Self {
             current: Arc::new(parking_lot::RwLock::new(empty)),
-            delta: parking_lot::Mutex::new(DeltaBuffer::with_capacity(65_536)),
+            delta_shards,
             merge_count: CachePadded::new(AtomicU64::new(0)),
             edge_count: CachePadded::new(AtomicU64::new(0)),
             node_count: CachePadded::new(AtomicU64::new(0)),
         }
+    }
+
+    #[inline(always)]
+    fn delta_shard_index(&self) -> usize {
+        DELTA_SHARD_HINT.with(|hint| {
+            let cached = hint.get();
+            if cached != usize::MAX {
+                return cached % self.delta_shards.len();
+            }
+
+            let mut hasher = DefaultHasher::new();
+            std::thread::current().id().hash(&mut hasher);
+            let idx = (hasher.finish() as usize) % self.delta_shards.len();
+            hint.set(idx);
+            idx
+        })
+    }
+
+    fn drain_all_delta_shards(&self) -> DeltaBuffer {
+        let mut drained = Vec::with_capacity(self.delta_shards.len());
+        let mut total_nodes = 0usize;
+        let mut total_edges = 0usize;
+        let mut total_risk_updates = 0usize;
+
+        for shard in &self.delta_shards {
+            let delta = shard.lock().drain();
+            total_nodes = total_nodes.saturating_add(delta.new_nodes.len());
+            total_edges = total_edges.saturating_add(delta.new_edges.len());
+            total_risk_updates = total_risk_updates.saturating_add(delta.risk_updates.len());
+            drained.push(delta);
+        }
+
+        let mut merged = DeltaBuffer {
+            new_nodes: Vec::with_capacity(total_nodes),
+            new_edges: Vec::with_capacity(total_edges),
+            risk_updates: Vec::with_capacity(total_risk_updates),
+        };
+
+        for mut delta in drained {
+            merged.new_nodes.append(&mut delta.new_nodes);
+            merged.new_edges.append(&mut delta.new_edges);
+            merged.risk_updates.append(&mut delta.risk_updates);
+        }
+
+        merged
     }
 
     // -- Reader: get current snapshot (Arc clone, ~5ns)
@@ -333,12 +399,12 @@ impl CsrGraph {
     }
 
     // -- Writer: queue an edge from ingest worker
-    // Hot path. Writes to delta buffer only — no shared state.
-    // In production, each ingest worker has its own DeltaBuffer
-    // (thread_local!). The Mutex here is for illustration.
+    // Hot path. Writes only to one thread-mapped shard.
+    // This avoids a single global delta lock under concurrent ingest.
     #[inline]
     pub fn write_edge(&self, src: u32, dst: u32, props: EdgeProps) {
-        self.delta.lock().add_edge(src, dst, props);
+        let shard_idx = self.delta_shard_index();
+        self.delta_shards[shard_idx].lock().add_edge(src, dst, props);
         self.edge_count.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -346,7 +412,10 @@ impl CsrGraph {
     // Drains all delta buffers, rebuilds CSR arrays, swaps pointer.
     // Readers are never blocked — they hold the old Arc until done.
     pub fn merge_deltas(&self) {
-        let delta: DeltaBuffer = self.delta.lock().drain();
+        let delta = self.drain_all_delta_shards();
+        if delta.new_nodes.is_empty() && delta.new_edges.is_empty() && delta.risk_updates.is_empty() {
+            return;
+        }
 
         // Get the current snapshot as our base
         let current: Arc<CsrSnapshot> = self.snapshot();

@@ -117,6 +117,9 @@ fn emit_bool_expr(expr: &MirExpr) -> String {
                 emit_value_expr(rhs)
             )
         }
+        MirExpr::Matches { lhs, pattern } => {
+            format!("({} =~ {})", emit_value_expr(lhs), quote_cypher_str(pattern))
+        }
         MirExpr::Unsupported { .. } => "true".to_string(),
         _ => format!("({})", emit_value_expr(expr)),
     }
@@ -156,7 +159,8 @@ fn emit_value_expr(expr: &MirExpr) -> String {
         | MirExpr::In { .. }
         | MirExpr::StartsWith { .. }
         | MirExpr::EndsWith { .. }
-        | MirExpr::Contains { .. } => format!("({})", emit_bool_expr(expr)),
+        | MirExpr::Contains { .. }
+        | MirExpr::Matches { .. } => format!("({})", emit_bool_expr(expr)),
         MirExpr::Unsupported { .. } => "null".to_string(),
     }
 }

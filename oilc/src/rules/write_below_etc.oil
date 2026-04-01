@@ -35,7 +35,7 @@ rule "critical_config_tamper" {
 
   let
     interactive = p.pa rent.name in ["bash", "sh", "zsh", "fish"]
-    unusual_user = p.user.name not in ["root", "ansible", "chef", "puppet"]
+    unusual_user = p.user.name not in ["ansible", "chef", "puppet"]
     stealthy_path = f.path in ["/etc/shadow", "/etc/sudoers"]
 
   score

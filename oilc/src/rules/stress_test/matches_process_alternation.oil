@@ -1,0 +1,10 @@
+rule "matches_process_alternation" {
+  from endpoint.process
+  correlate process.exec as p
+
+  # Grouped alternation: (a|b|c)
+  where p.name matches "(zsh|bash|sh)"
+
+  respond
+    alert high "matches test: alternation"
+}

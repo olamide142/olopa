@@ -26,7 +26,7 @@ use std::collections::BinaryHeap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrd};
 use std::time::{Duration, Instant};
 
-// ── Resource dimensions ──────────────────────────────────────
+// ── Resource dimensions 
 pub const N_RESOURCES: usize = 5;
 pub const CPU: usize = 0;
 pub const MEM: usize = 1;
@@ -34,7 +34,7 @@ pub const IO: usize = 2;
 pub const NET: usize = 3;
 pub const BW: usize = 4;
 
-// ── Default budgets (soft targets, not hard caps) ────────────
+// ── Default budgets (soft targets, not hard caps) 
 // PI controller adjusts these dynamically (see budget_tracker.rs)
 pub const DEFAULT_BUDGETS: [f32; N_RESOURCES] = [
     5_000.0,      // CPU: 5,000 µs per 500ms window = 1% of one core
@@ -44,7 +44,7 @@ pub const DEFAULT_BUDGETS: [f32; N_RESOURCES] = [
     5_242_880.0,  // BW:  5 MB/s (5% of detected uplink)
 ];
 
-// ── TelemetryItem — one pending event waiting to be scheduled ─
+// ── TelemetryItem — one pending event waiting to be scheduled 
 // Created by the relevance scorer after reading the ring buffer.
 // Dropped if the MDKP solver excludes it from the current window.
 #[derive(Clone, Debug)]
@@ -110,7 +110,7 @@ fn composite_cost_relative(cost: &[f32; N_RESOURCES], budget: &BudgetSnapshot) -
     total
 }
 
-// ── BudgetSnapshot — current resource state ──────────────────
+// ── BudgetSnapshot — current resource state 
 // Copied cheaply (5 × f32 × 2 = 40 bytes) into the solver.
 // The PI controller updates the live budgets; the solver works
 // on a snapshot taken at the start of each scheduling window.
@@ -145,7 +145,7 @@ impl BudgetSnapshot {
     }
 }
 
-// ── BinaryHeap ordering — max-heap by efficiency ─────────────
+// ── BinaryHeap ordering — max-heap by efficiency 
 // Rust's BinaryHeap is a max-heap. We want the highest-efficiency
 // item at the top. We implement Ord on a wrapper so the heap
 // ordering is by efficiency without sorting the full item.
@@ -172,7 +172,7 @@ impl Ord for HeapItem {
     }
 }
 
-// ── Scheduler ────────────────────────────────────────────────
+// ── Scheduler 
 pub struct Scheduler {
     // Pending items waiting to be scheduled.
     // Populated by the event pipeline between scheduling windows.
@@ -203,7 +203,7 @@ impl Scheduler {
         }
     }
 
-    // ── Enqueue an item for consideration ────────────────────
+    // ── Enqueue an item for consideration 
     // Called by the event pipeline after relevance scoring.
     // No allocation if Vec capacity is not exceeded.
     #[inline(always)]
@@ -211,12 +211,12 @@ impl Scheduler {
         self.pending.push(item);
     }
 
-    // ── Update budgets from PI controller ────────────────────
+    // ── Update budgets from PI controller 
     pub fn update_budget(&mut self, budget: BudgetSnapshot) {
         self.budget = budget;
     }
 
-    // ── Main solve entry point ────────────────────────────────
+    // ── Main solve entry point 
     // Selects which pending items to transmit.
     // Returns Vec<usize> of event_ids to send.
     // Clears `pending` after solving.
@@ -260,7 +260,7 @@ impl Scheduler {
         }
     }
 
-    // ── T1: Greedy solver — O(n log n) ───────────────────────
+    // ── T1: Greedy solver — O(n log n)
     // Sort by efficiency (relevance/cost ratio), greedily select
     // items until any budget dimension is exhausted.
     // Approximation ratio: ≥ 0.5 of optimal (guaranteed).
@@ -295,7 +295,7 @@ impl Scheduler {
         selected
     }
 
-    // ── T2: LP Relaxation + rounding — O(n³) ─────────────────
+    // ── T2: LP Relaxation + rounding — O(n³) 
     // Solve the continuous relaxation (x[i] ∈ [0,1]), then round
     // fractional items deterministically (threshold = 0.5).
     // Better than greedy for correlated item costs.
@@ -371,7 +371,7 @@ impl Scheduler {
         selected
     }
 
-    // ── T3: Branch and Bound — exact optimal ─────────────────
+    // ── T3: Branch and Bound — exact optimal 
     // Explores the full binary search tree, pruning branches where
     // the LP upper bound is below the current best known solution.
     // Only feasible for small n (≤ 64 items) — used in audit mode
@@ -418,7 +418,7 @@ impl Scheduler {
             let item_idx = order[depth];
             let item = &self.pending[item_idx];
 
-            // ── Upper bound pruning ───────────────────────────
+            // ── Upper bound pruning 
             // Best case from here: take all remaining items (LP relaxation).
             // If even that can't beat current best, prune this branch.
             let ub = value + self.upper_bound_remaining(&order, depth, &budget);
@@ -426,10 +426,10 @@ impl Scheduler {
                 continue;
             }
 
-            // ── Branch: EXCLUDE item[depth] ───────────────────
+            // ── Branch: EXCLUDE item[depth] 
             stack.push((depth + 1, value, budget.clone(), mask));
 
-            // ── Branch: INCLUDE item[depth] if it fits ────────
+            // ── Branch: INCLUDE item[depth] if it fits 
             if budget.fits(&item.cost) {
                 let mut new_budget = budget.clone();
                 new_budget.consume(&item.cost);
@@ -473,7 +473,7 @@ impl Scheduler {
     }
 }
 
-// ── Solver tier selection ────────────────────────────────────
+// ── Solver tier selection 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SolverTier {
     Greedy, // T1: default — every 500ms window
@@ -499,7 +499,7 @@ impl SolverTier {
     }
 }
 
-// ── Schedule result ──────────────────────────────────────────
+// ── Schedule result 
 #[derive(Debug)]
 pub struct ScheduleResult {
     pub event_ids: Vec<usize>, // EventStore indices to transmit
@@ -508,7 +508,7 @@ pub struct ScheduleResult {
     pub tier: SolverTier,      // which solver ran
 }
 
-// ── Relevance scorer — feeds the scheduler ───────────────────
+// ── Relevance scorer — feeds the scheduler 
 // Computes relevance for an event before enqueuing it.
 // Four components: severity, delta (novelty), recency, context.
 pub struct RelevanceScorer {
@@ -566,7 +566,7 @@ impl RelevanceScorer {
     }
 }
 
-// ── Tests ─────────────────────────────────────────────────────
+// ── Tests 
 #[cfg(test)]
 mod tests {
     use super::*;
