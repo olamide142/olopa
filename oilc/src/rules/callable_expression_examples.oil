@@ -1,0 +1,46 @@
+set callable_example_shells = ["sh", "bash", "zsh", "dash", "fish"]
+
+rule "callable_is_shell_and_baseline_domain_check" {
+  from endpoint.process, network.flow
+
+  correlate
+    process.spawn as p
+    with network.connect as n on n.process_id == p.id
+
+  where
+    is_shell(p)
+    and n.direction == "outbound"
+    and n.dest.domain not in host(p.host_id).baseline.domains
+
+  respond
+    alert high "Shell outbound to non-baseline domain"
+}
+
+rule "callable_count_list_guard" {
+  from endpoint.process
+  correlate process.spawn as p
+
+  where
+    is_shell(p)
+    and count(callable_example_shells) == 5
+    and count([p.name, p.parent.name]) >= 1
+
+  respond
+    alert low "Callable count/list demo"
+}
+
+rule "callable_workload_profile_projection" {
+  from endpoint.process, container.runtime, k8s.workload
+
+  correlate
+    process.spawn as p
+    with container.context as c on c.container_id == p.container_id
+    with workload.info as w on w.pod_uid == c.pod_uid
+
+  where
+    is_shell(p)
+    and p.name not in baseline.workload(w.namespace, w.name).allowed_processes
+
+  respond
+    alert medium "Shell not in workload baseline profile"
+}

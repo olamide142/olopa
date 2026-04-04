@@ -133,8 +133,29 @@ pub enum MirExpr {
     Float(f64),
     Str(String),
     Null,
+    Duration(OilDuration),
     Field {
         path: String,
+    },
+    Call {
+        name: String,
+        args: Vec<MirExpr>,
+    },
+    Add {
+        lhs: Box<MirExpr>,
+        rhs: Box<MirExpr>,
+    },
+    Sub {
+        lhs: Box<MirExpr>,
+        rhs: Box<MirExpr>,
+    },
+    Mul {
+        lhs: Box<MirExpr>,
+        rhs: Box<MirExpr>,
+    },
+    Div {
+        lhs: Box<MirExpr>,
+        rhs: Box<MirExpr>,
     },
     List(Vec<MirExpr>),
     And {
@@ -213,6 +234,7 @@ pub enum MirValidationKind {
     EmitMalformed,
     VerifyMalformed,
     ScoreOutOfRange,
+    UnsupportedExpression,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,12 +270,18 @@ pub fn define_mir_skeleton(program: &Program) -> MirProgram {
     lower_program(program)
 }
 
+/// Run structural sanity checks on lowered MIR before runtime IR emission.
+///
+/// The goal here is to catch malformed compiler output early with actionable,
+/// per-rule diagnostics, while keeping the checks fast and deterministic.
 pub fn validate_program(program: &MirProgram) -> Vec<MirValidationDiagnostic> {
     let mut diagnostics = Vec::new();
     let mut seen_rule_ids: HashSet<&str> = HashSet::new();
 
     for rule in &program.rules {
         let rule_name = Some(rule.name.clone());
+        // Rule ids must exist and be unique so downstream artifacts can
+        // reliably map detections/remediations back to source rules.
         if rule.id.0.trim().is_empty() {
             diagnostics.push(MirValidationDiagnostic {
                 kind: MirValidationKind::RuleNameEmpty,
@@ -270,6 +298,7 @@ pub fn validate_program(program: &MirProgram) -> Vec<MirValidationDiagnostic> {
             });
         }
 
+        // Human-readable names are required for operator-facing telemetry.
         if rule.name.trim().is_empty() {
             diagnostics.push(MirValidationDiagnostic {
                 kind: MirValidationKind::RuleNameEmpty,
@@ -279,6 +308,7 @@ pub fn validate_program(program: &MirProgram) -> Vec<MirValidationDiagnostic> {
             });
         }
 
+        // Source bindings must specify both event domain and event name.
         for src in &rule.sources {
             if src.domain.trim().is_empty() || src.event.trim().is_empty() {
                 diagnostics.push(MirValidationDiagnostic {
@@ -290,6 +320,7 @@ pub fn validate_program(program: &MirProgram) -> Vec<MirValidationDiagnostic> {
             }
         }
 
+        // Joins require two distinct aliases to avoid ambiguous/self joins.
         for join in &rule.joins {
             if join.left_alias.trim().is_empty() || join.right_alias.trim().is_empty() {
                 diagnostics.push(MirValidationDiagnostic {
@@ -309,6 +340,8 @@ pub fn validate_program(program: &MirProgram) -> Vec<MirValidationDiagnostic> {
             }
         }
 
+        // Respond plans must be executable: at least one branch and at least
+        // one action per branch.
         if rule.respond.branches.is_empty() {
             diagnostics.push(MirValidationDiagnostic {
                 kind: MirValidationKind::RespondMalformed,
@@ -325,6 +358,8 @@ pub fn validate_program(program: &MirProgram) -> Vec<MirValidationDiagnostic> {
             });
         }
 
+        // Emitted fact names are part of the runtime contract; empty names are
+        // treated as malformed output.
         for emit in &rule.emit {
             if emit.fact_name.trim().is_empty() {
                 diagnostics.push(MirValidationDiagnostic {
@@ -336,6 +371,7 @@ pub fn validate_program(program: &MirProgram) -> Vec<MirValidationDiagnostic> {
             }
         }
 
+        // Verify paths must be non-empty to avoid silent "no-op verify" blocks.
         for verify in &rule.verify {
             if verify.path.trim().is_empty() {
                 diagnostics.push(MirValidationDiagnostic {
@@ -347,6 +383,8 @@ pub fn validate_program(program: &MirProgram) -> Vec<MirValidationDiagnostic> {
             }
         }
 
+        // Keep score range as a warning (not error) to preserve flexibility for
+        // experiments while still flagging suspicious values.
         if !(0..=100).contains(&rule.score.base) {
             diagnostics.push(MirValidationDiagnostic {
                 kind: MirValidationKind::ScoreOutOfRange,
@@ -358,9 +396,148 @@ pub fn validate_program(program: &MirProgram) -> Vec<MirValidationDiagnostic> {
                 ),
             });
         }
+
+        // Hard gate: unsupported MIR expressions must not flow into runtime IR.
+        for (idx, pred) in rule.predicates.iter().enumerate() {
+            validate_expr_unsupported(
+                &pred.expr,
+                &format!("predicate[{idx}]"),
+                &rule.name,
+                &mut diagnostics,
+            );
+        }
+        for (idx, join) in rule.joins.iter().enumerate() {
+            if let Some(on) = &join.on {
+                validate_expr_unsupported(
+                    on,
+                    &format!("join[{idx}].on"),
+                    &rule.name,
+                    &mut diagnostics,
+                );
+            }
+        }
+        for (idx, req) in rule.require.iter().enumerate() {
+            validate_expr_unsupported(
+                &req.expr,
+                &format!("require[{idx}]"),
+                &rule.name,
+                &mut diagnostics,
+            );
+        }
+        for (idx, binding) in rule.lets.iter().enumerate() {
+            validate_expr_unsupported(
+                &binding.value,
+                &format!("let[{idx}].value"),
+                &rule.name,
+                &mut diagnostics,
+            );
+        }
+        for (idx, modifier) in rule.score.modifiers.iter().enumerate() {
+            if let Some(cond) = &modifier.condition {
+                validate_expr_unsupported(
+                    cond,
+                    &format!("score.modifier[{idx}].condition"),
+                    &rule.name,
+                    &mut diagnostics,
+                );
+            }
+        }
+        for (emit_idx, emit) in rule.emit.iter().enumerate() {
+            for (arg_idx, arg) in emit.args.iter().enumerate() {
+                validate_expr_unsupported(
+                    arg,
+                    &format!("emit[{emit_idx}].arg[{arg_idx}]"),
+                    &rule.name,
+                    &mut diagnostics,
+                );
+            }
+        }
+        for (branch_idx, branch) in rule.respond.branches.iter().enumerate() {
+            if let Some(cond) = &branch.condition {
+                validate_expr_unsupported(
+                    cond,
+                    &format!("respond.branch[{branch_idx}].condition"),
+                    &rule.name,
+                    &mut diagnostics,
+                );
+            }
+        }
     }
 
     diagnostics
+}
+
+fn validate_expr_unsupported(
+    expr: &MirExpr,
+    path: &str,
+    rule_name: &str,
+    diagnostics: &mut Vec<MirValidationDiagnostic>,
+) {
+    match expr {
+        MirExpr::Unsupported { kind } => diagnostics.push(MirValidationDiagnostic {
+            kind: MirValidationKind::UnsupportedExpression,
+            severity: MirValidationSeverity::Error,
+            rule: Some(rule_name.to_string()),
+            message: format!("unsupported expression in {path}: {kind}"),
+        }),
+        MirExpr::List(items) => {
+            for (idx, item) in items.iter().enumerate() {
+                validate_expr_unsupported(
+                    item,
+                    &format!("{path}.list_item[{idx}]"),
+                    rule_name,
+                    diagnostics,
+                );
+            }
+        }
+        MirExpr::And { lhs, rhs }
+        | MirExpr::Or { lhs, rhs }
+        | MirExpr::Eq { lhs, rhs }
+        | MirExpr::Ne { lhs, rhs }
+        | MirExpr::Lt { lhs, rhs }
+        | MirExpr::Gt { lhs, rhs }
+        | MirExpr::Le { lhs, rhs }
+        | MirExpr::Ge { lhs, rhs }
+        | MirExpr::Add { lhs, rhs }
+        | MirExpr::Sub { lhs, rhs }
+        | MirExpr::Mul { lhs, rhs }
+        | MirExpr::Div { lhs, rhs }
+        | MirExpr::StartsWith { lhs, rhs }
+        | MirExpr::EndsWith { lhs, rhs }
+        | MirExpr::Contains { lhs, rhs } => {
+            validate_expr_unsupported(lhs, &format!("{path}.lhs"), rule_name, diagnostics);
+            validate_expr_unsupported(rhs, &format!("{path}.rhs"), rule_name, diagnostics);
+        }
+        MirExpr::Not { expr } => {
+            validate_expr_unsupported(expr, &format!("{path}.expr"), rule_name, diagnostics);
+        }
+        MirExpr::In { lhs, rhs } => {
+            validate_expr_unsupported(lhs, &format!("{path}.lhs"), rule_name, diagnostics);
+            for (idx, item) in rhs.iter().enumerate() {
+                validate_expr_unsupported(
+                    item,
+                    &format!("{path}.rhs[{idx}]"),
+                    rule_name,
+                    diagnostics,
+                );
+            }
+        }
+        MirExpr::Call { name: _, args } => {
+            for (idx, arg) in args.iter().enumerate() {
+                validate_expr_unsupported(arg, &format!("{path}.arg[{idx}]"), rule_name, diagnostics);
+            }
+        }
+        MirExpr::Matches { lhs, pattern: _ } => {
+            validate_expr_unsupported(lhs, &format!("{path}.lhs"), rule_name, diagnostics);
+        }
+        MirExpr::Bool(_)
+        | MirExpr::Int(_)
+        | MirExpr::Float(_)
+        | MirExpr::Str(_)
+        | MirExpr::Null
+        | MirExpr::Duration(_)
+        | MirExpr::Field { .. } => {}
+    }
 }
 
 fn lower_rule(rule: &RuleDecl, idx: usize) -> MirRule {
@@ -369,7 +546,7 @@ fn lower_rule(rule: &RuleDecl, idx: usize) -> MirRule {
         id: MirRuleId(format!("rule:{idx}:{}", rule.name.node)),
         name: rule.name.node.clone(),
         class: classify_rule(rule),
-        sources: rule.sources.iter().map(lower_source).collect(),
+        sources: lower_rule_sources(rule),
         predicates: rule
             .where_
             .as_ref()
@@ -524,6 +701,43 @@ fn lower_source(src: &SourceSpec) -> MirSource {
     }
 }
 
+fn lower_rule_sources(rule: &RuleDecl) -> Vec<MirSource> {
+    if !rule.sources.is_empty() {
+        return rule.sources.iter().map(lower_source).collect();
+    }
+
+    match &rule.body.node {
+        RuleBody::Match(m) => m
+            .steps
+            .iter()
+            .map(|step| MirSource {
+                domain: step.event.node.domain.clone(),
+                event: step.event.node.kind.clone(),
+                alias: step.alias.as_ref().map(|a| a.node.clone()),
+            })
+            .collect(),
+        RuleBody::Correlate(c) => c
+            .arms
+            .iter()
+            .map(|arm| MirSource {
+                domain: arm.event.node.domain.clone(),
+                event: arm.event.node.kind.clone(),
+                alias: Some(arm.alias.node.clone()),
+            })
+            .collect(),
+        RuleBody::Around(a) => a
+            .arms
+            .iter()
+            .map(|arm| MirSource {
+                domain: arm.event.node.domain.clone(),
+                event: arm.event.node.kind.clone(),
+                alias: Some(arm.alias.node.clone()),
+            })
+            .collect(),
+        RuleBody::Graph(g) => vec![lower_source(&g.source)],
+    }
+}
+
 fn lower_expr(expr: &Expr) -> MirExpr {
     match expr {
         Expr::BoolLit(v) => MirExpr::Bool(*v),
@@ -531,19 +745,28 @@ fn lower_expr(expr: &Expr) -> MirExpr {
         Expr::FloatLit(v) => MirExpr::Float(*v),
         Expr::StrLit(v) => MirExpr::Str(v.clone()),
         Expr::Null => MirExpr::Null,
+        Expr::DurationLit(v) => MirExpr::Duration(*v),
         Expr::Path(parts) => MirExpr::Field {
             path: parts.join("."),
         },
         Expr::Ident(name) => MirExpr::Field { path: name.clone() },
+        Expr::Call { name, args } => MirExpr::Call {
+            name: name.clone(),
+            args: args.iter().map(|a| lower_expr(&a.node)).collect(),
+        },
         Expr::Member { base, field } => {
-            if let MirExpr::Field { path } = lower_expr(&base.node) {
-                MirExpr::Field {
+            match lower_expr(&base.node) {
+                MirExpr::Field { path } => MirExpr::Field {
                     path: format!("{path}.{field}"),
+                },
+                MirExpr::Call { name, args } if can_project_call_to_field(&name, &args) => {
+                    MirExpr::Field {
+                        path: format!("{name}.{field}"),
+                    }
                 }
-            } else {
-                MirExpr::Unsupported {
+                _ => MirExpr::Unsupported {
                     kind: format!("{expr:?}"),
-                }
+                },
             }
         }
         Expr::List(items) => MirExpr::List(items.iter().map(|i| lower_expr(&i.node)).collect()),
@@ -558,6 +781,20 @@ fn lower_expr(expr: &Expr) -> MirExpr {
         Expr::Not(inner) => MirExpr::Not {
             expr: Box::new(lower_expr(&inner.node)),
         },
+        Expr::UnaryMinus(inner) => MirExpr::Sub {
+            lhs: Box::new(MirExpr::Int(0)),
+            rhs: Box::new(lower_expr(&inner.node)),
+        },
+        Expr::BinOp { op, lhs, rhs } => {
+            let lhs = Box::new(lower_expr(&lhs.node));
+            let rhs = Box::new(lower_expr(&rhs.node));
+            match op {
+                crate::ast::ArithOp::Add => MirExpr::Add { lhs, rhs },
+                crate::ast::ArithOp::Sub => MirExpr::Sub { lhs, rhs },
+                crate::ast::ArithOp::Mul => MirExpr::Mul { lhs, rhs },
+                crate::ast::ArithOp::Div => MirExpr::Div { lhs, rhs },
+            }
+        }
         Expr::Cmp { op, lhs, rhs } => {
             let lhs = Box::new(lower_expr(&lhs.node));
             let rhs = Box::new(lower_expr(&rhs.node));
@@ -606,6 +843,14 @@ fn lower_expr(expr: &Expr) -> MirExpr {
             lhs: Box::new(lower_expr(&lhs.node)),
             rhs: Box::new(lower_expr(&rhs.node)),
         },
+        Expr::Rare(inner) => MirExpr::Call {
+            name: "rare".to_string(),
+            args: vec![lower_expr(&inner.node)],
+        },
+        Expr::UnusualFor { val, entity } => MirExpr::Call {
+            name: "unusual_for".to_string(),
+            args: vec![lower_expr(&val.node), MirExpr::Str(entity.clone())],
+        },
         Expr::Matches { lhs, pattern } => MirExpr::Matches {
             lhs: Box::new(lower_expr(&lhs.node)),
             pattern: pattern.clone(),
@@ -631,6 +876,10 @@ fn lower_expr(expr: &Expr) -> MirExpr {
             kind: format!("{other:?}"),
         },
     }
+}
+
+fn can_project_call_to_field(name: &str, _args: &[MirExpr]) -> bool {
+    !name.trim().is_empty()
 }
 
 #[cfg(test)]
@@ -729,6 +978,114 @@ rule "r" {
     }
 
     #[test]
+    fn lower_call_expression_into_typed_mir() {
+        let program = parse_program(
+            r#"
+rule "r" {
+  from endpoint.process
+  correlate process.spawn as p
+  where is_shell(p)
+  respond alert high
+}
+"#,
+        );
+        let mir = lower_program(&program);
+        let expr = &mir.rules[0].predicates[0].expr;
+        match expr {
+            MirExpr::Call { name, args } => {
+                assert_eq!(name, "is_shell");
+                assert_eq!(args.len(), 1);
+                assert!(matches!(args[0], MirExpr::Field { .. }));
+            }
+            other => panic!("expected MirExpr::Call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lower_member_chain_on_call_into_field_path() {
+        let program = parse_program(
+            r#"
+rule "r" {
+  from endpoint.process
+  correlate process.spawn as p
+  where host(p.host_id).baseline.domains == null
+  respond alert high
+}
+"#,
+        );
+        let mir = lower_program(&program);
+        let expr = &mir.rules[0].predicates[0].expr;
+        match expr {
+            MirExpr::Eq { lhs, rhs: _ } => match lhs.as_ref() {
+                MirExpr::Field { path } => assert_eq!(path, "host.baseline.domains"),
+                other => panic!("expected MirExpr::Field on lhs, got {other:?}"),
+            },
+            other => panic!("expected MirExpr::Eq, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lower_duration_literal_into_typed_mir() {
+        let program = parse_program(
+            r#"
+rule "r" {
+  from endpoint.process
+  correlate process.spawn as p
+  where p.pid > 5m
+  respond alert high
+}
+"#,
+        );
+        let mir = lower_program(&program);
+        let expr = &mir.rules[0].predicates[0].expr;
+        match expr {
+            MirExpr::Gt { lhs: _, rhs } => match rhs.as_ref() {
+                MirExpr::Duration(d) => {
+                    assert_eq!(d.value, 5);
+                    assert_eq!(d.unit, crate::ast::DurationUnit::M);
+                }
+                other => panic!("expected rhs to be MirExpr::Duration, got {other:?}"),
+            },
+            other => panic!("expected MirExpr::Gt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lower_arithmetic_expressions_into_typed_mir() {
+        let program = parse_program(
+            r#"
+rule "r" {
+  from endpoint.process
+  correlate process.spawn as p
+  where (p.pid + 2) * 3 > 9 and -p.uid < 0
+  respond alert high
+}
+"#,
+        );
+        let mir = lower_program(&program);
+        let expr = &mir.rules[0].predicates[0].expr;
+        match expr {
+            MirExpr::And { lhs, rhs } => {
+                match lhs.as_ref() {
+                    MirExpr::Gt { lhs, rhs } => {
+                        assert!(matches!(lhs.as_ref(), MirExpr::Mul { .. }));
+                        assert!(matches!(rhs.as_ref(), MirExpr::Int(9)));
+                    }
+                    other => panic!("expected MirExpr::Gt on lhs, got {other:?}"),
+                }
+                match rhs.as_ref() {
+                    MirExpr::Lt { lhs, rhs } => {
+                        assert!(matches!(lhs.as_ref(), MirExpr::Sub { .. }));
+                        assert!(matches!(rhs.as_ref(), MirExpr::Int(0)));
+                    }
+                    other => panic!("expected MirExpr::Lt on rhs, got {other:?}"),
+                }
+            }
+            other => panic!("expected MirExpr::And, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn lower_around_uses_body_window() {
         let rule = RuleDecl {
             meta: None,
@@ -763,6 +1120,48 @@ rule "r" {
         };
         let mir = lower_program(&program);
         assert_eq!(mir.rules[0].window.unwrap().value, 5);
+    }
+
+    #[test]
+    fn lower_around_derives_sources_from_arms_when_from_clause_absent() {
+        let program = parse_program(
+            r#"
+rule "around_sources" {
+  around host.id within 5m {
+    process.spawn as p
+    network.connect as n
+  }
+  respond alert high
+}
+"#,
+        );
+        let mir = lower_program(&program);
+        assert_eq!(mir.rules[0].sources.len(), 2);
+        assert_eq!(mir.rules[0].sources[0].domain, "process");
+        assert_eq!(mir.rules[0].sources[0].event, "spawn");
+        assert_eq!(mir.rules[0].sources[0].alias.as_deref(), Some("p"));
+        assert_eq!(mir.rules[0].sources[1].domain, "network");
+        assert_eq!(mir.rules[0].sources[1].event, "connect");
+        assert_eq!(mir.rules[0].sources[1].alias.as_deref(), Some("n"));
+    }
+
+    #[test]
+    fn lower_graph_derives_sources_from_graph_block_when_from_clause_absent() {
+        let program = parse_program(
+            r#"
+rule "graph_sources" {
+  graph endpoint.process as p {
+    process as proc
+  }
+  respond alert high
+}
+"#,
+        );
+        let mir = lower_program(&program);
+        assert_eq!(mir.rules[0].sources.len(), 1);
+        assert_eq!(mir.rules[0].sources[0].domain, "endpoint");
+        assert_eq!(mir.rules[0].sources[0].event, "process");
+        assert_eq!(mir.rules[0].sources[0].alias.as_deref(), Some("p"));
     }
 
     #[test]
@@ -848,6 +1247,67 @@ rule "r" {
                 .any(|d| d.kind == MirValidationKind::ScoreOutOfRange),
             "expected score-range warning, got: {:?}",
             diagnostics
+        );
+    }
+
+    #[test]
+    fn validate_program_blocks_unsupported_expressions() {
+        let program = parse_program(
+            r#"
+rule "r" {
+  from endpoint.process
+  correlate process.spawn as p
+  where p.pid == 1
+  respond alert high
+}
+"#,
+        );
+        let mut mir = lower_program(&program);
+        mir.rules[0].predicates[0].expr = MirExpr::And {
+            lhs: Box::new(MirExpr::Field {
+                path: "p.pid".to_string(),
+            }),
+            rhs: Box::new(MirExpr::Unsupported {
+                kind: "binop_add".to_string(),
+            }),
+        };
+        mir.rules[0].score.modifiers.push(MirScoreModifier {
+            delta: 10,
+            condition: Some(MirExpr::Unsupported {
+                kind: "call_expr".to_string(),
+            }),
+        });
+
+        let diagnostics = validate_program(&mir);
+        let unsupported = diagnostics
+            .iter()
+            .filter(|d| d.kind == MirValidationKind::UnsupportedExpression)
+            .collect::<Vec<_>>();
+        assert!(
+            unsupported.len() >= 2,
+            "expected unsupported-expression diagnostics, got: {:?}",
+            diagnostics
+        );
+        assert!(
+            unsupported
+                .iter()
+                .all(|d| d.severity == MirValidationSeverity::Error),
+            "expected unsupported-expression diagnostics to be errors, got: {:?}",
+            unsupported
+        );
+        assert!(
+            unsupported
+                .iter()
+                .any(|d| d.message.contains("predicate[0].rhs")),
+            "expected predicate-path diagnostic context, got: {:?}",
+            unsupported
+        );
+        assert!(
+            unsupported
+                .iter()
+                .any(|d| d.message.contains("score.modifier[0].condition")),
+            "expected score-condition diagnostic context, got: {:?}",
+            unsupported
         );
     }
 }

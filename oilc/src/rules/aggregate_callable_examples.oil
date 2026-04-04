@@ -1,0 +1,27 @@
+set aggregate_values = [1, 3, 2]
+set shell_name_values = ["bash", "bash", "sh"]
+
+rule "aggregate_callable_thresholds" {
+  from endpoint.process
+  correlate process.spawn as p
+
+  where
+    max(aggregate_values) == 3
+    and min(aggregate_values) == 1
+    and sum(aggregate_values) == 6
+    and avg(aggregate_values) > 1.5
+
+  respond
+    alert low "Aggregate callables evaluated"
+}
+
+rule "distinct_count_guard" {
+  from endpoint.process
+  correlate process.spawn as p
+
+  where
+    count(distinct(shell_name_values)) == 2
+
+  respond
+    alert low "Distinct + count callable chain evaluated"
+}

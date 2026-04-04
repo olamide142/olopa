@@ -297,7 +297,31 @@ impl<'a> Resolver<'a> {
                     }
                 }
             }
-            RuleBody::Graph(_) | RuleBody::Around(_) => {}
+            RuleBody::Graph(g) => {
+                if let Some(alias) = &g.source.alias {
+                    scope.insert(alias.node.clone());
+                    if let Some(entity) = map_source_to_entity(&g.source.domain, &g.source.event) {
+                        alias_entity.insert(alias.node.clone(), entity.to_string());
+                    }
+                }
+                for pattern in &g.patterns {
+                    scope.insert(pattern.alias.node.clone());
+                    if let Some(entity) = map_graph_entity_to_entity(self.schema, &pattern.entity_type)
+                    {
+                        alias_entity.insert(pattern.alias.node.clone(), entity);
+                    }
+                }
+            }
+            RuleBody::Around(a) => {
+                for arm in &a.arms {
+                    scope.insert(arm.alias.node.clone());
+                    if let Some(entity) =
+                        map_event_to_entity(&arm.event.node.domain, &arm.event.node.kind)
+                    {
+                        alias_entity.insert(arm.alias.node.clone(), entity.to_string());
+                    }
+                }
+            }
         }
 
         // `score` can be referenced in respond conditions.
@@ -661,6 +685,13 @@ fn map_event_to_entity(domain: &str, _kind: &str) -> Option<&'static str> {
     }
 }
 
+fn map_graph_entity_to_entity(schema: &SchemaRegistry, entity_type: &str) -> Option<String> {
+    if schema.entities.contains_key(entity_type) {
+        return Some(entity_type.to_string());
+    }
+    map_event_to_entity(entity_type, entity_type).map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -752,6 +783,68 @@ rule "r" {
                 .iter()
                 .any(|d| d.message.contains("invalid chain after nullable type")),
             "unexpected nullable-chain resolver diagnostic: {:?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn graph_clause_aliases_resolve_in_where_predicate() {
+        let program = parse_program(
+            r#"
+rule "graph_aliases" {
+  graph endpoint.process as e {
+    process as p,
+    network as n -> connects_to
+  }
+  where e.pid > 0 and p.name == "bash" and n.dest.port > 0
+  respond alert high
+}
+"#,
+        );
+        let schema = parse_schema(include_str!("../oil_stdlib/src/schema.oil")).expect("schema");
+        let out = resolve_program_with_schema(
+            &program,
+            &schema,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        assert!(
+            !out.diagnostics
+                .iter()
+                .any(|d| d.message.contains("unknown identifier")),
+            "unexpected unknown-identifier diagnostics: {:?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn around_clause_aliases_resolve_in_where_predicate() {
+        let program = parse_program(
+            r#"
+rule "around_aliases" {
+  around host.id within 5m {
+    process.spawn as p,
+    network.connect as n
+  }
+  where p.pid > 0 and n.dest.port > 0
+  respond alert high
+}
+"#,
+        );
+        let schema = parse_schema(include_str!("../oil_stdlib/src/schema.oil")).expect("schema");
+        let out = resolve_program_with_schema(
+            &program,
+            &schema,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        assert!(
+            !out.diagnostics
+                .iter()
+                .any(|d| d.message.contains("unknown identifier")),
+            "unexpected unknown-identifier diagnostics: {:?}",
             out.diagnostics
         );
     }

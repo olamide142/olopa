@@ -126,7 +126,31 @@ impl<'a> Typechecker<'a> {
                     }
                 }
             }
-            RuleBody::Graph(_) | RuleBody::Around(_) => {}
+            RuleBody::Graph(g) => {
+                if let Some(alias) = &g.source.alias {
+                    if let Some(entity) = map_source_to_entity(&g.source.domain, &g.source.event) {
+                        alias_entity.insert(alias.node.clone(), entity.to_string());
+                        value_scope.insert(alias.node.clone(), Ty::Entity(entity.to_string()));
+                    }
+                }
+                for pattern in &g.patterns {
+                    if let Some(entity) = map_graph_entity_to_entity(self.schema, &pattern.entity_type)
+                    {
+                        alias_entity.insert(pattern.alias.node.clone(), entity.clone());
+                        value_scope.insert(pattern.alias.node.clone(), Ty::Entity(entity));
+                    }
+                }
+            }
+            RuleBody::Around(a) => {
+                for arm in &a.arms {
+                    if let Some(entity) =
+                        map_event_to_entity(&arm.event.node.domain, &arm.event.node.kind)
+                    {
+                        alias_entity.insert(arm.alias.node.clone(), entity.to_string());
+                        value_scope.insert(arm.alias.node.clone(), Ty::Entity(entity.to_string()));
+                    }
+                }
+            }
         }
 
         if let Some(where_expr) = &rule.where_ {
@@ -669,6 +693,10 @@ fn type_compatible(a: &Ty, b: &Ty) -> bool {
         (Ty::Nullable(x), y) => type_compatible(x, y),
         (x, Ty::Nullable(y)) => type_compatible(x, y),
         (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => true,
+        (Ty::Duration, Ty::Int)
+        | (Ty::Int, Ty::Duration)
+        | (Ty::Duration, Ty::Float)
+        | (Ty::Float, Ty::Duration) => true,
         // In OIL rules, path constants are commonly expressed as string
         // literals, so Path and Str should be interoperable.
         (Ty::Path, Ty::Str) | (Ty::Str, Ty::Path) => true,
@@ -677,7 +705,7 @@ fn type_compatible(a: &Ty, b: &Ty) -> bool {
 }
 
 fn is_numeric(t: &Ty) -> bool {
-    matches!(t, Ty::Int | Ty::Float)
+    matches!(t, Ty::Int | Ty::Float | Ty::Duration)
 }
 
 fn is_string_like(t: &Ty) -> bool {
@@ -770,6 +798,13 @@ fn map_event_to_entity(domain: &str, _kind: &str) -> Option<&'static str> {
     }
 }
 
+fn map_graph_entity_to_entity(schema: &SchemaRegistry, entity_type: &str) -> Option<String> {
+    if schema.entities.contains_key(entity_type) {
+        return Some(entity_type.to_string());
+    }
+    map_event_to_entity(entity_type, entity_type).map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -848,6 +883,52 @@ rule "r" {
                 .iter()
                 .any(|d| d.message.contains("respond condition expects bool")),
             "did not expect bool-mismatch diagnostic, got: {:?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn around_clause_aliases_participate_in_type_inference() {
+        let out = typecheck_source(
+            r#"
+rule "around_typed_alias" {
+  around host.id within 5m {
+    process.spawn as p
+  }
+  where p.pid starts_with "1"
+  respond alert high
+}
+"#,
+        );
+
+        assert!(
+            out.diagnostics
+                .iter()
+                .any(|d| d.message.contains("string operator lhs expects string/path")),
+            "expected starts_with type diagnostic from around alias field typing, got: {:?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn graph_clause_aliases_participate_in_type_inference() {
+        let out = typecheck_source(
+            r#"
+rule "graph_typed_alias" {
+  graph endpoint.process as e {
+    process as p
+  }
+  where p.pid starts_with "1"
+  respond alert high
+}
+"#,
+        );
+
+        assert!(
+            out.diagnostics
+                .iter()
+                .any(|d| d.message.contains("string operator lhs expects string/path")),
+            "expected starts_with type diagnostic from graph alias field typing, got: {:?}",
             out.diagnostics
         );
     }

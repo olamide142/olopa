@@ -1,0 +1,59 @@
+set interactive_shells_duration_examples = ["sh", "bash", "zsh", "fish"]
+
+rule "duration_gate_shell_after_warmup" {
+  from endpoint.process
+  correlate process.spawn as p
+
+  where
+    p.name in interactive_shells_duration_examples
+    and event.ts_ns > 5m
+
+  respond
+    alert low "Shell spawn happened after warmup"
+}
+
+rule "duration_math_egress_rate" {
+  from network.flow
+  correlate network.connect as n
+
+  where
+    n.direction == "outbound"
+    and n.bytes_out > 250000
+    and (n.bytes_out / 1s) > 150000
+    and (event.ts_ns - 500ms) > 5s
+
+  let event.ts_ns > 5m
+    kib_out = n.bytes_out / 1024
+    bytes_per_ms = n.bytes_out / 1ms
+    kib_out_large = kib_out > 512
+    high_ms_rate = bytes_per_ms > 300
+
+  score
+    55
+    +15 if kib_out_large
+    +20 if high_ms_rate
+
+  respond
+    if score >= 75 {
+      alert high "High outbound transfer rate"
+    } else {
+      alert medium "Elevated outbound transfer rate"
+    }
+}
+
+rule "duration_unit_normalization_guard" {
+  from endpoint.process
+  correlate process.spawn as p
+
+  where
+    p.pid > 0
+    and event.ts_ns > 2m
+    and event.ts_ns > 120000ms
+    and 1m == 60s
+    and 1s == 1000ms
+    and 1ms == 1000us
+    and 1us == 1000ns
+
+  respond
+    alert informational "Duration literal normalization check"
+}

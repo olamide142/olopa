@@ -471,6 +471,8 @@ fn keyword_from(text: &str) -> Option<Keyword> {
         "source" => Keyword::Source,
         "match" => Keyword::Match,
         "correlate" => Keyword::Correlate,
+        "graph" => Keyword::Graph,
+        "around" => Keyword::Around,
         "where" => Keyword::Where,
         "within" => Keyword::Within,
         "let" => Keyword::Let,

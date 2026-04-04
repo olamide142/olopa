@@ -1,0 +1,25 @@
+set interactive_shells_rate_examples = ["sh", "bash", "zsh", "fish"]
+
+rule "rate_interactive_shell_spawns_per_name" {
+  from endpoint.process
+  correlate process.spawn as p
+
+  where
+    p.name in interactive_shells_rate_examples
+    and rate(p.name, 30s) >= 3
+
+  respond
+    alert medium "Shell spawn rate exceeded threshold in 30s window"
+}
+
+rule "rate_destination_domain_burst" {
+  from network.flow
+  correlate network.connect as n
+
+  where
+    n.dest.domain != null
+    and rate(n.dest.domain, 1m) >= 10
+
+  respond
+    alert high "Destination domain rate burst detected"
+}

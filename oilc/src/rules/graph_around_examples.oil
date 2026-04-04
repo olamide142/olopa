@@ -1,0 +1,28 @@
+rule "graph_process_to_network_shape" {
+  graph endpoint.process as e {
+    process as p,
+    network as n -> connects_to
+  }
+
+  where
+    e.pid > 0
+    and p.pid > 0
+    and n.dest.port > 0
+
+  respond
+    alert medium "Graph shape observed"
+}
+
+rule "around_host_shell_then_egress" {
+  around host.id within 10m {
+    process.spawn as p,
+    network.connect as n
+  }
+
+  where
+    p.name in ["sh", "bash", "zsh", "fish"]
+    and n.direction == "outbound"
+
+  respond
+    alert high "Interactive shell with outbound activity in host window"
+}

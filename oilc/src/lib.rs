@@ -32,7 +32,10 @@ pub use resolver::{
     resolve_program, resolve_program_with_globals, resolve_program_with_schema, ExternalRef,
     ExternalSymbolSource, ResolveOutput, ResolvedCall, ResolvedCallKind, SymbolTable,
 };
-pub use runtime_ir::{lower_runtime_program, RuntimeExpr, RuntimeProgram, RuntimeRule};
+pub use runtime_ir::{
+    lower_runtime_program, runtime_fields_from_schema, RuntimeExpr, RuntimeField, RuntimeFieldType,
+    RuntimeProgram, RuntimeRule,
+};
 pub use schema::{
     parse_schema, EntitySchema, FieldSchema, FieldType, PrimitiveType, RootSchema, SchemaRegistry,
 };
@@ -341,11 +344,12 @@ fn finalize_unit(
     };
 
     // Stage 6: Validate MIR for structural/semantic issues emitted by lowering.
-    let mir_diagnostics = if config.run_mir {
-        mir.as_ref().map(validate_program).unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    // Run this whenever MIR exists so unsupported expression nodes cannot bypass
+    // checks through alternate mode/config combinations.
+    let mir_diagnostics = mir.as_ref().map(validate_program).unwrap_or_default();
+    let mir_has_errors = mir_diagnostics
+        .iter()
+        .any(|d| matches!(d.severity, MirValidationSeverity::Error));
 
     // Stage 7: Generate backend artifacts (e.g., Cypher) from MIR when requested.
     let codegen = if config.run_codegen {
@@ -355,7 +359,17 @@ fn finalize_unit(
     };
 
     // Stage 8: Build runtime IR from MIR for downstream runtime execution/serialization.
-    let runtime_ir = mir.as_ref().map(lower_runtime_program);
+    // Runtime IR is withheld on MIR errors to enforce the hard compile gate.
+    let runtime_fields = runtime_ir::runtime_fields_from_schema(&schema);
+    let runtime_ir = if mir_has_errors {
+        None
+    } else {
+        mir.as_ref().map(|mir| {
+            let mut program = lower_runtime_program(mir);
+            program.fields = runtime_fields.clone();
+            program
+        })
+    };
 
     // Stage 9: Normalize diagnostics from each stage into a single CLI/API-friendly list.
     let mut diagnostics = Vec::new();
@@ -446,4 +460,33 @@ fn build_global_symbols(
     }
 
     (symbols, diagnostics)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compile_keeps_runtime_ir_for_unknown_callable_calls() {
+        let src = r#"
+rule "unsupported_expr_gate" {
+  from endpoint.process
+  correlate process.spawn as p
+  where unknown_fn(p.pid) == true
+  respond alert high
+}
+"#;
+        let out = compile(src, &CompilerConfig::default()).expect("compile");
+        assert!(
+            out.diagnostics.iter().any(|d| d.stage == "resolve"
+                && !d.is_error
+                && d.message.contains("unknown callable")),
+            "expected resolve unknown-callable warning, got: {:?}",
+            out.diagnostics
+        );
+        assert!(
+            out.runtime_ir.is_some(),
+            "runtime IR should still be emitted when resolver emits warnings only"
+        );
+    }
 }

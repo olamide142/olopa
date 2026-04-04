@@ -7,3 +7,13 @@ callable baseline.workload(namespace: Str, name: Str) -> BaselineProfile
 
 // Example non-entity return callable: feed lookup returns a domain set.
 callable intel.domains(feed: Str) -> Set<Str>
+
+// Statistical helpers evaluated by runtime engine.
+callable rare(value: Str) -> Bool
+callable unusual_for(value: Str, entity: Str) -> Bool
+callable max(values: Set<Int>) -> Int
+callable min(values: Set<Int>) -> Int
+callable sum(values: Set<Int>) -> Int
+callable avg(values: Set<Int>) -> Float
+callable distinct(values: Set<Str>) -> Set<Str>
+callable rate(value: Str, window: Duration) -> Int

@@ -21,6 +21,8 @@ pub enum Keyword {
     Source,
     Match,
     Correlate,
+    Graph,
+    Around,
     Where,
     Within,
     Let,

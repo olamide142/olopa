@@ -118,8 +118,13 @@ fn emit_bool_expr(expr: &MirExpr) -> String {
             )
         }
         MirExpr::Matches { lhs, pattern } => {
-            format!("({} =~ {})", emit_value_expr(lhs), quote_cypher_str(pattern))
+            format!(
+                "({} =~ {})",
+                emit_value_expr(lhs),
+                quote_cypher_str(pattern)
+            )
         }
+        MirExpr::Call { .. } => "true".to_string(),
         MirExpr::Unsupported { .. } => "true".to_string(),
         _ => format!("({})", emit_value_expr(expr)),
     }
@@ -130,6 +135,7 @@ fn emit_value_expr(expr: &MirExpr) -> String {
         MirExpr::Str(s) => quote_cypher_str(s),
         MirExpr::Int(n) => n.to_string(),
         MirExpr::Float(n) => n.to_string(),
+        MirExpr::Duration(d) => duration_to_nanos(*d).to_string(),
         MirExpr::Bool(v) => {
             if *v {
                 "true".to_string()
@@ -139,6 +145,7 @@ fn emit_value_expr(expr: &MirExpr) -> String {
         }
         MirExpr::Null => "null".to_string(),
         MirExpr::Field { path } => emit_field_path(path),
+        MirExpr::Call { .. } => "null".to_string(),
         MirExpr::List(items) => {
             let items = items
                 .iter()
@@ -146,6 +153,18 @@ fn emit_value_expr(expr: &MirExpr) -> String {
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("[{items}]")
+        }
+        MirExpr::Add { lhs, rhs } => {
+            format!("({} + {})", emit_value_expr(lhs), emit_value_expr(rhs))
+        }
+        MirExpr::Sub { lhs, rhs } => {
+            format!("({} - {})", emit_value_expr(lhs), emit_value_expr(rhs))
+        }
+        MirExpr::Mul { lhs, rhs } => {
+            format!("({} * {})", emit_value_expr(lhs), emit_value_expr(rhs))
+        }
+        MirExpr::Div { lhs, rhs } => {
+            format!("({} / {})", emit_value_expr(lhs), emit_value_expr(rhs))
         }
         MirExpr::And { .. }
         | MirExpr::Or { .. }
@@ -171,6 +190,19 @@ fn emit_field_path(path: &str) -> String {
 
 fn quote_cypher_str(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+fn duration_to_nanos(duration: crate::ast::OilDuration) -> u64 {
+    let factor = match duration.unit {
+        crate::ast::DurationUnit::Ns => 1u64,
+        crate::ast::DurationUnit::Us => 1_000u64,
+        crate::ast::DurationUnit::Ms => 1_000_000u64,
+        crate::ast::DurationUnit::S => 1_000_000_000u64,
+        crate::ast::DurationUnit::M => 60 * 1_000_000_000u64,
+        crate::ast::DurationUnit::H => 60 * 60 * 1_000_000_000u64,
+        crate::ast::DurationUnit::D => 24 * 60 * 60 * 1_000_000_000u64,
+    };
+    duration.value.saturating_mul(factor)
 }
 
 fn sanitize_name(raw: &str) -> String {

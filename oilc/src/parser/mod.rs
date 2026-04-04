@@ -2,8 +2,8 @@
 //!
 //! What this parser currently supports:
 //! - top-level declarations: `use`/`import`, `set`, `predicate`, `fact`, `rule`
-//! - rule clauses: `from`, `match`, `correlate`, `where`, `within`, `let`, `score`, `respond`,
-//!   `require`, `verify`, `emit`
+//! - rule clauses: `from`, `match`, `correlate`, `graph`, `around`, `where`, `within`, `let`,
+//!   `score`, `respond`, `require`, `verify`, `emit`
 //! - Pratt expression parsing for boolean/comparison/membership/string operators
 //! - non-fatal error accumulation with synchronization and capped diagnostics
 //!
@@ -12,11 +12,12 @@
 //! - advanced call-chain expression forms beyond current AST coverage
 
 use crate::ast::{
-    ActionStmt, AuthKind, ChallengeKind, CorrelateArm, CorrelateBlock, CorrelateJoin,
-    CorrelateMode, DurationUnit, EmitStmt, EventPattern, Expr, FactDecl, ImportDecl, IsolateKind,
-    LetBinding, MatchBlock, MatchStep, OilDuration, PredicateDecl, Program, RequireClause,
-    RespondArm, RespondBlock, RevokeKind, RuleBody, RuleDecl, ScoreExpr, ScoreModifier, SetDecl,
-    Severity, SnapshotKind, SourceSpec, Spanned, VerifyClause,
+    ActionStmt, AroundBlock, AuthKind, ChallengeKind, CorrelateArm, CorrelateBlock, CorrelateJoin,
+    CorrelateMode, DurationUnit, EmitStmt, EventPattern, Expr, FactDecl, GatherArm, GraphBlock,
+    GraphPattern, ImportDecl, IsolateKind, LetBinding, MatchBlock, MatchStep, OilDuration,
+    PredicateDecl, Program, RequireClause, RespondArm, RespondBlock, RevokeKind, RuleBody,
+    RuleDecl, ScoreExpr, ScoreModifier, SetDecl, Severity, SnapshotKind, SourceSpec, Spanned,
+    VerifyClause,
 };
 use crate::lexer::{Keyword, Span, TimeUnit, Token, TokenKind};
 
@@ -305,6 +306,22 @@ impl Parser {
                 continue;
             }
 
+            if self.peek_keyword(Keyword::Graph) {
+                match self.parse_graph_block() {
+                    Some(g) => body = RuleBody::Graph(g),
+                    None => self.synchronize_rule_line(),
+                }
+                continue;
+            }
+
+            if self.peek_keyword(Keyword::Around) {
+                match self.parse_around_block() {
+                    Some(a) => body = RuleBody::Around(a),
+                    None => self.synchronize_rule_line(),
+                }
+                continue;
+            }
+
             if self.peek_keyword(Keyword::Match) {
                 match self.parse_match_block() {
                     Some(m) => body = RuleBody::Match(m),
@@ -574,6 +591,154 @@ impl Parser {
             event: Spanned::new(pattern, start..end),
             alias,
             join,
+        })
+    }
+
+    fn parse_graph_block(&mut self) -> Option<GraphBlock> {
+        self.advance(); // graph
+        self.consume_newlines();
+
+        let source = self.parse_source_spec()?;
+        self.consume_newlines();
+        let _ = self.expect(&TokenKind::LBrace, "expected '{' to start graph block")?;
+
+        let mut patterns = Vec::new();
+        while !self.is_at_end() && !self.check(&TokenKind::RBrace) {
+            self.consume_newlines();
+            if self.check(&TokenKind::RBrace) {
+                break;
+            }
+            if self.match_kind(&TokenKind::Comma) {
+                self.consume_newlines();
+                continue;
+            }
+
+            if let Some(pattern) = self.parse_graph_pattern() {
+                patterns.push(pattern);
+            } else {
+                self.synchronize_rule_line();
+            }
+
+            let _ = self.match_kind(&TokenKind::Comma);
+            self.consume_newlines();
+        }
+
+        let _ = self.expect(&TokenKind::RBrace, "expected '}' to close graph block");
+        Some(GraphBlock { source, patterns })
+    }
+
+    fn parse_graph_pattern(&mut self) -> Option<GraphPattern> {
+        let entity_tok = self.expect_name_atom("expected graph entity type")?.clone();
+        let entity_type = self.name_atom_text(&entity_tok)?;
+
+        let alias = if self.match_ident_text("as") {
+            let tok = self.expect_ident("expected alias after 'as' in graph pattern")?.clone();
+            Spanned::new(self.ident_text(&tok)?, tok.span)
+        } else {
+            self.error_here("expected 'as <alias>' in graph pattern");
+            Spanned::new("<missing_alias>".to_string(), self.peek().span.clone())
+        };
+
+        let edge_type = if self.match_kind(&TokenKind::Arrow) {
+            let edge_tok = self.expect_name_atom("expected edge type after '->'")?.clone();
+            Some(self.name_atom_text(&edge_tok)?)
+        } else {
+            None
+        };
+
+        Some(GraphPattern {
+            entity_type,
+            alias,
+            edge_type,
+        })
+    }
+
+    fn parse_around_block(&mut self) -> Option<AroundBlock> {
+        self.advance(); // around
+        self.consume_newlines();
+
+        let entity = self.parse_dotted_name("expected entity after 'around'")?;
+        self.consume_newlines();
+
+        let window_start = if self.peek_keyword(Keyword::Within) {
+            self.advance().span.start
+        } else {
+            entity.span.end
+        };
+        let window_tok = self.peek().clone();
+        let window = match window_tok.kind {
+            TokenKind::DurationLit { value, unit } => {
+                self.advance();
+                Spanned::new(
+                    OilDuration {
+                        value,
+                        unit: map_duration_unit(unit),
+                    },
+                    window_start..window_tok.span.end,
+                )
+            }
+            _ => {
+                self.error_here(
+                    "expected duration literal after around entity (or 'within <duration>')",
+                );
+                return None;
+            }
+        };
+
+        self.consume_newlines();
+        let _ = self.expect(&TokenKind::LBrace, "expected '{' to start around block")?;
+
+        let mut arms = Vec::new();
+        while !self.is_at_end() && !self.check(&TokenKind::RBrace) {
+            self.consume_newlines();
+            if self.check(&TokenKind::RBrace) {
+                break;
+            }
+            if self.match_kind(&TokenKind::Comma) {
+                self.consume_newlines();
+                continue;
+            }
+
+            let start = self.peek().span.start;
+            let event = match self.parse_event_pattern() {
+                Some(pattern) => pattern,
+                None => {
+                    self.synchronize_rule_line();
+                    self.consume_newlines();
+                    continue;
+                }
+            };
+            let alias = if self.match_ident_text("as") {
+                let tok = self.expect_ident("expected alias after 'as' in around arm")?.clone();
+                Spanned::new(self.ident_text(&tok)?, tok.span.clone())
+            } else {
+                self.error_here("expected 'as <alias>' in around arm");
+                Spanned::new("<missing_alias>".to_string(), self.peek().span.clone())
+            };
+            let end = alias.span.end.max(start);
+            arms.push(GatherArm {
+                event: Spanned::new(event, start..end),
+                alias,
+            });
+
+            if !self.is_at_end()
+                && !self.check(&TokenKind::Newline)
+                && !self.check(&TokenKind::Comma)
+                && !self.check(&TokenKind::RBrace)
+            {
+                self.error_here("unexpected tokens after around arm");
+                self.synchronize_rule_line();
+            }
+
+            let _ = self.match_kind(&TokenKind::Comma);
+            self.consume_newlines();
+        }
+
+        let _ = self.expect(&TokenKind::RBrace, "expected '}' to close around block");
+        Some(AroundBlock {
+            entity,
+            window,
+            arms,
         })
     }
 
@@ -1393,10 +1558,23 @@ impl Parser {
         let mut lhs = self.parse_prefix_expr()?;
 
         loop {
-            self.consume_newlines();
+            let mut consumed_newline = false;
+            while self.match_kind(&TokenKind::Newline) {
+                consumed_newline = true;
+            }
             let Some((op, l_bp, r_bp)) = self.peek_infix_op() else {
                 break;
             };
+            // Keep score-clause modifier prefixes (`+ 10 if ...`) from being
+            // absorbed as arithmetic continuation of the prior line.
+            if consumed_newline
+                && matches!(
+                    op,
+                    InfixOp::Add | InfixOp::Sub | InfixOp::Mul | InfixOp::Div
+                )
+            {
+                break;
+            }
             if l_bp < min_bp {
                 break;
             }
@@ -1414,6 +1592,26 @@ impl Parser {
             let node = match op {
                 InfixOp::Or => Expr::Or(Box::new(lhs), Box::new(rhs)),
                 InfixOp::And => Expr::And(Box::new(lhs), Box::new(rhs)),
+                InfixOp::Add => Expr::BinOp {
+                    op: crate::ast::ArithOp::Add,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                InfixOp::Sub => Expr::BinOp {
+                    op: crate::ast::ArithOp::Sub,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                InfixOp::Mul => Expr::BinOp {
+                    op: crate::ast::ArithOp::Mul,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                InfixOp::Div => Expr::BinOp {
+                    op: crate::ast::ArithOp::Div,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
                 InfixOp::Eq => Expr::Cmp {
                     op: crate::ast::CmpOp::Eq,
                     lhs: Box::new(lhs),
@@ -1524,13 +1722,13 @@ impl Parser {
             }
             TokenKind::Kw(Keyword::Not) => {
                 self.advance();
-                let rhs = self.parse_expr_bp(9)?;
+                let rhs = self.parse_expr_bp(11)?;
                 let span = tok.span.start..rhs.span.end;
                 Some(Spanned::new(Expr::Not(Box::new(rhs)), span))
             }
             TokenKind::Minus => {
                 self.advance();
-                let rhs = self.parse_expr_bp(9)?;
+                let rhs = self.parse_expr_bp(11)?;
                 let span = tok.span.start..rhs.span.end;
                 Some(Spanned::new(Expr::UnaryMinus(Box::new(rhs)), span))
             }
@@ -1676,6 +1874,10 @@ impl Parser {
         let op = match self.peek().kind {
             TokenKind::Kw(Keyword::Or) => InfixOp::Or,
             TokenKind::Kw(Keyword::And) => InfixOp::And,
+            TokenKind::Plus => InfixOp::Add,
+            TokenKind::Minus => InfixOp::Sub,
+            TokenKind::Star => InfixOp::Mul,
+            TokenKind::Slash => InfixOp::Div,
             TokenKind::Eq => InfixOp::Eq,
             TokenKind::Ne => InfixOp::Ne,
             TokenKind::Lt => InfixOp::Lt,
@@ -1694,6 +1896,8 @@ impl Parser {
         let bp = match op {
             InfixOp::Or => (1, 2),
             InfixOp::And => (3, 4),
+            InfixOp::Add | InfixOp::Sub => (7, 8),
+            InfixOp::Mul | InfixOp::Div => (9, 10),
             InfixOp::Eq
             | InfixOp::Ne
             | InfixOp::Lt
@@ -1993,6 +2197,8 @@ impl Parser {
             || self.peek_keyword(Keyword::Source)
             || self.peek_keyword(Keyword::Match)
             || self.peek_keyword(Keyword::Correlate)
+            || self.peek_keyword(Keyword::Graph)
+            || self.peek_keyword(Keyword::Around)
             || self.peek_keyword(Keyword::Where)
             || self.peek_keyword(Keyword::Within)
             || self.peek_keyword(Keyword::Let)
@@ -2039,6 +2245,10 @@ impl Parser {
 enum InfixOp {
     Or,
     And,
+    Add,
+    Sub,
+    Mul,
+    Div,
     Eq,
     Ne,
     Lt,
@@ -2285,6 +2495,66 @@ rule "require_inline" {
     }
 
     #[test]
+    fn parses_graph_clause_with_patterns() {
+        let src = r#"
+rule "graph_shape" {
+  graph endpoint.process as p {
+    process as proc
+    network as net -> connects_to
+  }
+  respond alert high
+}
+"#;
+        let program = parse_ok(src);
+        let rule = &program.rules[0];
+        match &rule.body.node {
+            RuleBody::Graph(graph) => {
+                assert_eq!(graph.source.domain, "endpoint");
+                assert_eq!(graph.source.event, "process");
+                assert_eq!(graph.source.alias.as_ref().map(|a| a.node.as_str()), Some("p"));
+                assert_eq!(graph.patterns.len(), 2);
+                assert_eq!(graph.patterns[0].entity_type, "process");
+                assert_eq!(graph.patterns[0].alias.node, "proc");
+                assert_eq!(graph.patterns[0].edge_type, None);
+                assert_eq!(graph.patterns[1].entity_type, "network");
+                assert_eq!(graph.patterns[1].alias.node, "net");
+                assert_eq!(graph.patterns[1].edge_type.as_deref(), Some("connects_to"));
+            }
+            other => panic!("expected RuleBody::Graph, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_around_clause_with_window_and_arms() {
+        let src = r#"
+rule "around_shape" {
+  around host.id within 5m {
+    process.spawn as p
+    network.connect as n
+  }
+  respond alert high
+}
+"#;
+        let program = parse_ok(src);
+        let rule = &program.rules[0];
+        match &rule.body.node {
+            RuleBody::Around(around) => {
+                assert_eq!(around.entity.node, "host.id");
+                assert_eq!(around.window.node.value, 5);
+                assert_eq!(around.window.node.unit, DurationUnit::M);
+                assert_eq!(around.arms.len(), 2);
+                assert_eq!(around.arms[0].event.node.domain, "process");
+                assert_eq!(around.arms[0].event.node.kind, "spawn");
+                assert_eq!(around.arms[0].alias.node, "p");
+                assert_eq!(around.arms[1].event.node.domain, "network");
+                assert_eq!(around.arms[1].event.node.kind, "connect");
+                assert_eq!(around.arms[1].alias.node, "n");
+            }
+            other => panic!("expected RuleBody::Around, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn expression_precedence_and_over_or() {
         let src = r#"
 rule "prec" {
@@ -2302,6 +2572,51 @@ rule "prec" {
                 other => panic!("expected rhs to be And, got {:?}", other),
             },
             other => panic!("expected top expr Or, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn expression_precedence_arithmetic_over_comparison() {
+        let src = r#"
+rule "arith_prec" {
+  from endpoint.process
+  match process.spawn as p
+  where 1 + 2 * 3 == 7
+  respond alert high
+}
+"#;
+        let program = parse_ok(src);
+        let where_expr = program.rules[0].where_.as_ref().expect("where parsed");
+        match &where_expr.node {
+            Expr::Cmp {
+                op: crate::ast::CmpOp::Eq,
+                lhs,
+                rhs,
+            } => {
+                match &lhs.node {
+                    Expr::BinOp {
+                        op: crate::ast::ArithOp::Add,
+                        lhs: add_lhs,
+                        rhs: add_rhs,
+                    } => {
+                        assert!(matches!(add_lhs.node, Expr::IntLit(1)));
+                        match &add_rhs.node {
+                            Expr::BinOp {
+                                op: crate::ast::ArithOp::Mul,
+                                lhs: mul_lhs,
+                                rhs: mul_rhs,
+                            } => {
+                                assert!(matches!(mul_lhs.node, Expr::IntLit(2)));
+                                assert!(matches!(mul_rhs.node, Expr::IntLit(3)));
+                            }
+                            other => panic!("expected add rhs to be Mul binop, got {:?}", other),
+                        }
+                    }
+                    other => panic!("expected lhs to be Add binop, got {:?}", other),
+                }
+                assert!(matches!(rhs.node, Expr::IntLit(7)));
+            }
+            other => panic!("expected top expr Eq comparison, got {:?}", other),
         }
     }
 

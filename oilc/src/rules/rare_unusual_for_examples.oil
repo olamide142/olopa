@@ -1,0 +1,30 @@
+rule "rare_destination_domain_after_shell" {
+  from endpoint.process, network.flow
+
+  correlate
+    process.spawn as p
+    with network.connect as n on n.process_id == p.id
+
+  where
+    is_shell(p)
+    and n.direction == "outbound"
+    and rare(n.dest.domain)
+
+  respond
+    alert medium "Shell reached a rare destination domain"
+}
+
+rule "unusual_domain_for_host" {
+  from endpoint.process, network.flow
+
+  correlate
+    process.spawn as p
+    with network.connect as n on n.process_id == p.id
+
+  where
+    n.direction == "outbound"
+    and unusual_for(n.dest.domain, p.host_id)
+
+  respond
+    alert high "Destination domain is unusual for this host"
+}
