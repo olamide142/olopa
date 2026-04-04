@@ -19,10 +19,20 @@ struct HttpSenderConfig {
     ingest_url: String,
     tenant_id: String,
     host_id: String,
+    auth: Option<HttpSenderAuth>,
+}
+
+#[derive(Clone, Debug)]
+enum HttpSenderAuth {
+    BearerToken(String),
+    ApiKey(String),
 }
 
 impl HttpSenderConfig {
     fn from_env() -> Self {
+        let auth = env_non_empty("OLOPA_INGEST_API_TOKEN")
+            .map(HttpSenderAuth::BearerToken)
+            .or_else(|| env_non_empty("OLOPA_INGEST_API_KEY").map(HttpSenderAuth::ApiKey));
         Self {
             ingest_url: std::env::var("OLOPA_INGEST_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:8000/api/v1/ingest/batches".to_string()),
@@ -31,6 +41,7 @@ impl HttpSenderConfig {
             host_id: std::env::var("OLOPA_INGEST_HOST_ID")
                 .or_else(|_| std::env::var("HOSTNAME"))
                 .unwrap_or_else(|_| "agent-local".to_string()),
+            auth,
         }
     }
 }
@@ -39,6 +50,9 @@ impl HttpSenderConfig {
 struct SharedSenderState {
     spool_pending_bytes: AtomicU64,
     spooling: AtomicBool,
+    backend_reachable: AtomicBool,
+    backend_reachability_known: AtomicBool,
+    backend_rtt_ms: AtomicU64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -165,10 +179,15 @@ impl HttpIngestSender {
         let cfg = HttpSenderConfig::from_env();
         let (tx, rx) = mpsc::unbounded_channel();
         let shared = Arc::new(SharedSenderState::default());
+        let auth_mode = match &cfg.auth {
+            Some(HttpSenderAuth::BearerToken(_)) => "bearer",
+            Some(HttpSenderAuth::ApiKey(_)) => "x-api-key",
+            None => "none",
+        };
 
         info!(
-            "sender: http ingest enabled url={} tenant={} host={}",
-            cfg.ingest_url, cfg.tenant_id, cfg.host_id
+            "sender: http ingest enabled url={} tenant={} host={} auth={}",
+            cfg.ingest_url, cfg.tenant_id, cfg.host_id, auth_mode
         );
 
         tokio::spawn(sender_worker(rx, cfg, Arc::clone(&shared)));
@@ -195,9 +214,22 @@ impl SenderLike for HttpIngestSender {
         let local_pending = self.local_spool.iter().map(|b| b.len() as u64).sum::<u64>();
         let pending = worker_pending.saturating_add(local_pending);
         let spooling = pending > 0 || self.shared.spooling.load(Ordering::Relaxed);
+        let reachability_known = self
+            .shared
+            .backend_reachability_known
+            .load(Ordering::Relaxed);
+        let backend_reachable = if reachability_known {
+            Some(self.shared.backend_reachable.load(Ordering::Relaxed))
+        } else {
+            None
+        };
+        let rtt_ms = self.shared.backend_rtt_ms.load(Ordering::Relaxed);
+        let backend_rtt_ms = (rtt_ms > 0).then_some(rtt_ms);
         SenderStats {
             spool_pending_bytes: pending,
             spooling,
+            backend_reachable,
+            backend_rtt_ms,
         }
     }
 
@@ -262,11 +294,11 @@ async fn sender_worker(
             _ = retry_tick.tick() => {}
         }
 
-        flush_backlog(&client, &cfg, &mut backlog).await;
+        flush_backlog(&client, &cfg, &shared, &mut backlog).await;
         update_shared_state(&shared, &backlog);
     }
 
-    flush_backlog(&client, &cfg, &mut backlog).await;
+    flush_backlog(&client, &cfg, &shared, &mut backlog).await;
     update_shared_state(&shared, &backlog);
 }
 
@@ -281,14 +313,28 @@ fn update_shared_state(shared: &SharedSenderState, backlog: &VecDeque<QueuedBatc
 async fn flush_backlog(
     client: &reqwest::Client,
     cfg: &HttpSenderConfig,
+    shared: &SharedSenderState,
     backlog: &mut VecDeque<QueuedBatch>,
 ) {
     while let Some(item) = backlog.front() {
-        match post_batch(client, &cfg.ingest_url, &item.batch).await {
+        let started = Instant::now();
+        match post_batch(client, cfg, &item.batch).await {
             Ok(()) => {
+                shared
+                    .backend_reachability_known
+                    .store(true, Ordering::Relaxed);
+                shared.backend_reachable.store(true, Ordering::Relaxed);
+                let rtt_ms = started.elapsed().as_millis() as u64;
+                shared
+                    .backend_rtt_ms
+                    .store(rtt_ms.max(1), Ordering::Relaxed);
                 backlog.pop_front();
             }
             Err(err) => {
+                shared
+                    .backend_reachability_known
+                    .store(true, Ordering::Relaxed);
+                shared.backend_reachable.store(false, Ordering::Relaxed);
                 debug!("sender: backlog send paused: {}", err);
                 break;
             }
@@ -296,11 +342,28 @@ async fn flush_backlog(
     }
 }
 
-async fn post_batch(client: &reqwest::Client, url: &str, batch: &IngestBatchRequest) -> Result<()> {
-    let resp = client.post(url).json(batch).send().await?;
+async fn post_batch(
+    client: &reqwest::Client,
+    cfg: &HttpSenderConfig,
+    batch: &IngestBatchRequest,
+) -> Result<()> {
+    let mut req = client.post(&cfg.ingest_url).json(batch);
+    if let Some(auth) = cfg.auth.as_ref() {
+        req = match auth {
+            HttpSenderAuth::BearerToken(token) => req.bearer_auth(token),
+            HttpSenderAuth::ApiKey(api_key) => req.header("x-api-key", api_key),
+        };
+    }
+
+    let resp = req.send().await?;
     let status = resp.status();
     if !status.is_success() {
-        anyhow::bail!("http status {}", status);
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!(
+            "http status {} body={}",
+            status,
+            truncate_for_log(&body, 256)
+        );
     }
 
     let ack = resp.json::<AckResponse>().await.unwrap_or(AckResponse {
@@ -318,6 +381,31 @@ async fn post_batch(client: &reqwest::Client, url: &str, batch: &IngestBatchRequ
     }
 
     Ok(())
+}
+
+fn env_non_empty(key: &str) -> Option<String> {
+    std::env::var(key).ok().and_then(|v| {
+        let trimmed = v.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn truncate_for_log(input: &str, max_len: usize) -> String {
+    if input.len() <= max_len {
+        return input.to_string();
+    }
+    if max_len == 0 {
+        return "...".to_string();
+    }
+    let mut end = max_len.min(input.len());
+    while end > 0 && !input.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &input[..end])
 }
 
 fn payload_to_batches(
@@ -381,6 +469,7 @@ pub(crate) fn payload_to_batches_for_tests(
         ingest_url: "http://127.0.0.1:8000/api/v1/ingest/batches".to_string(),
         tenant_id: tenant_id.to_string(),
         host_id: host_id.to_string(),
+        auth: None,
     };
     let mut dec = DictDecompressor::new();
     let mut seq = 0u64;
@@ -424,7 +513,7 @@ fn append_line_to_batch(batch: &mut IngestBatchRequest, line: &str) {
     attrs.insert("kind".to_string(), "line".to_string());
     attrs.insert("raw".to_string(), line.to_string());
     batch.agent_heartbeats.push(AgentHeartbeat {
-        agent_version: "olopa-agent".to_string(),
+        agent_version: "olopa".to_string(),
         kernel_version: "unknown".to_string(),
         events_read_total: 0,
         events_dropped_total: 0,
@@ -475,7 +564,7 @@ fn append_metric_line(batch: &mut IngestBatchRequest, line: &str) {
     }
 
     batch.agent_heartbeats.push(AgentHeartbeat {
-        agent_version: "olopa-agent".to_string(),
+        agent_version: "olopa".to_string(),
         kernel_version: "unknown".to_string(),
         events_read_total: count,
         events_dropped_total: 0,
@@ -489,7 +578,7 @@ fn append_unknown_payload_heartbeat(batch: &mut IngestBatchRequest, kind: &str, 
     attrs.insert("kind".to_string(), kind.to_string());
     attrs.insert("payload_len".to_string(), len.to_string());
     batch.agent_heartbeats.push(AgentHeartbeat {
-        agent_version: "olopa-agent".to_string(),
+        agent_version: "olopa".to_string(),
         kernel_version: "unknown".to_string(),
         events_read_total: 0,
         events_dropped_total: 0,
@@ -669,6 +758,7 @@ mod tests {
             ingest_url: "http://127.0.0.1:8000/api/v1/ingest/batches".to_string(),
             tenant_id: "t".to_string(),
             host_id: "h".to_string(),
+            auth: None,
         };
         let mut dec = DictDecompressor::new();
         let mut seq = 0;

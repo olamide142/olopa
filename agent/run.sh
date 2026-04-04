@@ -16,4 +16,4 @@ cargo run --manifest-path "$ROOT/oilc/Cargo.toml" -- \
   --mode check
 
 sudo -E OLOPA_RUNTIME_IR="$RUNTIME_IR_PATH" RUST_LOG=info \
-  cargo run --manifest-path "$ROOT/agent/Cargo.toml" -p olopa-agent -- --iface "$IFACE"
+  cargo run --manifest-path "$ROOT/agent/Cargo.toml" -p olopa -- --iface "$IFACE"

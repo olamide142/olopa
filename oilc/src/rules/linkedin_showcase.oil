@@ -1,0 +1,74 @@
+# LinkedIn demo pack
+# Rule 1: detect shell-driven outbound beacon/exfil behavior on unusual domains.
+# Rule 2: detect graph-shaped lateral movement candidates on common remote-admin ports.
+
+# Known interactive shells used as a first-stage suspicious process filter.
+set interactive_shells_linkedin = ["sh", "bash", "zsh", "fish"]
+# Ports often seen in covert or high-impact egress channels.
+set suspicious_egress_ports_linkedin = [53, 443, 8443, 9001]
+
+# What this rule does:
+# Watches a 10-minute host window for shell spawn + outbound connections,
+# then flags domains that are unusual for that host and currently bursting.
+# It escalates to critical (and blocks egress) when burst/volume/tunnel hints stack up.
+rule "linkedin_demo_shell_beacon_outlier" {
+  around host.id within 10m {
+    process.spawn as p,
+    network.connect as n
+  }
+
+  where
+    # Stage 1: suspicious shell activity making outbound network calls.
+    p.name in interactive_shells_linkedin
+    and n.direction == "outbound"
+    and n.dest.domain != null
+    and n.dest.port in suspicious_egress_ports_linkedin
+    # Stage 2: behavior outlier + burst signal.
+    and unusual_for(n.dest.domain, p.host_id)
+    and rate(n.dest.domain, 1m) >= 8
+
+  let
+    # Extra context features that increase confidence.
+    burst = rate(n.dest.domain, 30s) >= 4
+    large_egress = n.bytes_out > 250000
+    dns_tunnel_like = n.dest.port == 53 and n.bytes_out > 100000
+
+  score
+    65
+    +10 if burst
+    +10 if large_egress
+    +15 if dns_tunnel_like
+
+  respond
+    # High confidence: alert + contain.
+    if score >= 90 {
+      alert critical "Possible shell-driven beacon or exfil pattern"
+      block egress n.dest.domain
+      snapshot p, n
+      open case "Shell beacon outlier with burst egress"
+    } else {
+      # Medium/high confidence: alert + preserve evidence.
+      alert high "Shell reached unusual destination with burst behavior"
+      snapshot p, n
+    }
+}
+
+# What this rule does:
+# Matches a process->network graph shape and highlights repeated connection bursts
+# on lateral movement ports (SSH/RDP/SMB) as a graph-driven hunting signal.
+rule "linkedin_demo_graph_lateral_shape" {
+  graph endpoint.process as e {
+    process as p,
+    network as n -> connects_to
+  }
+
+  where
+    e.pid > 0
+    and p.pid > 0
+    and n.dest.port in [22, 3389, 445]
+    and n.dest.domain != null
+    and rate(n.dest.domain, 5m) >= 6
+
+  respond
+    alert medium "Graph lateral movement shape candidate"
+}

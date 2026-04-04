@@ -1,4 +1,4 @@
-//! Build script for `olopa-agent`.
+//! Build script for `olopa`.
 //!
 //! Purpose:
 //! - Compile the eBPF crate (`../ebpf`) during userspace build.

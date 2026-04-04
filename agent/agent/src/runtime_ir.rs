@@ -796,9 +796,7 @@ fn eval_bool(
         }
         RuntimeExpr::Not { expr } => !eval_bool(expr, event, field_specs, callable_state),
         RuntimeExpr::Eq { lhs, rhs } => eval_eq(lhs, rhs, event, field_specs, callable_state),
-        RuntimeExpr::Ne { lhs, rhs } => {
-            !eval_eq(lhs, rhs, event, field_specs, callable_state)
-        }
+        RuntimeExpr::Ne { lhs, rhs } => !eval_eq(lhs, rhs, event, field_specs, callable_state),
         RuntimeExpr::Lt { lhs, rhs } => {
             compare_ord(lhs, rhs, event, field_specs, callable_state, |a, b| a < b)
         }
@@ -813,12 +811,14 @@ fn eval_bool(
         }
         RuntimeExpr::In { lhs, rhs } => eval_in(lhs, rhs, event, field_specs, callable_state),
         RuntimeExpr::StartsWith { lhs, rhs } => {
-            to_string(eval_value(lhs, event, field_specs, callable_state))
-                .starts_with(&to_string(eval_value(rhs, event, field_specs, callable_state)))
+            to_string(eval_value(lhs, event, field_specs, callable_state)).starts_with(&to_string(
+                eval_value(rhs, event, field_specs, callable_state),
+            ))
         }
         RuntimeExpr::EndsWith { lhs, rhs } => {
-            to_string(eval_value(lhs, event, field_specs, callable_state))
-                .ends_with(&to_string(eval_value(rhs, event, field_specs, callable_state)))
+            to_string(eval_value(lhs, event, field_specs, callable_state)).ends_with(&to_string(
+                eval_value(rhs, event, field_specs, callable_state),
+            ))
         }
         RuntimeExpr::Contains { lhs, rhs } => {
             let lhs_value = eval_value(lhs, event, field_specs, callable_state);
@@ -831,18 +831,16 @@ fn eval_bool(
         RuntimeExpr::Matches { lhs, pattern } => {
             value_matches_pattern(eval_value(lhs, event, field_specs, callable_state), pattern)
         }
-        RuntimeExpr::Call { name, args } => value_as_bool(eval_call(
-            name,
-            args,
-            event,
-            field_specs,
-            callable_state,
-        )),
+        RuntimeExpr::Call { name, args } => {
+            value_as_bool(eval_call(name, args, event, field_specs, callable_state))
+        }
         RuntimeExpr::Add { .. }
         | RuntimeExpr::Sub { .. }
         | RuntimeExpr::Mul { .. }
-        | RuntimeExpr::Div { .. } => to_number(eval_value(expr, event, field_specs, callable_state))
-            .is_some_and(|value| value != 0.0),
+        | RuntimeExpr::Div { .. } => {
+            to_number(eval_value(expr, event, field_specs, callable_state))
+                .is_some_and(|value| value != 0.0)
+        }
         RuntimeExpr::Unsupported { .. } => false,
         _ => false,
     }
@@ -1114,8 +1112,7 @@ fn eval_call(
             else {
                 return Value::Number(0.0);
             };
-            let Some(window_ns) =
-                eval_call_window_ns(&args[1], event, field_specs, callable_state)
+            let Some(window_ns) = eval_call_window_ns(&args[1], event, field_specs, callable_state)
             else {
                 return Value::Null;
             };
@@ -1155,9 +1152,7 @@ fn eval_call(
                 Err(_) => return Value::Bool(false),
             };
             let prev = guard.rare_counts.get(&value_key).copied().unwrap_or(0);
-            guard
-                .rare_counts
-                .insert(value_key, prev.saturating_add(1));
+            guard.rare_counts.insert(value_key, prev.saturating_add(1));
             Value::Bool(prev == 0)
         }
         "unusual_for" | "unusualfor" => {
@@ -1168,8 +1163,7 @@ fn eval_call(
             else {
                 return Value::Bool(false);
             };
-            let Some(entity_key) =
-                eval_call_arg_key(&args[1], event, field_specs, callable_state)
+            let Some(entity_key) = eval_call_arg_key(&args[1], event, field_specs, callable_state)
             else {
                 return Value::Bool(false);
             };
@@ -2439,10 +2433,7 @@ mod tests {
 
         let mut zsh = [0u8; 16];
         zsh[..3].copy_from_slice(b"zsh");
-        let new_value_same_entity = IngestEvent {
-            comm: zsh,
-            ..first
-        };
+        let new_value_same_entity = IngestEvent { comm: zsh, ..first };
         let third_matches = engine.evaluate_matches(&new_value_same_entity);
         assert_eq!(
             third_matches.len(),
@@ -3520,7 +3511,9 @@ rule "uid_7" {
         };
         let exec_matches = engine.evaluate_matches(&exec_event);
         assert!(exec_matches.iter().any(|m| m.rule_name == "process_fields"));
-        assert!(!exec_matches.iter().any(|m| m.rule_name == "network_process"));
+        assert!(!exec_matches
+            .iter()
+            .any(|m| m.rule_name == "network_process"));
         assert!(!exec_matches.iter().any(|m| m.rule_name == "file_process"));
 
         let net_event = IngestEvent {
@@ -3537,7 +3530,9 @@ rule "uid_7" {
         };
         let file_matches = engine.evaluate_matches(&file_event);
         assert!(file_matches.iter().any(|m| m.rule_name == "file_process"));
-        assert!(!file_matches.iter().any(|m| m.rule_name == "network_process"));
+        assert!(!file_matches
+            .iter()
+            .any(|m| m.rule_name == "network_process"));
 
         let _ = fs::remove_file(path);
     }
@@ -3643,11 +3638,15 @@ rule "uid_7" {
             risk_score: 0.75,
         };
         let exec_matches = engine.evaluate_matches(&exec_event);
-        assert!(exec_matches.iter().any(|m| m.rule_name == "identity_fields"));
+        assert!(exec_matches
+            .iter()
+            .any(|m| m.rule_name == "identity_fields"));
         assert!(exec_matches
             .iter()
             .any(|m| m.rule_name == "parent_fields_exec_only"));
-        assert!(!exec_matches.iter().any(|m| m.rule_name == "net_internal_only"));
+        assert!(!exec_matches
+            .iter()
+            .any(|m| m.rule_name == "net_internal_only"));
 
         let net_event_internal = IngestEvent {
             event_type: 3,
@@ -3723,8 +3722,12 @@ rule "uid_7" {
             risk_score: 0.0,
         };
         let exec_matches = engine.evaluate_matches(&exec_event);
-        assert!(exec_matches.iter().any(|m| m.rule_name == "fallback_parent"));
-        assert!(!exec_matches.iter().any(|m| m.rule_name == "fallback_internal"));
+        assert!(exec_matches
+            .iter()
+            .any(|m| m.rule_name == "fallback_parent"));
+        assert!(!exec_matches
+            .iter()
+            .any(|m| m.rule_name == "fallback_internal"));
 
         let net_event = IngestEvent {
             event_type: 3,
@@ -3733,7 +3736,9 @@ rule "uid_7" {
             ..exec_event
         };
         let net_matches = engine.evaluate_matches(&net_event);
-        assert!(net_matches.iter().any(|m| m.rule_name == "fallback_internal"));
+        assert!(net_matches
+            .iter()
+            .any(|m| m.rule_name == "fallback_internal"));
 
         let _ = fs::remove_file(path);
     }

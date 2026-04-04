@@ -24,7 +24,7 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY --from=builder /build/target/release/olopa-server /usr/local/bin/olopa-server
+COPY --from=builder /build/target/release/olopa-ingest /usr/local/bin/olopa-ingest
 
 RUN mkdir -p /var/lib/olopa/ingest \
     && chown -R olopa:olopa /var/lib/olopa
@@ -37,4 +37,4 @@ ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8000
 ENV INGEST_PERSIST_JSONL_PATH=/var/lib/olopa/ingest/events.jsonl
 
-ENTRYPOINT ["/usr/local/bin/olopa-server"]
+ENTRYPOINT ["/usr/local/bin/olopa-ingest"]

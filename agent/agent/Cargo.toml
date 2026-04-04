@@ -1,11 +1,12 @@
 [package]
-name    = "olopa-agent"
+name    = "olopa"
 version = "0.1.0"
 edition = "2021"
 build   = "src/build.rs"
+default-run = "olopa"
 
 [[bin]]
-name = "olopa-agent"
+name = "olopa"
 path = "src/main.rs"
 
 [dependencies]

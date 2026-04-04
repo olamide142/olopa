@@ -15,16 +15,16 @@ mod transport;
 
 use anyhow::{bail, Context, Result};
 use aya::maps::HashMap as BpfHashMap;
-use clap::Parser;
+use clap::{ArgAction, Args, Parser, Subcommand};
 use log::{info, warn};
-use serde::Serialize;
+use olopa_common::{TcEgressPolicyKey, TC_POLICY_ACTION_DENY};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::net::Ipv4Addr;
 use std::fs;
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use olopa_common::{TcEgressPolicyKey, TC_POLICY_ACTION_DENY};
 
 use crate::agent::{
     BatcherLike, BatcherPush, EventStoreLike, GraphLike, IngestEvent, MetricAggregatorLike,
@@ -44,6 +44,12 @@ use crate::data::relevance_scorer::RelevanceScorer;
 use crate::probe_manager::{ProbeManager, ProbeSelection};
 use crate::runtime_ir::RuntimeIrRuleEngine;
 use crate::transport::http_sender::HttpIngestSender;
+
+const DEFAULT_RUNTIME_IR_PATH: &str = "/etc/olopa/runtime-ir.json";
+const DEFAULT_INGEST_URL: &str = "http://127.0.0.1:8000/api/v1/ingest/batches";
+const DEFAULT_INGEST_TENANT_ID: &str = "default";
+const DEFAULT_INGEST_HOST_ID: &str = "agent-local";
+const DEFAULT_STATUS_PATH: &str = "/tmp/olopa/agent/status.json";
 
 /// CLI enum for selecting which probe groups to attach at startup.
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -72,11 +78,45 @@ impl ProbeEventArg {
 
 /// Command line options for userspace agent runtime.
 #[derive(Debug, Parser)]
-#[command(name = "olopa-agent", about = "Olopa kernel security agent")]
-struct Opt {
+#[command(
+    name = "olopa",
+    about = "Olopa kernel security agent",
+    after_help = "Examples:\n  olopa status --verbose\n  olopa --iface eth0 --probe-events exec,net\n  olopa --runtime-ir /etc/olopa/runtime-ir.json --ingest-url http://127.0.0.1:8000/api/v1/ingest/batches\n  olopa --print-effective-config"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+    #[command(flatten)]
+    run: RunOpt,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Show runtime status from local agent snapshot.
+    Status(StatusOpt),
+}
+
+#[derive(Debug, Args)]
+struct StatusOpt {
+    /// Show full detailed view instead of compact summary.
+    #[arg(long, action = ArgAction::SetTrue)]
+    verbose: bool,
+    /// Disable ANSI colors.
+    #[arg(long, action = ArgAction::SetTrue)]
+    no_color: bool,
+    /// Hide mascot bitmap banner.
+    #[arg(long, action = ArgAction::SetTrue)]
+    no_mascot: bool,
+    /// Status snapshot path written by running agent.
+    #[arg(long)]
+    status_path: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct RunOpt {
     /// Network interface used by attach helpers.
-    #[arg(short, long, default_value = "wlo1")]
-    iface: String,
+    #[arg(short, long)]
+    iface: Option<String>,
     /// Comma-separated probe groups to attach (fork,exec,file,net,xdp,tc).
     #[arg(
         long,
@@ -90,12 +130,42 @@ struct Opt {
         ]
     )]
     probe_events: Vec<ProbeEventArg>,
+    /// Disable userspace graph JSON dumps entirely.
+    #[arg(long, action = ArgAction::SetTrue)]
+    no_graph_dump: bool,
     /// Output file path for userspace graph JSON dumps.
     #[arg(long, default_value = "/tmp/olopa_graph.json")]
     graph_dump_path: String,
     /// Minimum interval between graph dump writes in milliseconds.
-    #[arg(long, default_value_t = 1000)]
+    #[arg(long, default_value_t = 1000, value_parser = clap::value_parser!(u64).range(1..))]
     graph_dump_interval_ms: u64,
+    /// Path to runtime-ir artifact JSON.
+    #[arg(long)]
+    runtime_ir: Option<String>,
+    /// Permit simple fallback matcher if runtime-ir fails to load.
+    #[arg(long, action = ArgAction::SetTrue)]
+    allow_simple_rule_fallback: bool,
+    /// Override ingest endpoint URL.
+    #[arg(long)]
+    ingest_url: Option<String>,
+    /// Override ingest tenant id used in sender payloads.
+    #[arg(long)]
+    ingest_tenant_id: Option<String>,
+    /// Override ingest host id used in sender payloads.
+    #[arg(long)]
+    ingest_host_id: Option<String>,
+    /// Ingest auth bearer token (sent as Authorization: Bearer <token>).
+    #[arg(long)]
+    ingest_api_token: Option<String>,
+    /// Ingest auth API key (sent as x-api-key: <key>).
+    #[arg(long)]
+    ingest_api_key: Option<String>,
+    /// Print effective startup config and exit.
+    #[arg(long, action = ArgAction::SetTrue)]
+    print_effective_config: bool,
+    /// Path where runtime status snapshots are written.
+    #[arg(long)]
+    status_path: Option<String>,
 }
 
 /// Agent process entrypoint.
@@ -104,21 +174,38 @@ struct Opt {
 /// delegates control to the long-running orchestrator loop.
 #[tokio::main]
 async fn main() -> Result<()> {
-    let opt = Opt::parse();
+    let cli = Cli::parse();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    info!("olopa-agent starting | iface={}", opt.iface);
+    if let Some(Command::Status(status_opt)) = cli.command {
+        return print_status(status_opt);
+    }
+
+    let opt = cli.run;
+    apply_cli_env_overrides(&opt);
+    let iface = resolve_iface(opt.iface.as_deref());
+    let probe_selections = normalize_probe_selections(&opt.probe_events);
+    std::env::set_var("OLOPA_ACTIVE_IFACE", &iface);
+    std::env::set_var(
+        "OLOPA_PROBE_EVENTS_ACTIVE",
+        expand_probe_status_tokens(&probe_selections).join(","),
+    );
+
+    if opt.print_effective_config {
+        let cfg = EffectiveCliConfig::from_runtime_inputs(&opt, &iface, &probe_selections);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&cfg).context("serialize effective CLI config")?
+        );
+        return Ok(());
+    }
+
+    info!("olopa starting | iface={}", iface);
 
     // 1) Load eBPF object and attach selected probes.
     let mut agent = OlopaAgent::new()?;
     let mut probe_manager = ProbeManager::new();
-    let probe_selections = opt
-        .probe_events
-        .iter()
-        .copied()
-        .map(ProbeEventArg::as_selection)
-        .collect::<Vec<_>>();
-    probe_manager.attach_selected(agent.bpf_mut(), &opt.iface, &probe_selections)?;
+    probe_manager.attach_selected(agent.bpf_mut(), &iface, &probe_selections)?;
     if probe_selections.contains(&ProbeSelection::Tc) {
         install_tc_deny_rules_from_env(agent.bpf_mut())?;
     } else if std::env::var("OLOPA_TC_DENY_RULES").is_ok() {
@@ -127,21 +214,26 @@ async fn main() -> Result<()> {
         );
     }
     info!(
-        "olopa-agent initialized and probes attached | probe_events={}",
+        "olopa initialized and probes attached | probe_events={}",
         format_probe_selections(&probe_selections)
     );
 
     // 2) Wire concrete runtime components (adapters + default implementations).
     let mut relevance_scorer = RealRelevanceScorer::default();
     let mut event_store = RealEventStore::default();
-    let mut graph = RealGraph::with_dump(
-        PathBuf::from(&opt.graph_dump_path),
-        Duration::from_millis(opt.graph_dump_interval_ms),
-    );
-    info!(
-        "graph dumps enabled | path={} interval_ms={}",
-        opt.graph_dump_path, opt.graph_dump_interval_ms
-    );
+    let mut graph = if opt.no_graph_dump {
+        info!("graph dumps disabled (--no-graph-dump)");
+        RealGraph::default()
+    } else {
+        info!(
+            "graph dumps enabled | path={} interval_ms={}",
+            opt.graph_dump_path, opt.graph_dump_interval_ms
+        );
+        RealGraph::with_dump(
+            PathBuf::from(&opt.graph_dump_path),
+            Duration::from_millis(opt.graph_dump_interval_ms),
+        )
+    };
     let mut metric_aggregator = RealMetricAggregator::default();
     let mut rule_engine = ActiveRuleEngine::from_env()?;
     let mut scheduler = RealScheduler::default();
@@ -163,6 +255,465 @@ async fn main() -> Result<()> {
             &mut budget_tracker,
         )
         .await
+}
+
+#[derive(Debug, Serialize)]
+struct EffectiveCliConfig {
+    iface: String,
+    probe_events: Vec<String>,
+    graph_dump_enabled: bool,
+    graph_dump_path: Option<String>,
+    graph_dump_interval_ms: Option<u64>,
+    runtime_ir_path: String,
+    allow_simple_rule_fallback: bool,
+    ingest_url: String,
+    ingest_tenant_id: String,
+    ingest_host_id: String,
+    ingest_auth: &'static str,
+    status_path: String,
+}
+
+impl EffectiveCliConfig {
+    fn from_runtime_inputs(opt: &RunOpt, iface: &str, probes: &[ProbeSelection]) -> Self {
+        let graph_dump_enabled = !opt.no_graph_dump;
+        let runtime_ir_path = env_non_empty("OLOPA_RUNTIME_IR")
+            .unwrap_or_else(|| DEFAULT_RUNTIME_IR_PATH.to_string());
+        let ingest_url =
+            env_non_empty("OLOPA_INGEST_URL").unwrap_or_else(|| DEFAULT_INGEST_URL.to_string());
+        let ingest_tenant_id = env_non_empty("OLOPA_INGEST_TENANT_ID")
+            .unwrap_or_else(|| DEFAULT_INGEST_TENANT_ID.to_string());
+        let ingest_host_id = env_non_empty("OLOPA_INGEST_HOST_ID")
+            .or_else(|| env_non_empty("HOSTNAME"))
+            .unwrap_or_else(|| DEFAULT_INGEST_HOST_ID.to_string());
+        let status_path =
+            env_non_empty("OLOPA_STATUS_PATH").unwrap_or_else(|| DEFAULT_STATUS_PATH.to_string());
+        let ingest_auth = if env_non_empty("OLOPA_INGEST_API_TOKEN").is_some() {
+            "bearer"
+        } else if env_non_empty("OLOPA_INGEST_API_KEY").is_some() {
+            "x-api-key"
+        } else {
+            "none"
+        };
+
+        Self {
+            iface: iface.to_string(),
+            probe_events: probes
+                .iter()
+                .map(|selection| probe_selection_name(*selection).to_string())
+                .collect(),
+            graph_dump_enabled,
+            graph_dump_path: graph_dump_enabled.then(|| opt.graph_dump_path.clone()),
+            graph_dump_interval_ms: graph_dump_enabled.then_some(opt.graph_dump_interval_ms),
+            runtime_ir_path,
+            allow_simple_rule_fallback: env_flag("OLOPA_ALLOW_SIMPLE_RULE_FALLBACK"),
+            ingest_url,
+            ingest_tenant_id,
+            ingest_host_id,
+            ingest_auth,
+            status_path,
+        }
+    }
+}
+
+fn apply_cli_env_overrides(opt: &RunOpt) {
+    if let Some(v) = trimmed_non_empty(opt.runtime_ir.as_deref()) {
+        std::env::set_var("OLOPA_RUNTIME_IR", v);
+    }
+    if opt.allow_simple_rule_fallback {
+        std::env::set_var("OLOPA_ALLOW_SIMPLE_RULE_FALLBACK", "1");
+    }
+    if let Some(v) = trimmed_non_empty(opt.ingest_url.as_deref()) {
+        std::env::set_var("OLOPA_INGEST_URL", v);
+    }
+    if let Some(v) = trimmed_non_empty(opt.ingest_tenant_id.as_deref()) {
+        std::env::set_var("OLOPA_INGEST_TENANT_ID", v);
+    }
+    if let Some(v) = trimmed_non_empty(opt.ingest_host_id.as_deref()) {
+        std::env::set_var("OLOPA_INGEST_HOST_ID", v);
+    }
+    if let Some(v) = trimmed_non_empty(opt.ingest_api_token.as_deref()) {
+        std::env::set_var("OLOPA_INGEST_API_TOKEN", v);
+    }
+    if let Some(v) = trimmed_non_empty(opt.ingest_api_key.as_deref()) {
+        std::env::set_var("OLOPA_INGEST_API_KEY", v);
+    }
+    if let Some(v) = trimmed_non_empty(opt.status_path.as_deref()) {
+        std::env::set_var("OLOPA_STATUS_PATH", v);
+    }
+}
+
+fn normalize_probe_selections(args: &[ProbeEventArg]) -> Vec<ProbeSelection> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut seen = HashSet::new();
+    for arg in args {
+        let selection = arg.as_selection();
+        if seen.insert(selection) {
+            out.push(selection);
+        }
+    }
+    out
+}
+
+fn resolve_iface(cli_iface: Option<&str>) -> String {
+    if let Some(iface) = trimmed_non_empty(cli_iface) {
+        return iface.to_string();
+    }
+    if let Some(iface) = env_non_empty("OLOPA_IFACE") {
+        return iface;
+    }
+    if let Some(iface) = detect_default_route_iface() {
+        return iface;
+    }
+    "lo".to_string()
+}
+
+fn detect_default_route_iface() -> Option<String> {
+    let raw = fs::read_to_string("/proc/net/route").ok()?;
+    for line in raw.lines().skip(1) {
+        let cols = line.split_whitespace().collect::<Vec<_>>();
+        if cols.len() < 4 {
+            continue;
+        }
+        let iface = cols[0];
+        let destination = cols[1];
+        let flags_hex = cols[3];
+        if destination != "00000000" {
+            continue;
+        }
+        let flags = u32::from_str_radix(flags_hex, 16).ok()?;
+        if (flags & 0x2) == 0 {
+            continue;
+        }
+        return Some(iface.to_string());
+    }
+    None
+}
+
+fn env_non_empty(key: &str) -> Option<String> {
+    std::env::var(key).ok().and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn trimmed_non_empty(raw: Option<&str>) -> Option<&str> {
+    raw.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RuntimeStatusSnapshot {
+    pid: u32,
+    running: bool,
+    #[serde(default)]
+    probes: Vec<String>,
+    #[serde(default)]
+    backend: RuntimeBackendStatus,
+    #[serde(default)]
+    resources: RuntimeResourceStatus,
+    #[serde(default)]
+    window_5s: RuntimeWindowStatus,
+    #[serde(default)]
+    firewall: RuntimeFirewallStatus,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RuntimeBackendStatus {
+    reachable: bool,
+    rtt_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RuntimeResourceStatus {
+    cpu_pct: f32,
+    cpu_budget_pct: f32,
+    mem_mb: f32,
+    mem_ceiling_mb: f32,
+    bw_mb_s: f32,
+    bw_limit_pct: f32,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RuntimeWindowStatus {
+    captured: u64,
+    transmitted: u64,
+    dropped_budget: u64,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RuntimeFirewallStatus {
+    allow: u64,
+    deny: u64,
+    approve: u64,
+}
+
+fn print_status(opt: StatusOpt) -> Result<()> {
+    let color = !opt.no_color;
+    let status_path = opt
+        .status_path
+        .or_else(|| env_non_empty("OLOPA_STATUS_PATH"))
+        .unwrap_or_else(|| DEFAULT_STATUS_PATH.to_string());
+    let path = PathBuf::from(&status_path);
+
+    let snapshot = match fs::read_to_string(&path) {
+        Ok(raw) => match serde_json::from_str::<RuntimeStatusSnapshot>(&raw) {
+            Ok(v) => v,
+            Err(err) => {
+                println!(
+                    "{} status snapshot parse error at {}: {}",
+                    glyph_error(color),
+                    path.display(),
+                    err
+                );
+                return Ok(());
+            }
+        },
+        Err(_) => {
+            println!(
+                "{} agent not running (status file not found: {})",
+                glyph_error(color),
+                path.display()
+            );
+            return Ok(());
+        }
+    };
+
+    let running = snapshot.running && snapshot.pid > 0;
+
+    if !opt.no_mascot {
+        print_mascot_bitmap(color);
+    }
+
+    if running {
+        println!("{} agent running pid={}", glyph_ok(color), snapshot.pid);
+    } else {
+        println!(
+            "{} agent stopped (last pid={})",
+            glyph_error(color),
+            snapshot.pid
+        );
+    }
+
+    if snapshot.backend.reachable {
+        let rtt = snapshot
+            .backend
+            .rtt_ms
+            .map(|v| format!("{v}ms"))
+            .unwrap_or_else(|| "unknown".to_string());
+        println!("{} backend reachable {} rtt", glyph_ok(color), rtt);
+    } else {
+        println!("{} backend unreachable", glyph_warn(color));
+    }
+
+    if !opt.verbose {
+        return Ok(());
+    }
+
+    println!("{}", separator(color));
+    println!(
+        "cpu {}% / budget {}%",
+        format_f32_trim(snapshot.resources.cpu_pct, 1),
+        format_f32_trim(snapshot.resources.cpu_budget_pct, 1)
+    );
+    println!(
+        "mem {} MB / ceiling {}MB",
+        format_f32_trim(snapshot.resources.mem_mb, 1),
+        format_f32_trim(snapshot.resources.mem_ceiling_mb, 1)
+    );
+    println!(
+        "bw {} MB/s / limit {}%",
+        format_f32_trim(snapshot.resources.bw_mb_s, 2),
+        format_f32_trim(snapshot.resources.bw_limit_pct, 1)
+    );
+
+    println!("{}", separator(color));
+    println!("{}", heading(color, "probes attached"));
+    if snapshot.probes.is_empty() {
+        println!("none");
+    } else {
+        for chunk in snapshot.probes.chunks(3) {
+            println!("{}", chunk.join(" "));
+        }
+    }
+
+    println!("{}", separator(color));
+    println!("{}", heading(color, "events / 5s window"));
+    println!(
+        "{} captured",
+        format_u64_grouped(snapshot.window_5s.captured)
+    );
+    println!(
+        "{} transmitted",
+        format_u64_grouped(snapshot.window_5s.transmitted)
+    );
+    println!(
+        "{} dropped (budget)",
+        format_u64_grouped(snapshot.window_5s.dropped_budget)
+    );
+
+    println!("{}", separator(color));
+    println!("{}", heading(color, "firewall verdicts"));
+    println!(
+        "{} {}",
+        verdict_allow_label(color),
+        format_u64_grouped(snapshot.firewall.allow)
+    );
+    println!(
+        "{} {}",
+        verdict_deny_label(color),
+        format_u64_grouped(snapshot.firewall.deny)
+    );
+    println!(
+        "{} {}",
+        verdict_approve_label(color),
+        format_u64_grouped(snapshot.firewall.approve)
+    );
+
+    Ok(())
+}
+
+fn print_mascot_bitmap(color: bool) {
+    // Tiny bitmap mascot rendered as ANSI background blocks.
+    const PIXELS: &[&str] = &[
+        "....111111....",
+        "...122222221...",
+        "..12222222221..",
+        ".122223..322221.",
+        ".122222..222221.",
+        ".12222222222221.",
+        ".12221111112221.",
+        "..122222222221..",
+        "...1222222221...",
+        "....11111111....",
+    ];
+    if !color {
+        const FALLBACK: &[&str] = &[
+            "  ▄█▀▀▀▀█▄  ",
+            " ███▄  ▄███ ",
+            " ██████████ ",
+            " ███ ▀▀ ███ ",
+            " ███ ██ ███ ",
+            "  ▀██▄▄██▀  ",
+        ];
+        for row in FALLBACK {
+            println!("{}", row);
+        }
+        return;
+    }
+
+    for row in PIXELS {
+        let mut line = String::new();
+        for px in row.chars() {
+            match px {
+                '.' => line.push_str("  "),
+                // Outline.
+                '1' => line.push_str("\x1b[48;5;24m  \x1b[0m"),
+                // Main fill.
+                '2' => line.push_str("\x1b[48;5;45m  \x1b[0m"),
+                // Eyes.
+                '3' => line.push_str("\x1b[48;5;16m  \x1b[0m"),
+                _ => line.push_str("  "),
+            }
+        }
+        println!("{}", line);
+    }
+}
+
+fn separator(color: bool) -> String {
+    if color {
+        "\x1b[2m─────────────────────────────\x1b[0m".to_string()
+    } else {
+        "─────────────────────────────".to_string()
+    }
+}
+
+fn heading(color: bool, label: &str) -> String {
+    if color {
+        format!("\x1b[1;36m{}\x1b[0m", label)
+    } else {
+        label.to_string()
+    }
+}
+
+fn verdict_allow_label(color: bool) -> String {
+    if color {
+        "\x1b[1;32mALLOW\x1b[0m".to_string()
+    } else {
+        "ALLOW".to_string()
+    }
+}
+
+fn verdict_deny_label(color: bool) -> String {
+    if color {
+        "\x1b[1;31mDENY\x1b[0m".to_string()
+    } else {
+        "DENY".to_string()
+    }
+}
+
+fn verdict_approve_label(color: bool) -> String {
+    if color {
+        "\x1b[1;33mAPPROVE\x1b[0m".to_string()
+    } else {
+        "APPROVE".to_string()
+    }
+}
+
+fn format_f32_trim(value: f32, precision: usize) -> String {
+    let mut out = format!("{value:.*}", precision);
+    while out.ends_with('0') {
+        out.pop();
+    }
+    if out.ends_with('.') {
+        out.pop();
+    }
+    out
+}
+
+fn glyph_ok(color: bool) -> String {
+    if color {
+        "\x1b[32m●\x1b[0m".to_string()
+    } else {
+        "●".to_string()
+    }
+}
+
+fn glyph_warn(color: bool) -> String {
+    if color {
+        "\x1b[33m●\x1b[0m".to_string()
+    } else {
+        "●".to_string()
+    }
+}
+
+fn glyph_error(color: bool) -> String {
+    if color {
+        "\x1b[31m●\x1b[0m".to_string()
+    } else {
+        "●".to_string()
+    }
+}
+
+fn format_u64_grouped(value: u64) -> String {
+    let s = value.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 // --- Concrete adapters for orchestrator traits ---
@@ -476,7 +1027,6 @@ enum ActiveRuleEngine {
 impl ActiveRuleEngine {
     /// Load runtime-ir rule engine from disk with optional fallback behavior.
     fn from_env() -> Result<Self> {
-        const DEFAULT_RUNTIME_IR_PATH: &str = "/etc/olopa/runtime-ir.json";
         // Explicit env var overrides default deployment path.
         let path = std::env::var("OLOPA_RUNTIME_IR")
             .unwrap_or_else(|_| DEFAULT_RUNTIME_IR_PATH.to_string());
@@ -681,7 +1231,11 @@ fn parse_tc_deny_rules(raw: &str) -> Result<Vec<TcDenyRule>> {
         });
 
         if out.len() > 32_768 {
-            bail!("too many TC deny rules parsed (>{}) at rule index {}", 32_768, idx);
+            bail!(
+                "too many TC deny rules parsed (>{}) at rule index {}",
+                32_768,
+                idx
+            );
         }
     }
 
@@ -1108,4 +1662,25 @@ fn probe_selection_name(selection: ProbeSelection) -> &'static str {
         ProbeSelection::Xdp => "xdp",
         ProbeSelection::Tc => "tc",
     }
+}
+
+fn expand_probe_status_tokens(selections: &[ProbeSelection]) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    for selection in selections {
+        match selection {
+            ProbeSelection::Fork => out.push("fork"),
+            ProbeSelection::Exec => out.push("execve"),
+            ProbeSelection::File => {
+                out.push("openat");
+                out.push("write");
+            }
+            ProbeSelection::Net => {
+                out.push("connect");
+                out.push("accept");
+            }
+            ProbeSelection::Xdp => out.push("xdp"),
+            ProbeSelection::Tc => out.push("tc"),
+        }
+    }
+    out
 }

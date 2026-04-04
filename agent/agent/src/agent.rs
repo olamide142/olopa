@@ -5,16 +5,22 @@
 //! - scheduler tick: select and send budgeted telemetry.
 //! - housekeeping tick: update budgets, flush metrics, merge graph, drain spool.
 
-use std::time::{Duration, Instant};
+use std::fs;
+use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use aya::{include_bytes_aligned, maps::RingBuf, Ebpf};
 use aya_log::EbpfLogger;
 use log::{debug, info, warn};
 use olopa_common::{ExecEvent, FileEvent, NetEvent};
+use serde::Serialize;
 use tokio::signal;
 
-use crate::budget_tracker::BudgetTracker;
+use crate::budget_tracker::{BudgetTracker, BW, CPU, MEM};
+
+const DEFAULT_STATUS_PATH: &str = "/tmp/olopa/agent/status.json";
+const DEFAULT_CPU_BUDGET_PCT: f32 = 5.0;
 
 // Canonical in-memory event representation used by the orchestrator.
 // This struct is what flows through the hot ingest pipeline.
@@ -39,6 +45,8 @@ pub struct IngestEvent {
 pub struct SenderStats {
     pub spool_pending_bytes: u64,
     pub spooling: bool,
+    pub backend_reachable: Option<bool>,
+    pub backend_rtt_ms: Option<u64>,
 }
 
 // Return value from batcher.push() so caller knows whether to flush now.
@@ -130,6 +138,198 @@ pub trait SenderLike {
     fn drain_spool(&mut self, deadline: Instant) -> Result<usize>;
 }
 
+#[derive(Default)]
+struct IngestLoopStats {
+    processed: usize,
+    firewall_allow: u64,
+    firewall_deny: u64,
+    firewall_approve: u64,
+}
+
+#[derive(Default)]
+struct SchedulerLoopStats {
+    candidates: usize,
+    selected: usize,
+    selected_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct RuntimeStatusSnapshot {
+    version: u8,
+    generated_at_unix_ms: u64,
+    pid: u32,
+    running: bool,
+    iface: String,
+    probes: Vec<String>,
+    backend: RuntimeBackendStatus,
+    resources: RuntimeResourceStatus,
+    window_5s: RuntimeWindowStatus,
+    firewall: RuntimeFirewallStatus,
+}
+
+#[derive(Serialize)]
+struct RuntimeBackendStatus {
+    reachable: bool,
+    rtt_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct RuntimeResourceStatus {
+    cpu_pct: f32,
+    cpu_budget_pct: f32,
+    mem_mb: f32,
+    mem_ceiling_mb: f32,
+    bw_mb_s: f32,
+    bw_limit_pct: f32,
+}
+
+#[derive(Serialize)]
+struct RuntimeWindowStatus {
+    captured: u64,
+    transmitted: u64,
+    dropped_budget: u64,
+}
+
+#[derive(Serialize)]
+struct RuntimeFirewallStatus {
+    allow: u64,
+    deny: u64,
+    approve: u64,
+}
+
+struct StatusReporter {
+    path: PathBuf,
+    iface: String,
+    probes: Vec<String>,
+}
+
+impl StatusReporter {
+    fn from_env() -> Self {
+        let path = std::env::var("OLOPA_STATUS_PATH")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| DEFAULT_STATUS_PATH.to_string());
+        let iface = std::env::var("OLOPA_ACTIVE_IFACE")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "unknown".to_string());
+        let probes = std::env::var("OLOPA_PROBE_EVENTS_ACTIVE")
+            .ok()
+            .map(|raw| {
+                raw.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        Self {
+            path: PathBuf::from(path),
+            iface,
+            probes,
+        }
+    }
+
+    fn write(&self, snapshot: &RuntimeStatusSnapshot) {
+        if let Some(parent) = self.path.parent() {
+            if !parent.as_os_str().is_empty() {
+                if let Err(err) = fs::create_dir_all(parent) {
+                    warn!(
+                        "status snapshot mkdir failed path={}: {}",
+                        parent.display(),
+                        err
+                    );
+                    return;
+                }
+            }
+        }
+
+        let tmp = self.path.with_extension("tmp");
+        let body = match serde_json::to_vec_pretty(snapshot) {
+            Ok(v) => v,
+            Err(err) => {
+                warn!("status snapshot serialize failed: {}", err);
+                return;
+            }
+        };
+
+        if let Err(err) = fs::write(&tmp, body) {
+            warn!(
+                "status snapshot write failed path={}: {}",
+                tmp.display(),
+                err
+            );
+            return;
+        }
+        if let Err(err) = fs::rename(&tmp, &self.path) {
+            warn!(
+                "status snapshot rename failed {} -> {}: {}",
+                tmp.display(),
+                self.path.display(),
+                err
+            );
+        }
+    }
+
+    fn build_snapshot(
+        &self,
+        budget_tracker: &BudgetTracker,
+        sender_stats: &SenderStats,
+        captured: u64,
+        transmitted: u64,
+        dropped_budget: u64,
+        transmitted_bytes: u64,
+        firewall_allow: u64,
+        firewall_deny: u64,
+        firewall_approve: u64,
+    ) -> RuntimeStatusSnapshot {
+        let snapshot = budget_tracker.snapshot();
+        let cpu_util = if snapshot.total[CPU] > 0.0 {
+            1.0 - (snapshot.remaining[CPU] / snapshot.total[CPU]).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let bw_limit_pct = if snapshot.total[BW] > 0.0 {
+            ((transmitted_bytes as f32 / snapshot.total[BW]) * 100.0).clamp(0.0, 100.0)
+        } else {
+            0.0
+        };
+
+        RuntimeStatusSnapshot {
+            version: 1,
+            generated_at_unix_ms: now_unix_ms(),
+            pid: std::process::id(),
+            running: true,
+            iface: self.iface.clone(),
+            probes: self.probes.clone(),
+            backend: RuntimeBackendStatus {
+                reachable: sender_stats.backend_reachable.unwrap_or(false),
+                rtt_ms: sender_stats.backend_rtt_ms,
+            },
+            resources: RuntimeResourceStatus {
+                cpu_pct: cpu_util * 100.0,
+                cpu_budget_pct: DEFAULT_CPU_BUDGET_PCT,
+                mem_mb: (snapshot.total[MEM] - snapshot.remaining[MEM]) / 1_048_576.0,
+                mem_ceiling_mb: snapshot.total[MEM] / 1_048_576.0,
+                bw_mb_s: transmitted_bytes as f32 / 5.0 / 1_048_576.0,
+                bw_limit_pct,
+            },
+            window_5s: RuntimeWindowStatus {
+                captured,
+                transmitted,
+                dropped_budget,
+            },
+            firewall: RuntimeFirewallStatus {
+                allow: firewall_allow,
+                deny: firewall_deny,
+                approve: firewall_approve,
+            },
+        }
+    }
+}
+
 // Main agent owner. Holds loaded eBPF object and orchestrates all loops.
 pub struct OlopaAgent {
     bpf: Ebpf,
@@ -215,6 +415,15 @@ impl OlopaAgent {
         // Debug visibility: how many kernel events were consumed in the
         // current housekeeping window.
         let mut ingested_since_housekeeping = 0u64;
+        // Per-window status counters consumed by `olopa status --verbose`.
+        let mut window_captured = 0u64;
+        let mut window_transmitted = 0u64;
+        let mut window_dropped_budget = 0u64;
+        let mut window_transmitted_bytes = 0u64;
+        let mut window_firewall_allow = 0u64;
+        let mut window_firewall_deny = 0u64;
+        let mut window_firewall_approve = 0u64;
+        let status_reporter = StatusReporter::from_env();
 
         // Capture ctrl-c once and poll it alongside a cooperative yield.
         // Note: `tokio::select! { ... else => ... }` does NOT behave like a
@@ -254,13 +463,18 @@ impl OlopaAgent {
                 sender,
             )?;
             ingested_since_housekeeping =
-                ingested_since_housekeeping.saturating_add(ingested as u64);
+                ingested_since_housekeeping.saturating_add(ingested.processed as u64);
+            window_captured = window_captured.saturating_add(ingested.processed as u64);
+            window_firewall_allow = window_firewall_allow.saturating_add(ingested.firewall_allow);
+            window_firewall_deny = window_firewall_deny.saturating_add(ingested.firewall_deny);
+            window_firewall_approve =
+                window_firewall_approve.saturating_add(ingested.firewall_approve);
 
             let now = Instant::now();
 
             // Task 2 — Scheduler loop every 500ms.
             if now >= next_scheduler_tick {
-                Self::scheduler_tick(
+                let sched = Self::scheduler_tick(
                     budget_tracker,
                     event_store,
                     scheduler,
@@ -268,6 +482,11 @@ impl OlopaAgent {
                     sender,
                     &mut scheduler_cursor,
                 )?;
+                window_transmitted = window_transmitted.saturating_add(sched.selected as u64);
+                window_dropped_budget = window_dropped_budget
+                    .saturating_add(sched.candidates.saturating_sub(sched.selected) as u64);
+                window_transmitted_bytes =
+                    window_transmitted_bytes.saturating_add(sched.selected_bytes);
                 // Preserve cadence by stepping from previous target,
                 // not "now", so drift does not accumulate.
                 next_scheduler_tick += Duration::from_millis(500);
@@ -280,7 +499,27 @@ impl OlopaAgent {
                     ingested_since_housekeeping
                 );
                 ingested_since_housekeeping = 0;
-                Self::housekeeping_tick(budget_tracker, metric_aggregator, graph, sender)?;
+                let sender_stats =
+                    Self::housekeeping_tick(budget_tracker, metric_aggregator, graph, sender)?;
+                let snapshot = status_reporter.build_snapshot(
+                    budget_tracker,
+                    &sender_stats,
+                    window_captured,
+                    window_transmitted,
+                    window_dropped_budget,
+                    window_transmitted_bytes,
+                    window_firewall_allow,
+                    window_firewall_deny,
+                    window_firewall_approve,
+                );
+                status_reporter.write(&snapshot);
+                window_captured = 0;
+                window_transmitted = 0;
+                window_dropped_budget = 0;
+                window_transmitted_bytes = 0;
+                window_firewall_allow = 0;
+                window_firewall_deny = 0;
+                window_firewall_approve = 0;
                 // Same cadence discipline for housekeeping.
                 next_housekeeping_tick += Duration::from_secs(5);
             }
@@ -298,7 +537,7 @@ impl OlopaAgent {
         metric_aggregator: &mut MA,
         rule_engine: &mut RE,
         sender: &mut SN,
-    ) -> Result<usize>
+    ) -> Result<IngestLoopStats>
     where
         R: RelevanceScorerLike,
         ES: EventStoreLike,
@@ -310,7 +549,7 @@ impl OlopaAgent {
         use core::mem::size_of;
 
         // Drain all currently available ring items before returning.
-        let mut processed = 0usize;
+        let mut stats = IngestLoopStats::default();
         while let Some(item) = ring.next() {
             let bytes: &[u8] = &item;
             // Decode based on fixed struct byte lengths.
@@ -377,7 +616,7 @@ impl OlopaAgent {
                 continue;
             };
 
-            Self::process_event(
+            let event_stats = Self::process_event(
                 event,
                 relevance_scorer,
                 event_store,
@@ -386,10 +625,19 @@ impl OlopaAgent {
                 rule_engine,
                 sender,
             )?;
-            processed = processed.saturating_add(1);
+            stats.processed = stats.processed.saturating_add(1);
+            stats.firewall_allow = stats
+                .firewall_allow
+                .saturating_add(event_stats.firewall_allow);
+            stats.firewall_deny = stats
+                .firewall_deny
+                .saturating_add(event_stats.firewall_deny);
+            stats.firewall_approve = stats
+                .firewall_approve
+                .saturating_add(event_stats.firewall_approve);
         }
 
-        Ok(processed)
+        Ok(stats)
     }
 
     // Process exactly one decoded event through the hot-path ingest pipeline.
@@ -403,7 +651,7 @@ impl OlopaAgent {
         metric_aggregator: &mut MA,
         rule_engine: &mut RE,
         sender: &mut SN,
-    ) -> Result<()>
+    ) -> Result<IngestLoopStats>
     where
         R: RelevanceScorerLike,
         ES: EventStoreLike,
@@ -433,14 +681,18 @@ impl OlopaAgent {
         );
 
         // Incident path: bypass scheduler entirely, send immediately.
+        let mut stats = IngestLoopStats::default();
         for matched_rule in &matches {
             if matched_rule.enforce_block_egress {
                 enforce_block_egress_pid(&event, matched_rule);
+                stats.firewall_deny = stats.firewall_deny.saturating_add(1);
+            } else {
+                stats.firewall_allow = stats.firewall_allow.saturating_add(1);
             }
             sender.send_or_spool(encode_alert_payload(&event, matched_rule))?;
         }
 
-        Ok(())
+        Ok(stats)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -451,7 +703,7 @@ impl OlopaAgent {
         batcher: &mut BA,
         sender: &mut SN,
         scheduler_cursor: &mut usize,
-    ) -> Result<()>
+    ) -> Result<SchedulerLoopStats>
     where
         ES: EventStoreLike,
         SCH: SchedulerLike,
@@ -462,9 +714,10 @@ impl OlopaAgent {
         let snapshot = budget_tracker.snapshot();
 
         // Feed scheduler with newly persisted event_ids since last cursor position.
-        for event_id in event_store.unscheduled_event_ids(*scheduler_cursor) {
-            scheduler.enqueue(event_id);
-            *scheduler_cursor = (*scheduler_cursor).max(event_id + 1);
+        let new_candidates = event_store.unscheduled_event_ids(*scheduler_cursor);
+        for event_id in &new_candidates {
+            scheduler.enqueue(*event_id);
+            *scheduler_cursor = (*scheduler_cursor).max(*event_id + 1);
         }
 
         // 2) Solve telemetry selection for this 500ms window.
@@ -472,8 +725,11 @@ impl OlopaAgent {
         let selected_event_ids = scheduler.solve();
 
         // 3) Serialize selected events and batch them for transport.
+        let mut selected_bytes = 0u64;
+        let selected_count = selected_event_ids.len();
         for event_id in selected_event_ids {
             if let Some(bytes) = event_store.serialize_event(event_id) {
+                selected_bytes = selected_bytes.saturating_add(bytes.len() as u64);
                 let push = batcher.push(&bytes, &snapshot);
                 if matches!(push, BatcherPush::FlushNeeded) {
                     if let Some(batch) = batcher.flush() {
@@ -489,7 +745,11 @@ impl OlopaAgent {
             sender.send_or_spool(batch)?;
         }
 
-        Ok(())
+        Ok(SchedulerLoopStats {
+            candidates: new_candidates.len(),
+            selected: selected_count,
+            selected_bytes,
+        })
     }
 
     fn housekeeping_tick<MA, G, SN>(
@@ -497,7 +757,7 @@ impl OlopaAgent {
         metric_aggregator: &mut MA,
         graph: &mut G,
         sender: &mut SN,
-    ) -> Result<()>
+    ) -> Result<SenderStats>
     where
         MA: MetricAggregatorLike,
         G: GraphLike,
@@ -521,7 +781,14 @@ impl OlopaAgent {
             let _ = sender.drain_spool(deadline)?;
         }
 
-        Ok(())
+        Ok(stats)
+    }
+}
+
+fn now_unix_ms() -> u64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => d.as_millis() as u64,
+        Err(_) => 0,
     }
 }
 
@@ -668,8 +935,8 @@ fn fnv1a_32(bytes: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::http_sender::payload_to_batches_for_tests;
     use crate::runtime_ir::RuntimeIrRuleEngine;
+    use crate::transport::http_sender::payload_to_batches_for_tests;
     use serde::Deserialize;
     use std::fs;
     use std::net::TcpListener;
@@ -1166,7 +1433,10 @@ rule "critical_pid_4242" {
             payload_to_batches_for_tests(&sender.payloads[0], "tenant-e2e", "host-e2e");
         assert_eq!(batches_json.len(), 1);
 
-        let ingest_manifest = repo_root.join("app").join("ingest_server").join("Cargo.toml");
+        let ingest_manifest = repo_root
+            .join("app")
+            .join("ingest_server")
+            .join("Cargo.toml");
         let ingest_port = acquire_local_port();
         let ingest_base_url = format!("http://127.0.0.1:{ingest_port}");
         let persist_path = dir.join("ingest-e2e.jsonl");
@@ -1206,7 +1476,10 @@ rule "critical_pid_4242" {
             .json::<AckResponseView>()
             .await
             .expect("parse ingest ack response");
-        assert!(ack.accepted, "ingest endpoint rejected converted sender batch");
+        assert!(
+            ack.accepted,
+            "ingest endpoint rejected converted sender batch"
+        );
 
         // Ingest is async; poll recent rows until the flush worker indexes the
         // posted event row.
@@ -1235,7 +1508,10 @@ rule "critical_pid_4242" {
             row.event_kind == "process_exec"
                 && row.tenant_id == "tenant-e2e"
                 && row.host_id == "host-e2e"
-                && row.event.get("attrs").and_then(|attrs| attrs.get("rule_name"))
+                && row
+                    .event
+                    .get("attrs")
+                    .and_then(|attrs| attrs.get("rule_name"))
                     == Some(&serde_json::Value::String("critical_pid_4242".to_string()))
         });
         assert!(

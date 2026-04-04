@@ -27,8 +27,8 @@ Publish versioned agent binaries for supported targets:
 
 Recommended release layout:
 
-- `https://downloads.olopa.io/vX.Y.Z/olopa-agent-linux-amd64.tar.gz`
-- `https://downloads.olopa.io/vX.Y.Z/olopa-agent-linux-arm64.tar.gz`
+- `https://downloads.olopa.io/vX.Y.Z/olopa-linux-amd64.tar.gz`
+- `https://downloads.olopa.io/vX.Y.Z/olopa-linux-arm64.tar.gz`
 - `https://downloads.olopa.io/vX.Y.Z/SHA256SUMS`
 - `https://downloads.olopa.io/vX.Y.Z/SHA256SUMS.sig` (optional but recommended)
 
@@ -54,7 +54,7 @@ This script should stay small and stable.
 2. Resolve target version (default: latest stable, override via `--version`).
 3. Download matching artifact + checksum file.
 4. Verify checksum (and signature if enabled).
-5. Install `olopa-agent` to `/usr/local/bin` (or user-provided prefix).
+5. Install `olopa` to `/usr/local/bin` (or user-provided prefix).
 6. Optionally install and enable a `systemd` service.
 7. Print post-install verification command.
 

@@ -18,13 +18,14 @@ use axum::extract::{Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use clap::{ArgAction, Parser};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::config::{AuthConfig, AuthTokenScope, ServerConfig};
+use crate::config::{parse_auth_tokens, AuthConfig, AuthTokenScope, ServerConfig};
 use crate::telemetry::{
     AckResponse, IngestBatchRequest, IngestDataSummaryResponse, IngestRuntime, IngestStatsResponse,
     RecentIngestResponse,
@@ -37,6 +38,320 @@ struct AppState {
     runtime: Arc<IngestRuntime>,
     /// API authn/authz state.
     auth: Arc<AuthState>,
+}
+
+/// Command line overrides for ingest server runtime configuration.
+#[derive(Debug, Parser)]
+#[command(
+    name = "olopa-ingest",
+    about = "Olopa ingest API server",
+    after_help = "Examples:\n  olopa-ingest --host 0.0.0.0 --port 8000\n  olopa-ingest --ingest-surreal-url http://127.0.0.1:8000/sql --ingest-clickhouse-url http://127.0.0.1:8123/\n  olopa-ingest --print-effective-config"
+)]
+struct Cli {
+    /// Override bind host (fallback: SERVER_HOST env).
+    #[arg(long)]
+    host: Option<String>,
+    /// Override bind port (fallback: SERVER_PORT env).
+    #[arg(long)]
+    port: Option<u16>,
+    /// Override `RUST_LOG` filter string for this process.
+    #[arg(long)]
+    log_filter: Option<String>,
+    /// Override INGEST_API_TOKENS in `token[:tenant-a|tenant-b]` format.
+    #[arg(long)]
+    ingest_api_tokens: Option<String>,
+
+    /// Override ingest queue max size.
+    #[arg(long)]
+    queue_maxsize: Option<usize>,
+    /// Override flush interval in milliseconds.
+    #[arg(long)]
+    flush_interval_ms: Option<u64>,
+    /// Override flush max rows threshold.
+    #[arg(long)]
+    flush_max_rows: Option<usize>,
+    /// Override default retry-after milliseconds.
+    #[arg(long)]
+    default_retry_after_ms: Option<u32>,
+    /// Override suggested batch payload size in bytes.
+    #[arg(long)]
+    suggested_batch_bytes: Option<u32>,
+    /// Override in-memory recent events retention cap.
+    #[arg(long)]
+    recent_events_max: Option<usize>,
+    /// Override local JSONL persistence path.
+    #[arg(long)]
+    ingest_persist_jsonl_path: Option<String>,
+
+    /// Override ClickHouse HTTP endpoint.
+    #[arg(long)]
+    ingest_clickhouse_url: Option<String>,
+    /// Override ClickHouse insert SQL (`... FORMAT JSONEachRow`).
+    #[arg(long)]
+    ingest_clickhouse_insert_sql: Option<String>,
+    /// Override ClickHouse basic auth username.
+    #[arg(long)]
+    ingest_clickhouse_user: Option<String>,
+    /// Override ClickHouse basic auth password.
+    #[arg(long)]
+    ingest_clickhouse_password: Option<String>,
+    /// Override ClickHouse HTTP timeout in milliseconds.
+    #[arg(long)]
+    ingest_clickhouse_timeout_ms: Option<u64>,
+    /// Disable ClickHouse sink regardless of env/CLI URL.
+    #[arg(long, action = ArgAction::SetTrue)]
+    disable_clickhouse: bool,
+
+    /// Override SurrealDB HTTP SQL endpoint.
+    #[arg(long)]
+    ingest_surreal_url: Option<String>,
+    /// Override SurrealDB namespace.
+    #[arg(long)]
+    ingest_surreal_namespace: Option<String>,
+    /// Override SurrealDB database.
+    #[arg(long)]
+    ingest_surreal_database: Option<String>,
+    /// Override SurrealDB target table.
+    #[arg(long)]
+    ingest_surreal_table: Option<String>,
+    /// Override SurrealDB basic auth username.
+    #[arg(long)]
+    ingest_surreal_user: Option<String>,
+    /// Override SurrealDB basic auth password.
+    #[arg(long)]
+    ingest_surreal_password: Option<String>,
+    /// Override SurrealDB bearer token.
+    #[arg(long)]
+    ingest_surreal_token: Option<String>,
+    /// Override SurrealDB timeout in milliseconds.
+    #[arg(long)]
+    ingest_surreal_timeout_ms: Option<u64>,
+    /// Disable SurrealDB sink regardless of env/CLI URL.
+    #[arg(long, action = ArgAction::SetTrue)]
+    disable_surreal: bool,
+
+    /// Print resolved effective config JSON and exit.
+    #[arg(long, action = ArgAction::SetTrue)]
+    print_effective_config: bool,
+}
+
+/// Redacted effective server config snapshot for CLI inspection.
+#[derive(Debug, Serialize)]
+struct EffectiveServerConfig {
+    host: String,
+    port: u16,
+    auth_enabled: bool,
+    auth_token_count: usize,
+    ingest: EffectiveIngestConfig,
+}
+
+/// Redacted ingest runtime config snapshot for CLI inspection.
+#[derive(Debug, Serialize)]
+struct EffectiveIngestConfig {
+    queue_maxsize: usize,
+    flush_interval_ms: u64,
+    flush_max_rows: usize,
+    default_retry_after_ms: u32,
+    suggested_batch_bytes: u32,
+    recent_events_max: usize,
+    persist_jsonl_path: String,
+    clickhouse_enabled: bool,
+    clickhouse_url: Option<String>,
+    clickhouse_insert_sql: String,
+    clickhouse_basic_auth: bool,
+    clickhouse_timeout_ms: u64,
+    surreal_enabled: bool,
+    surreal_url: Option<String>,
+    surreal_namespace: String,
+    surreal_database: String,
+    surreal_table: String,
+    surreal_auth_mode: &'static str,
+    surreal_timeout_ms: u64,
+}
+
+impl EffectiveServerConfig {
+    fn from_config(cfg: &ServerConfig) -> Self {
+        let surreal_auth_mode = if cfg.ingest.surreal_token.is_some() {
+            "token"
+        } else if cfg.ingest.surreal_user.is_some() {
+            "basic"
+        } else {
+            "none"
+        };
+        Self {
+            host: cfg.host.clone(),
+            port: cfg.port,
+            auth_enabled: cfg.auth.enabled(),
+            auth_token_count: cfg.auth.tokens.len(),
+            ingest: EffectiveIngestConfig {
+                queue_maxsize: cfg.ingest.queue_maxsize,
+                flush_interval_ms: cfg.ingest.flush_interval_ms,
+                flush_max_rows: cfg.ingest.flush_max_rows,
+                default_retry_after_ms: cfg.ingest.default_retry_after_ms,
+                suggested_batch_bytes: cfg.ingest.suggested_batch_bytes,
+                recent_events_max: cfg.ingest.recent_events_max,
+                persist_jsonl_path: cfg.ingest.persist_jsonl_path.clone(),
+                clickhouse_enabled: cfg.ingest.clickhouse_url.is_some(),
+                clickhouse_url: cfg.ingest.clickhouse_url.clone(),
+                clickhouse_insert_sql: cfg.ingest.clickhouse_insert_sql.clone(),
+                clickhouse_basic_auth: cfg.ingest.clickhouse_user.is_some(),
+                clickhouse_timeout_ms: cfg.ingest.clickhouse_timeout_ms,
+                surreal_enabled: cfg.ingest.surreal_url.is_some(),
+                surreal_url: cfg.ingest.surreal_url.clone(),
+                surreal_namespace: cfg.ingest.surreal_namespace.clone(),
+                surreal_database: cfg.ingest.surreal_database.clone(),
+                surreal_table: cfg.ingest.surreal_table.clone(),
+                surreal_auth_mode,
+                surreal_timeout_ms: cfg.ingest.surreal_timeout_ms,
+            },
+        }
+    }
+}
+
+fn apply_cli_overrides(cfg: &mut ServerConfig, cli: &Cli) {
+    if let Some(v) = cli.host.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        cfg.host = v.to_string();
+    }
+    if let Some(v) = cli.port {
+        cfg.port = v;
+    }
+    if let Some(v) = cli
+        .ingest_api_tokens
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        cfg.auth.tokens = parse_auth_tokens(v);
+    }
+
+    if let Some(v) = cli.queue_maxsize {
+        cfg.ingest.queue_maxsize = v;
+    }
+    if let Some(v) = cli.flush_interval_ms {
+        cfg.ingest.flush_interval_ms = v;
+    }
+    if let Some(v) = cli.flush_max_rows {
+        cfg.ingest.flush_max_rows = v;
+    }
+    if let Some(v) = cli.default_retry_after_ms {
+        cfg.ingest.default_retry_after_ms = v;
+    }
+    if let Some(v) = cli.suggested_batch_bytes {
+        cfg.ingest.suggested_batch_bytes = v;
+    }
+    if let Some(v) = cli.recent_events_max {
+        cfg.ingest.recent_events_max = v;
+    }
+    if let Some(v) = cli
+        .ingest_persist_jsonl_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        cfg.ingest.persist_jsonl_path = v.to_string();
+    }
+
+    if let Some(v) = cli
+        .ingest_clickhouse_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        cfg.ingest.clickhouse_url = Some(v.to_string());
+    }
+    if let Some(v) = cli
+        .ingest_clickhouse_insert_sql
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        cfg.ingest.clickhouse_insert_sql = v.to_string();
+    }
+    if let Some(v) = cli
+        .ingest_clickhouse_user
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        cfg.ingest.clickhouse_user = Some(v.to_string());
+    }
+    if let Some(v) = cli
+        .ingest_clickhouse_password
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        cfg.ingest.clickhouse_password = Some(v.to_string());
+    }
+    if let Some(v) = cli.ingest_clickhouse_timeout_ms {
+        cfg.ingest.clickhouse_timeout_ms = v;
+    }
+    if cli.disable_clickhouse {
+        cfg.ingest.clickhouse_url = None;
+    }
+
+    if let Some(v) = cli
+        .ingest_surreal_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        cfg.ingest.surreal_url = Some(v.to_string());
+    }
+    if let Some(v) = cli
+        .ingest_surreal_namespace
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        cfg.ingest.surreal_namespace = v.to_string();
+    }
+    if let Some(v) = cli
+        .ingest_surreal_database
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        cfg.ingest.surreal_database = v.to_string();
+    }
+    if let Some(v) = cli
+        .ingest_surreal_table
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        cfg.ingest.surreal_table = v.to_string();
+    }
+    if let Some(v) = cli
+        .ingest_surreal_user
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        cfg.ingest.surreal_user = Some(v.to_string());
+    }
+    if let Some(v) = cli
+        .ingest_surreal_password
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        cfg.ingest.surreal_password = Some(v.to_string());
+    }
+    if let Some(v) = cli
+        .ingest_surreal_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        cfg.ingest.surreal_token = Some(v.to_string());
+    }
+    if let Some(v) = cli.ingest_surreal_timeout_ms {
+        cfg.ingest.surreal_timeout_ms = v;
+    }
+    if cli.disable_surreal {
+        cfg.ingest.surreal_url = None;
+    }
 }
 
 /// Lightweight health-check response body.
@@ -131,9 +446,19 @@ impl AuthState {
 /// Boot the server and run until shutdown signal is received.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    init_tracing();
+    let cli = Cli::parse();
+    init_tracing(cli.log_filter.as_deref());
 
-    let cfg = ServerConfig::from_env();
+    let mut cfg = ServerConfig::from_env();
+    apply_cli_overrides(&mut cfg, &cli);
+    if cli.print_effective_config {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&EffectiveServerConfig::from_config(&cfg))
+                .context("serialize effective ingest config")?
+        );
+        return Ok(());
+    }
     if cfg.ingest.surreal_url.is_some() {
         info!(
             jsonl_path = %cfg.ingest.persist_jsonl_path,
@@ -177,7 +502,7 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = format!("{}:{}", cfg.host, cfg.port)
         .parse()
         .with_context(|| format!("invalid bind addr {}:{}", cfg.host, cfg.port))?;
-    info!(%addr, "olopa-server listening");
+    info!(%addr, "olopa-ingest listening");
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -192,15 +517,18 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Configure process-wide tracing subscriber.
+/// Configure process-wide tracing subscriber with optional CLI override.
 ///
-/// Uses `RUST_LOG` when present, otherwise defaults to `info`.
-fn init_tracing() {
+/// Uses CLI `--log-filter` first, then `RUST_LOG`, and finally a default.
+fn init_tracing(log_filter_override: Option<&str>) {
+    let env_filter = log_filter_override
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .and_then(|v| tracing_subscriber::EnvFilter::try_new(v).ok())
+        .or_else(|| tracing_subscriber::EnvFilter::try_from_default_env().ok())
+        .unwrap_or_else(|| "info,tower_http=info".into());
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,tower_http=info".into()),
-        )
+        .with(env_filter)
         .with(tracing_subscriber::fmt::layer())
         .init();
 }

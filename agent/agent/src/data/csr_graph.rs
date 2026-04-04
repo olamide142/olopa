@@ -404,7 +404,9 @@ impl CsrGraph {
     #[inline]
     pub fn write_edge(&self, src: u32, dst: u32, props: EdgeProps) {
         let shard_idx = self.delta_shard_index();
-        self.delta_shards[shard_idx].lock().add_edge(src, dst, props);
+        self.delta_shards[shard_idx]
+            .lock()
+            .add_edge(src, dst, props);
         self.edge_count.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -413,7 +415,8 @@ impl CsrGraph {
     // Readers are never blocked — they hold the old Arc until done.
     pub fn merge_deltas(&self) {
         let delta = self.drain_all_delta_shards();
-        if delta.new_nodes.is_empty() && delta.new_edges.is_empty() && delta.risk_updates.is_empty() {
+        if delta.new_nodes.is_empty() && delta.new_edges.is_empty() && delta.risk_updates.is_empty()
+        {
             return;
         }
 

@@ -26,7 +26,7 @@ WORKDIR /opt/olopa/app/control_plane
 
 ENV CONTROL_HOST=0.0.0.0
 ENV CONTROL_PORT=8100
-ENV RUST_INGEST_BASE_URL=http://ingest-server:8000
+ENV RUST_INGEST_BASE_URL=http://olopa-ingest:8000
 ENV OILC_MANIFEST_PATH=/opt/olopa/oilc/Cargo.toml
 
 RUN chown -R olopa:olopa /opt/olopa

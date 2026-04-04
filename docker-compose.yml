@@ -26,11 +26,11 @@ services:
     volumes:
       - surreal_data:/data
 
-  ingest-server:
+  olopa-ingest:
     build:
       context: .
       dockerfile: app/ingest_server/Dockerfile
-    container_name: olopa-ingest-server
+    container_name: olopa-ingest
     depends_on:
       - clickhouse
       - surrealdb
@@ -57,11 +57,11 @@ services:
       dockerfile: app/control_plane/Dockerfile
     container_name: olopa-control-plane
     depends_on:
-      - ingest-server
+      - olopa-ingest
     environment:
       CONTROL_HOST: 0.0.0.0
       CONTROL_PORT: "8100"
-      RUST_INGEST_BASE_URL: http://ingest-server:8000
+      RUST_INGEST_BASE_URL: http://olopa-ingest:8000
       OILC_MANIFEST_PATH: /opt/olopa/oilc/Cargo.toml
     ports:
       - "8100:8100"

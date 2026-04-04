@@ -925,7 +925,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "olopa-agent"
+name = "olopa"
 version = "0.1.0"
 dependencies = [
  "anyhow",

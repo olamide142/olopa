@@ -8,11 +8,13 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
 
+use serde::Serialize;
+
 /// Top-level HTTP server configuration.
 ///
 /// `host` and `port` define the bind socket while `ingest`
 /// configures queueing/flush/persistence behavior for telemetry ingestion.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ServerConfig {
     /// Interface or address to bind the HTTP server to.
     pub host: String,
@@ -25,14 +27,14 @@ pub struct ServerConfig {
 }
 
 /// Token-based auth configuration for ingest HTTP APIs.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct AuthConfig {
     /// Map from API token to tenant scope.
     pub tokens: HashMap<String, AuthTokenScope>,
 }
 
 /// Authorization scope granted to one API token.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum AuthTokenScope {
     /// Full access to all tenants and operational endpoints.
     Global,
@@ -48,7 +50,7 @@ impl AuthConfig {
 }
 
 /// Configuration for the asynchronous ingest runtime.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct IngestConfig {
     /// Maximum number of queued batches waiting for background flush.
     pub queue_maxsize: usize,
@@ -211,7 +213,7 @@ impl ServerConfig {
 /// - `token-b:tenant-alpha` -> one tenant
 /// - `token-c:tenant-a|tenant-b` -> multi-tenant scoped token
 /// - `token-d:*` -> global scope
-fn parse_auth_tokens(raw: &str) -> HashMap<String, AuthTokenScope> {
+pub(crate) fn parse_auth_tokens(raw: &str) -> HashMap<String, AuthTokenScope> {
     let mut out = HashMap::new();
     for entry in raw.split(',') {
         let part = entry.trim();

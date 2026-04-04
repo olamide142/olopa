@@ -1,11 +1,12 @@
 [package]
-name = "olopa-server"
+name = "olopa-ingest"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
 axum = { version = "0.8", features = ["json"] }
+clap = { version = "4", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
