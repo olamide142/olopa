@@ -73,6 +73,8 @@ Rule clauses parsed today:
 - `from` / `source`
 - `match`
 - `correlate`
+- `graph`
+- `around`
 - `where`
 - `within`
 - `let`

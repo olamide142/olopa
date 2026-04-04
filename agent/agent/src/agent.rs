@@ -668,10 +668,13 @@ fn fnv1a_32(bytes: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::http_sender::payload_to_batches_for_tests;
     use crate::runtime_ir::RuntimeIrRuleEngine;
+    use serde::Deserialize;
     use std::fs;
+    use std::net::TcpListener;
     use std::path::PathBuf;
-    use std::process::Command;
+    use std::process::{Child, Command, Stdio};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_runtime_ir_path() -> PathBuf {
@@ -1013,6 +1016,234 @@ rule "critical_pid_4242" {
         assert_eq!(payload.pid, 4242);
         assert_eq!(payload.event_type, 1);
 
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct RecentIngestRowView {
+        event_kind: String,
+        event: serde_json::Value,
+        tenant_id: String,
+        host_id: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct RecentIngestResponseView {
+        returned: usize,
+        rows: Vec<RecentIngestRowView>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct AckResponseView {
+        accepted: bool,
+    }
+
+    struct ChildGuard {
+        child: Child,
+    }
+
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            // Best-effort cleanup to avoid leaked background server processes
+            // when assertions fail mid-test.
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    fn acquire_local_port() -> u16 {
+        // Ask the OS for an ephemeral port, then hand that exact port to the
+        // spawned ingest server process.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local test port");
+        let port = listener.local_addr().expect("read local addr").port();
+        drop(listener);
+        port
+    }
+
+    async fn wait_for_ingest_health(client: &reqwest::Client, base_url: &str, child: &mut Child) {
+        // Poll health until server boot completes, while also failing fast if
+        // the child process exits early.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(45);
+        loop {
+            if let Some(status) = child.try_wait().expect("check ingest process status") {
+                panic!("ingest server exited before becoming healthy: {status}");
+            }
+            if let Ok(resp) = client.get(format!("{base_url}/health")).send().await {
+                if resp.status().is_success() {
+                    return;
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("timed out waiting for ingest server health endpoint");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local TCP bind + external ingest server process"]
+    async fn e2e_rule_to_runtime_to_sender_to_ingest_runtime() {
+        let dir = temp_runtime_ir_dir();
+        fs::create_dir_all(&dir).expect("create temp dir");
+
+        let source = dir.join("rule.oil");
+        let runtime_ir = dir.join("runtime-ir.json");
+        let src: &str = r#"
+rule "critical_pid_4242" {
+  from endpoint.process
+  correlate process.spawn as p
+  where p.pid == 4242
+  respond alert high
+}
+"#;
+        fs::write(&source, src).expect("write oil source");
+
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let repo_root = manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("repo root");
+        let oilc_manifest = repo_root.join("oilc").join("Cargo.toml");
+
+        let output = Command::new("cargo")
+            .arg("run")
+            .arg("--manifest-path")
+            .arg(&oilc_manifest)
+            .arg("--")
+            .arg("--source")
+            .arg(&source)
+            .arg("--emit-runtime-ir")
+            .arg(&runtime_ir)
+            .arg("--mode")
+            .arg("check")
+            .current_dir(repo_root)
+            .output()
+            .expect("run oilc cli");
+        assert!(
+            output.status.success(),
+            "oilc failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let mut rules = RuntimeRuleEngineAdapter {
+            inner: RuntimeIrRuleEngine::from_file(&runtime_ir).expect("load runtime ir"),
+        };
+        let mut scorer = NoopScorer;
+        let mut store = NoopStore;
+        let mut graph = NoopGraph;
+        let mut metrics = NoopMetrics;
+        let mut sender = CaptureSender::default();
+
+        let event = IngestEvent {
+            ts_ns: 1_000,
+            pid: 4242,
+            uid: 1000,
+            event_type: 1,
+            vertex_id: 4242,
+            dst_vertex_id: 1,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: [0; 16],
+            comm_id: 7,
+            risk_score: 0.85,
+        };
+        OlopaAgent::process_event(
+            event,
+            &mut scorer,
+            &mut store,
+            &mut graph,
+            &mut metrics,
+            &mut rules,
+            &mut sender,
+        )
+        .expect("process event");
+        assert_eq!(sender.payloads.len(), 1);
+
+        // Convert the captured alert payload using the same sender transform
+        // that production uses before posting to ingest.
+        let batches_json =
+            payload_to_batches_for_tests(&sender.payloads[0], "tenant-e2e", "host-e2e");
+        assert_eq!(batches_json.len(), 1);
+
+        let ingest_manifest = repo_root.join("app").join("ingest_server").join("Cargo.toml");
+        let ingest_port = acquire_local_port();
+        let ingest_base_url = format!("http://127.0.0.1:{ingest_port}");
+        let persist_path = dir.join("ingest-e2e.jsonl");
+
+        let ingest_child = Command::new("cargo")
+            .arg("run")
+            .arg("--manifest-path")
+            .arg(&ingest_manifest)
+            .current_dir(&repo_root)
+            .env("SERVER_HOST", "127.0.0.1")
+            .env("SERVER_PORT", ingest_port.to_string())
+            .env("INGEST_QUEUE_MAXSIZE", "16")
+            .env("INGEST_FLUSH_INTERVAL_MS", "25")
+            .env("INGEST_FLUSH_MAX_ROWS", "1")
+            .env("INGEST_RECENT_EVENTS_MAX", "16")
+            .env("INGEST_PERSIST_JSONL_PATH", &persist_path)
+            .env("RUST_LOG", "error")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start ingest server");
+        let mut ingest_guard = ChildGuard {
+            child: ingest_child,
+        };
+
+        let client = reqwest::Client::new();
+        wait_for_ingest_health(&client, &ingest_base_url, &mut ingest_guard.child).await;
+
+        let ack = client
+            .post(format!("{ingest_base_url}/api/v1/ingest/batches"))
+            .json(&batches_json[0])
+            .send()
+            .await
+            .expect("post converted sender batch")
+            .error_for_status()
+            .expect("ingest endpoint should accept request")
+            .json::<AckResponseView>()
+            .await
+            .expect("parse ingest ack response");
+        assert!(ack.accepted, "ingest endpoint rejected converted sender batch");
+
+        // Ingest is async; poll recent rows until the flush worker indexes the
+        // posted event row.
+        let recent_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let recent_view = loop {
+            let recent_resp = client
+                .get(format!("{ingest_base_url}/api/v1/ingest/recent?limit=10"))
+                .send()
+                .await
+                .expect("request recent ingest rows")
+                .error_for_status()
+                .expect("recent endpoint should return success")
+                .json::<RecentIngestResponseView>()
+                .await
+                .expect("parse recent ingest response");
+            if recent_resp.returned >= 1 {
+                break recent_resp;
+            }
+            if tokio::time::Instant::now() >= recent_deadline {
+                panic!("timed out waiting for ingested rows");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        };
+
+        let matched_rule_row = recent_view.rows.iter().find(|row| {
+            row.event_kind == "process_exec"
+                && row.tenant_id == "tenant-e2e"
+                && row.host_id == "host-e2e"
+                && row.event.get("attrs").and_then(|attrs| attrs.get("rule_name"))
+                    == Some(&serde_json::Value::String("critical_pid_4242".to_string()))
+        });
+        assert!(
+            matched_rule_row.is_some(),
+            "recent ingest rows did not include the expected rule-marked process event"
+        );
+
+        drop(ingest_guard);
         let _ = fs::remove_dir_all(dir);
     }
 }

@@ -381,7 +381,7 @@
     section {
       max-width: 1100px;
       margin: 0 auto;
-      padding: 0 40px 80px;
+      padding: 0 40px 88px;
     }
 
     .section-header {
@@ -407,6 +407,230 @@
       letter-spacing: 0.18em;
       color: var(--text-hi);
       text-transform: uppercase;
+    }
+
+    /* ── OVERVIEW ── */
+    .overview-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .overview-card {
+      background: linear-gradient(180deg, rgba(19, 39, 68, 0.72), rgba(14, 29, 53, 0.86));
+      border: 1px solid var(--border);
+      padding: 24px 24px 26px;
+      min-height: 250px;
+    }
+
+    .overview-tag {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.14em;
+      color: var(--accent);
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    .overview-title {
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-hi);
+      letter-spacing: 0.02em;
+      line-height: 1.45;
+      margin-bottom: 10px;
+    }
+
+    .overview-copy {
+      font-size: 13px;
+      font-weight: 300;
+      color: var(--text-dim);
+      line-height: 1.68;
+      margin-bottom: 14px;
+    }
+
+    .overview-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .overview-list li {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text-dim);
+      letter-spacing: 0.06em;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .overview-list li::before {
+      content: '•';
+      color: var(--accent);
+      font-size: 14px;
+      line-height: 1;
+    }
+
+    /* ── RULE PACKS ── */
+    .rule-pack-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .rule-pack-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      padding: 18px 18px 20px;
+    }
+
+    .rule-pack-tag {
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      text-transform: uppercase;
+      margin-bottom: 10px;
+      display: inline-block;
+    }
+
+    .rule-pack-title {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text-hi);
+      letter-spacing: 0.05em;
+      line-height: 1.5;
+      margin-bottom: 9px;
+      text-transform: uppercase;
+    }
+
+    .rule-pack-copy {
+      font-size: 12px;
+      font-weight: 300;
+      color: var(--text-dim);
+      line-height: 1.66;
+    }
+
+    /* ── OIL RULE TABS ── */
+    .oil-layout {
+      display: grid;
+      grid-template-columns: minmax(280px, 350px) 1fr;
+      border: 1px solid var(--border);
+      background: var(--bg2);
+      overflow: hidden;
+    }
+
+    .oil-copy {
+      background: linear-gradient(180deg, rgba(14, 29, 53, 0.8), rgba(8, 20, 39, 0.88));
+      border-right: 1px solid var(--border);
+      padding: 30px;
+      font-size: 13px;
+      font-weight: 300;
+      color: var(--text-dim);
+      line-height: 1.72;
+    }
+
+    .oil-copy p {
+      margin-bottom: 20px;
+    }
+
+    .oil-meta {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .oil-metric {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text-dim);
+      padding: 11px 12px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.01);
+      letter-spacing: 0.06em;
+    }
+
+    .oil-metric strong {
+      color: var(--text-hi);
+      font-weight: 500;
+      display: block;
+      margin-top: 4px;
+    }
+
+    .oil-viewer {
+      background: #0f203a;
+      min-width: 0;
+    }
+
+    .oil-tabs {
+      display: flex;
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(8, 20, 39, 0.65);
+      overflow-x: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border2) transparent;
+    }
+
+    .oil-tab {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text-dim);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      background: rgba(255, 255, 255, 0.01);
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: border-color 0.2s, color 0.2s, background 0.2s;
+    }
+
+    .oil-tab:hover {
+      color: var(--text-hi);
+      border-color: var(--border2);
+    }
+
+    .oil-tab.is-active {
+      color: var(--text-hi);
+      background: rgba(31, 86, 190, 0.2);
+      border-color: var(--accent2);
+    }
+
+    .oil-panel {
+      display: none;
+    }
+
+    .oil-panel.is-active {
+      display: block;
+    }
+
+    .oil-file {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text-dim);
+      letter-spacing: 0.08em;
+      background: rgba(8, 20, 39, 0.4);
+    }
+
+    .oil-code {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      line-height: 1.75;
+      padding: 18px 20px;
+      color: var(--text-dim);
+      overflow: auto;
+      max-height: 560px;
+      white-space: pre;
     }
 
     /* ── DIVIDER ── */
@@ -662,12 +886,12 @@
     /* ── WIP NOTICE ── */
     .wip-banner {
       max-width: 1100px;
-      margin: 0 auto 0;
-      padding: 0 40px 0;
+      margin: 0 auto 34px;
+      padding: 0 40px;
     }
 
     .wip-box {
-      background: rgba(161, 98, 7, 0.08);
+      background: linear-gradient(180deg, rgba(161, 98, 7, 0.12), rgba(161, 98, 7, 0.07));
       border: 1px solid rgba(161, 98, 7, 0.28);
       border-left: 3px solid var(--warn);
       padding: 22px 28px;
@@ -701,12 +925,12 @@
     .beta-section {
       max-width: 1100px;
       margin: 0 auto;
-      padding: 60px 40px 100px;
+      padding: 68px 40px 104px;
     }
 
     .beta-box {
       border: 1px solid var(--border2);
-      background: var(--bg2);
+      background: linear-gradient(180deg, rgba(18, 36, 63, 0.95), rgba(10, 24, 44, 0.95));
       display: grid;
       grid-template-columns: 1fr 300px;
       align-items: center;
@@ -951,12 +1175,21 @@
         display: none;
       }
 
-      .cap-grid {
-        grid-template-columns: 1fr 1fr;
+      .oil-layout {
+        grid-template-columns: 1fr;
       }
 
-      .owasp-grid {
-        grid-template-columns: repeat(2, 1fr);
+      .oil-meta {
+        grid-template-columns: 1fr;
+      }
+
+      .oil-copy {
+        padding: 24px;
+      }
+
+      .overview-grid,
+      .rule-pack-grid {
+        grid-template-columns: 1fr;
       }
 
       .beta-box {
@@ -968,16 +1201,19 @@
         border-bottom: 1px solid var(--border);
       }
 
-      .stack-row {
-        grid-template-columns: 120px 1fr;
+      .beta-left,
+      .beta-right {
+        padding: 32px 24px;
       }
 
-      .stack-latency {
-        display: none;
+      .wip-box {
+        padding: 18px;
+        flex-direction: column;
+        gap: 10px;
       }
 
-      .det-grid {
-        grid-template-columns: 1fr;
+      .oil-tabs {
+        padding: 10px;
       }
 
       h1 {
@@ -1021,9 +1257,8 @@
       <span class="status-pill">Work in Progress</span>
     </div>
     <nav class="topbar-right">
-      <a href="#capabilities" class="nav-link">Capabilities</a>
-      <a href="#architecture" class="nav-link">Architecture</a>
-      <a href="#detection" class="nav-link">Detection</a>
+      <a href="#overview" class="nav-link">Overview</a>
+      <a href="#rules" class="nav-link">Rules</a>
       <a href="#beta" class="btn-nav">Beta Access</a>
     </nav>
   </header>
@@ -1091,324 +1326,364 @@
     </div>
   </div>
 
-  <!-- CAPABILITIES -->
-  <section id="capabilities" style="padding-top: 80px;">
+  <!-- OVERVIEW -->
+  <section id="overview" style="padding-top: 56px;">
     <div class="section-header">
       <span class="section-num">01</span>
-      <h2>Core Capabilities</h2>
+      <h2>Platform Overview</h2>
     </div>
-    <div class="cap-grid">
-      <div class="cap-card">
-        <span class="cap-icon">[ eBPF / XDP ]</span>
-        <div class="cap-title">Kernel-Level Telemetry</div>
-        <p class="cap-body">eBPF probes attach to kernel tracepoints for process execution, file access, and network
-          connections. Events are captured with nanosecond precision before any user-space process can observe or
-          suppress them. XDP hooks operate at line rate, making drop decisions before the kernel network stack is
-          engaged.</p>
-      </div>
-      <div class="cap-card">
-        <span class="cap-icon">[ FIREWALL ]</span>
-        <div class="cap-title">Agentic Firewall</div>
-        <p class="cap-body">Every AI agent tool call - MCP, REST, SQL, shell, file - passes through the firewall before
-          execution. A six-dimension risk model scores each call. A sequence-aware policy engine evaluates entire
-          session action chains, blocking exfiltration patterns that are invisible when inspecting individual calls.</p>
-      </div>
-      <div class="cap-card">
-        <span class="cap-icon">[ XDP / L4 ]</span>
-        <div class="cap-title">L4 Network Control</div>
-        <p class="cap-body">Inspired by Cloudflare's Unimog architecture, every host is both a worker and a load
-          balancer. Packet-level decisions - drop, redirect to honeypot, or pass - occur in under one microsecond via
-          XDP, before any TCP/IP stack processing. Per-source token buckets prevent flood attacks from exhausting the
-          ingest path.</p>
-      </div>
-      <div class="cap-card">
-        <span class="cap-icon">[ OR / MDKP ]</span>
-        <div class="cap-title">Resource-Optimised Telemetry</div>
-        <p class="cap-body">A Multi-Dimensional 0-1 Knapsack solver selects which telemetry events to transmit every
-          500ms, maximising detection value under five simultaneous resource budgets: CPU, memory, disk I/O, network
-          packets, and bandwidth. Low-relevance events are dropped first. High-severity events are never sacrificed.</p>
-      </div>
-      <div class="cap-card">
-        <span class="cap-icon">[ GRAPH / GNN ]</span>
-        <div class="cap-title">Graph-Augmented Detection</div>
-        <p class="cap-body">A property graph (Neo4j / Memgraph) models the relationships between processes, files,
-          network endpoints, users, and agent sessions. Cypher triggers fire sub-100ms on graph writes. A trained
-          GAT-based GNN classifies subgraphs for novel attack variants. Cypher catches known TTPs; GNN catches
-          structural mutations.</p>
-      </div>
-      <div class="cap-card">
-        <span class="cap-icon">[ TRANSFORMER ]</span>
-        <div class="cap-title">Sequence Foundation Model</div>
-        <p class="cap-body">A decoder-only transformer pre-trained on structured eBPF event sequences - not raw log text
-          - scores anomalies by prediction error. Temporal positional encoding encodes inter-event timing deltas
-          explicitly. A cross-attention fusion layer combines sequence and graph embeddings into a unified risk score.
-        </p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ARCHITECTURE -->
-  <section id="architecture">
-    <div class="section-header">
-      <span class="section-num">02</span>
-      <h2>Architecture Stack</h2>
-    </div>
-    <div style="border: 1px solid var(--border); background: var(--bg2);">
-      <div class="stack-row">
-        <div class="stack-layer">Agent Transport</div>
-        <div class="stack-tech">Protobuf + QUIC/UDP <span class="tag">zero-copy</span> <span class="tag">0-RTT</span>
-        </div>
-        <div class="stack-latency">&lt; 1ms</div>
-      </div>
-      <div class="stack-row">
-        <div class="stack-layer">Switch Routing</div>
-        <div class="stack-tech">P4 / Intel Tofino <span class="tag">line-rate sharding</span></div>
-        <div class="stack-latency">~400ns</div>
-      </div>
-      <div class="stack-row">
-        <div class="stack-layer">NIC Ingress</div>
-        <div class="stack-tech">XDP + AF_XDP UMEM <span class="tag">kernel bypass</span> <span class="tag">DDIO</span>
-        </div>
-        <div class="stack-latency">~150ns</div>
-      </div>
-      <div class="stack-row">
-        <div class="stack-layer">Agent Runtime</div>
-        <div class="stack-tech">Rust + Tokio <span class="tag">eBPF ring buffer</span> <span class="tag">OR
-            scheduler</span></div>
-        <div class="stack-latency">~64ns/event</div>
-      </div>
-      <div class="stack-row">
-        <div class="stack-layer">SIMD Processing</div>
-        <div class="stack-tech">AVX-512 <span class="tag">8 events / instruction</span></div>
-        <div class="stack-latency">~8ns</div>
-      </div>
-      <div class="stack-row">
-        <div class="stack-layer">Graph Storage</div>
-        <div class="stack-tech">CSR arrays in PMEM <span class="tag">no pointer chasing</span> <span class="tag">RCU
-            updates</span></div>
-        <div class="stack-latency">~10ns/hop</div>
-      </div>
-      <div class="stack-row">
-        <div class="stack-layer">Cross-Node State</div>
-        <div class="stack-tech">RDMA / RoCE v2 <span class="tag">CPU bypass</span> <span class="tag">one-sided
-            write</span></div>
-        <div class="stack-latency">~800ns</div>
-      </div>
-      <div class="stack-row">
-        <div class="stack-layer">Policy Engine</div>
-        <div class="stack-tech">Custom DSL (OIL - Olopa Intent Language) compiler <span class="tag">Cypher
-            triggers</span> <span class="tag">Runtime IR</span></div>
-        <div class="stack-latency">15–100ms</div>
-      </div>
-      <div class="stack-row">
-        <div class="stack-layer">Analytics Store</div>
-        <div class="stack-tech">ClickHouse MergeTree <span class="tag">cross-layer joins</span> <span class="tag">90-day
-            TTL</span></div>
-        <div class="stack-latency">ms range</div>
-      </div>
-      <div class="stack-row">
-        <div class="stack-layer">Model Inference</div>
-        <div class="stack-tech">TorchScript GAT + Transformer <span class="tag">flagged events only</span></div>
-        <div class="stack-latency">~200ms</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- DETECTION -->
-  <section id="detection">
-    <div class="section-header">
-      <span class="section-num">03</span>
-      <h2>Detection Engines</h2>
-    </div>
-    <div class="det-grid">
-      <div class="det-card">
-        <div class="det-header">
-          <span class="det-title">Cypher Pattern Matching</span>
-          <span class="det-badge badge-graph">Graph</span>
-        </div>
-        <p class="det-body">Event-driven triggers fire the instant a graph write completes a dangerous pattern - no
-          polling. Subgraph isomorphism against a MITRE ATT&CK-parameterised pattern library. Deterministic,
-          explainable, zero false negatives for known TTPs.</p>
-        <ul class="det-list">
-          <li>Web shell → reverse shell (T1059)</li>
-          <li>Lateral movement 3+ hosts (T1021)</li>
-          <li>Privilege escalation + network (T1548)</li>
-          <li>Secret exfiltration path (T1552)</li>
-          <li>DGA / DNS tunnelling (T1071)</li>
+    <div class="overview-grid">
+      <article class="overview-card">
+        <span class="overview-tag">Signal Layer</span>
+        <h3 class="overview-title">Kernel-first event capture</h3>
+        <p class="overview-copy">Host and container signals are captured from process, file, and network activity with
+          low overhead and strict budget awareness.</p>
+        <ul class="overview-list">
+          <li>Process spawn and lineage visibility</li>
+          <li>Filesystem access and write intent</li>
+          <li>Outbound flow and destination context</li>
         </ul>
-      </div>
-      <div class="det-card">
-        <div class="det-header">
-          <span class="det-title">GNN Inference</span>
-          <span class="det-badge badge-ml">ML</span>
-        </div>
-        <p class="det-body">A GAT-based graph classifier trained on 93,000+ synthetic MITRE-labelled attack graphs
-          catches structural variants no Cypher rule was written for. GNNExplainer and attention weights surface
-          critical edges for analyst review. Triggered by Cypher matches - never on every event.</p>
-        <ul class="det-list">
-          <li>7 attack classes + benign</li>
-          <li>Synthetic data bootstraps training</li>
-          <li>Analyst TP/FP feedback loop</li>
-          <li>Graph canary nodes: zero false positives</li>
-          <li>Adversarial training (PGD)</li>
+      </article>
+      <article class="overview-card">
+        <span class="overview-tag">Reasoning Layer</span>
+        <h3 class="overview-title">Rule correlation and scoring</h3>
+        <p class="overview-copy">OIL rules correlate events in windows, compare them to baselines, and assign risk with
+          transparent score math.</p>
+        <ul class="overview-list">
+          <li>Cross-domain joins in one rule flow</li>
+          <li>Time-window chaining (`within`)</li>
+          <li>Facts for follow-on detections</li>
         </ul>
-      </div>
-      <div class="det-card">
-        <div class="det-header">
-          <span class="det-title">eBPF Event Probes</span>
-          <span class="det-badge badge-kernel">Kernel</span>
-        </div>
-        <p class="det-body">Six kernel tracepoints capture ground truth that user-space cannot tamper with. Structured
-          ring buffers eliminate copies. The OR scheduler applies relevance scoring - severity, delta from baseline,
-          recency, contextual flags - before any event reaches the network.</p>
-        <ul class="det-list">
-          <li>execve, openat, write, connect</li>
-          <li>accept, fork - full process lineage</li>
-          <li>XDP: drop floods at wire speed</li>
-          <li>CO-RE portability (kernel 5.4+)</li>
-          <li>Per-CPU perf fallback (5.4–5.7)</li>
+      </article>
+      <article class="overview-card">
+        <span class="overview-tag">Response Layer</span>
+        <h3 class="overview-title">Actionable enforcement outputs</h3>
+        <p class="overview-copy">Rules can alert, snapshot key artifacts, isolate risky hosts, and enforce outbound
+          controls when score thresholds are crossed.</p>
+        <ul class="overview-list">
+          <li>Tiered `alert` severity</li>
+          <li>`snapshot` for fast investigation</li>
+          <li>`isolate` and `block egress` controls</li>
         </ul>
-      </div>
-      <div class="det-card">
-        <div class="det-header">
-          <span class="det-title">Sequence Transformer</span>
-          <span class="det-badge badge-stream">Foundation Model</span>
-        </div>
-        <p class="det-body">Structured eBPF event fields are tokenised into typed semantic embeddings - not subword text
-          - preserving privilege levels, timing deltas, IP class semantics, and path sensitivity. Anomaly score is the
-          negative log-probability of the observed next event. No attack labels required for pre-training.</p>
-        <ul class="det-list">
-          <li>Temporal PE encodes inter-event delta</li>
-          <li>Cross-attention fusion: seq ↔ graph</li>
-          <li>Pre-train on 500M+ event sequences</li>
-          <li>2-week environment fine-tuning</li>
-          <li>7-stage E2E validation pipeline</li>
-        </ul>
-      </div>
-    </div>
-  </section>
-
-  <!-- OWASP COVERAGE -->
-  <section>
-    <div class="section-header">
-      <span class="section-num">04</span>
-      <h2>OWASP LLM Top 10 Coverage</h2>
-    </div>
-    <div class="owasp-grid">
-      <div class="owasp-card">
-        <span class="owasp-num">01</span>
-        <span class="owasp-id">LLM01</span>
-        <div class="owasp-label">Prompt Injection - Sequence-aware firewall, retrieval source scoring, context
-          segmentation</div>
-      </div>
-      <div class="owasp-card">
-        <span class="owasp-num">02</span>
-        <span class="owasp-id">LLM02</span>
-        <div class="owasp-label">Sensitive Data Disclosure - Semantic DLP on tool args, output redaction, egress
-          controls</div>
-      </div>
-      <div class="owasp-card">
-        <span class="owasp-num">03</span>
-        <span class="owasp-id">LLM03</span>
-        <div class="owasp-label">Supply Chain - Signed tool manifests, connector registry, egress allowlists, SBOM</div>
-      </div>
-      <div class="owasp-card">
-        <span class="owasp-num">04</span>
-        <span class="owasp-id">LLM04</span>
-        <div class="owasp-label">Data & Model Poisoning - Ingestion trust scoring, retrieval provenance, source
-          quarantine</div>
-      </div>
-      <div class="owasp-card">
-        <span class="owasp-num">05</span>
-        <span class="owasp-id">LLM05</span>
-        <div class="owasp-label">Improper Output Handling - Strict output schema validation, sandbox code execution
-        </div>
-      </div>
-      <div class="owasp-card">
-        <span class="owasp-num">06</span>
-        <span class="owasp-id">LLM06</span>
-        <div class="owasp-label">Excessive Agency - Least-privilege tool scopes, approval gates, per-session action
-          budgets</div>
-      </div>
-      <div class="owasp-card">
-        <span class="owasp-num">07</span>
-        <span class="owasp-id">LLM07</span>
-        <div class="owasp-label">System Prompt Leakage - Response leakage detectors, canary tokens, compartmentalisation
-        </div>
-      </div>
-      <div class="owasp-card">
-        <span class="owasp-num">08</span>
-        <span class="owasp-id">LLM08</span>
-        <div class="owasp-label">Vector/Embedding Weaknesses - Multi-tenant retrieval isolation, metadata integrity
-        </div>
-      </div>
-      <div class="owasp-card">
-        <span class="owasp-num">09</span>
-        <span class="owasp-id">LLM09</span>
-        <div class="owasp-label">Misinformation - Evidence scoring, retrieval-backed enforcement, high-stakes routing
-        </div>
-      </div>
-      <div class="owasp-card">
-        <span class="owasp-num">10</span>
-        <span class="owasp-id">LLM10</span>
-        <div class="owasp-label">Unbounded Consumption - Token quotas, cost guardrails, OR scheduler budget caps</div>
-      </div>
+      </article>
     </div>
   </section>
 
   <!-- OIL LANGUAGE -->
-  <section>
+  <section id="rules">
     <div class="section-header">
-      <span class="section-num">05</span>
-      <h2>OIL - Olopa Intent Language</h2>
+      <span class="section-num">02</span>
+      <h2>OIL Rule Examples</h2>
     </div>
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border);">
-      <div style="background: var(--bg2); padding: 32px;">
-        <p style="font-size: 13px; font-weight: 300; color: var(--text-dim); line-height: 1.7; margin-bottom: 20px;">OIL
-          is a declarative, compiled security language that replaces four separate policy surfaces - event filtering,
-          graph correlation, risk scoring, and response playbooks - with a single coherent grammar. The compiler routes
-          each rule to the optimal runtime: Runtime IR (agent evaluator), Tokio stream operator, Memgraph Cypher trigger.</p>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-          <div
-            style="font-family: var(--mono); font-size: 10px; color: var(--text-dim); padding: 12px 14px; border: 1px solid var(--border);">
-            Runtime IR HotPath<br><span style="color: var(--text-hi);">agent-evaluated</span></div>
-          <div
-            style="font-family: var(--mono); font-size: 10px; color: var(--text-dim); padding: 12px 14px; border: 1px solid var(--border);">
-            Temporal Stream<br><span style="color: var(--text-hi);">&lt; 50ms / window</span></div>
-          <div
-            style="font-family: var(--mono); font-size: 10px; color: var(--text-dim); padding: 12px 14px; border: 1px solid var(--border);">
-            Graph Trigger<br><span style="color: var(--text-hi);">&lt; 100ms / write</span></div>
-          <div
-            style="font-family: var(--mono); font-size: 10px; color: var(--text-dim); padding: 12px 14px; border: 1px solid var(--border);">
-            OPA Policy<br><span style="color: var(--text-hi);">&lt; 5ms / call</span></div>
+    <div class="rule-pack-grid">
+      <article class="rule-pack-card">
+        <span class="rule-pack-tag">Exfiltration</span>
+        <h3 class="rule-pack-title">Credential and outbound chaining</h3>
+        <p class="rule-pack-copy">Pairs credential access with outbound traffic to catch suspicious process-driven
+          extraction paths.</p>
+      </article>
+      <article class="rule-pack-card">
+        <span class="rule-pack-tag">Containers</span>
+        <h3 class="rule-pack-title">Interactive and privileged runtime risk</h3>
+        <p class="rule-pack-copy">Flags interactive shells and privileged container starts, with context from workload
+          metadata and identity sessions.</p>
+      </article>
+      <article class="rule-pack-card">
+        <span class="rule-pack-tag">Integrity</span>
+        <h3 class="rule-pack-title">Binary and root SSH tampering</h3>
+        <p class="rule-pack-copy">Detects suspicious writes to executable directories and sensitive root SSH paths with
+          baseline-aware scoring.</p>
+      </article>
+    </div>
+    <div class="oil-layout">
+      <div class="oil-copy">
+        <p>Examples below are sourced from the real rules in
+          <code>oilc/src/rules</code>. OIL composes process, file, network, and container signals into a single rule
+          flow with scoring, facts, and direct response actions.
+        </p>
+        <div class="oil-meta">
+          <div class="oil-metric">Source Folder<strong>oilc/src/rules</strong></div>
+          <div class="oil-metric">Examples Loaded<strong>6</strong></div>
+          <div class="oil-metric">Main Domains<strong>endpoint, network, container</strong></div>
+          <div class="oil-metric">Actions Used<strong>alert, snapshot, isolate, block</strong></div>
         </div>
       </div>
-      <div style="background: var(--bg3); padding: 0;">
-        <div
-          style="padding: 10px 16px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 10px; color: var(--text-dim); letter-spacing: 0.1em;">
-          webshell_spawn_detect.oil</div>
-        <pre
-          style="font-family: var(--mono); font-size: 10.5px; line-height: 1.75; padding: 18px 20px; color: var(--text-dim); overflow-x: auto;"><span style="color:#5a6475">set</span> <span style="color:#c8d0dc">shells</span> = [<span style="color:#a78bfa">"bash"</span>, <span style="color:#a78bfa">"sh"</span>, <span style="color:#a78bfa">"zsh"</span>, <span style="color:#a78bfa">"python3"</span>]
-<span style="color:#5a6475">set</span> <span style="color:#c8d0dc">web_servers</span> = [<span style="color:#a78bfa">"nginx"</span>, <span style="color:#a78bfa">"apache2"</span>, <span style="color:#a78bfa">"gunicorn"</span>]
+      <div class="oil-viewer">
+        <div class="oil-tabs" role="tablist" aria-label="OIL rule tabs">
+          <button class="oil-tab is-active" type="button" role="tab" aria-selected="true"
+            aria-controls="rule-credential" id="tab-credential">Credential Exfil</button>
+          <button class="oil-tab" type="button" role="tab" aria-selected="false" aria-controls="rule-shell-egress"
+            id="tab-shell-egress" tabindex="-1">Shell Bad Reputation</button>
+          <button class="oil-tab" type="button" role="tab" aria-selected="false" aria-controls="rule-shell-container"
+            id="tab-shell-container" tabindex="-1">Shell In Container</button>
+          <button class="oil-tab" type="button" role="tab" aria-selected="false" aria-controls="rule-privileged"
+            id="tab-privileged" tabindex="-1">Privileged Container</button>
+          <button class="oil-tab" type="button" role="tab" aria-selected="false" aria-controls="rule-binary"
+            id="tab-binary" tabindex="-1">Binary Dir Tamper</button>
+          <button class="oil-tab" type="button" role="tab" aria-selected="false" aria-controls="rule-root-ssh"
+            id="tab-root-ssh" tabindex="-1">Root SSH Write</button>
+        </div>
 
-<span style="color:#3b82f6">rule</span> <span style="color:#a78bfa">"webshell_spawn_detect"</span> {
-  <span style="color:#5a6475">from</span> endpoint.process
-  <span style="color:#3b82f6">match</span> process.exec <span style="color:#5a6475">as</span> p
-  <span style="color:#3b82f6">where</span>
-    p.name <span style="color:#3b82f6">in</span> shells
-    <span style="color:#3b82f6">and</span> p.parent.name <span style="color:#3b82f6">in</span> web_servers
-  <span style="color:#3b82f6">score</span>
-    base <span style="color:#22c55e">70</span>
-    +<span style="color:#22c55e">15</span> if p.elevated
-    +<span style="color:#22c55e">10</span> if p.signed == <span style="color:#f59e0b">false</span>
-  <span style="color:#3b82f6">respond</span> {
-    if score >= <span style="color:#22c55e">85</span> {
-      alert critical <span style="color:#a78bfa">"Web shell detected"</span>
-      isolate network p.host_id
-      open_case <span style="color:#a78bfa">"Possible webshell"</span>
+        <div class="oil-panel is-active" id="rule-credential" role="tabpanel" aria-labelledby="tab-credential">
+          <div class="oil-file">oilc/src/rules/credential_access_followed_by_egress.oil</div>
+          <pre class="oil-code">set credential_targets = [
+  "/etc/shadow",
+  "/root/.ssh/id_rsa",
+  "/home/*/.ssh/id_rsa",
+  "~/.aws/credentials",
+  "~/.kube/config"
+]
+
+rule "credential_access_followed_by_egress" {
+  from endpoint.file, endpoint.process, network.flow
+
+  correlate
+    file.open as f by process as p
+    with network.connect as n on n.process_id == p.id
+
+  where
+    f.path matches credential_targets
+    and f.mode in ["read", "read_write"]
+    and n.direction == "outbound"
+
+  within 10m
+
+  let
+    unusual_dest = n.dest.domain not in host(p.host_id).baseline.domains
+    suspicious_proc = p.name in ["python", "node", "perl", "ruby", "bash", "curl"]
+    high_exfil = n.bytes_out > 100000
+
+  score
+    65
+    +10 if unusual_dest
+    +10 if suspicious_proc
+    +15 if high_exfil
+    +10 if n.dest.reputation in ["suspicious", "malicious"]
+
+  emit
+    fact host.possible_credential_exfil(host.id) expires 8h
+
+  respond
+    if score >= 85 {
+      alert critical
+      isolate host
+      snapshot p, f, n
+      open case "Credential access followed by egress"
+    } else {
+      alert high
     }
-  }
 }</pre>
+        </div>
+
+        <div class="oil-panel" id="rule-shell-egress" role="tabpanel" aria-labelledby="tab-shell-egress">
+          <div class="oil-file">oilc/src/rules/shell_outbound_to_bad_reputation.oil</div>
+          <pre class="oil-code">fact host.shell_bad_egress(host_id) expires 4h
+
+rule "shell_outbound_to_bad_reputation" {
+  from endpoint.process, network.flow
+
+  correlate
+    process.spawn as p
+    with network.connect as n on n.process_id == p.id
+
+  where
+    p.name in shells
+    and n.direction == "outbound"
+    and n.dest.reputation in bad_reputation
+
+  let
+    high_exfil = n.bytes_out > 500000
+    public_dest = n.dest.is_internal == false
+
+  score
+    65
+    +10 if public_dest
+    +15 if high_exfil
+
+  emit
+    fact host.shell_bad_egress(host.id) expires 4h
+
+  respond
+    if score >= 80 {
+      alert critical
+      snapshot p, n
+      open case "Shell outbound connection to bad reputation destination"
+    } else {
+      alert high
+    }
+}</pre>
+        </div>
+
+        <div class="oil-panel" id="rule-shell-container" role="tabpanel" aria-labelledby="tab-shell-container">
+          <div class="oil-file">oilc/src/rules/shell_spawn_in_container.oil</div>
+          <pre class="oil-code">set shell_binaries = ["sh", "bash", "dash", "zsh", "fish"]
+set approved_debug_images = []
+
+rule "interactive_shell_in_container" {
+  from endpoint.process, container.runtime
+
+  correlate
+    process.spawn as p
+    with container.context as c on c.container_id == p.container_id
+
+  where
+    is_shell(p)
+    and c.exists == true
+    and c.image.repo not in approved_debug_images
+
+  let
+    prod = c.tags contains "prod"
+    k8s = c.orchestrator == "kubernetes"
+    interactive = p.tty == true
+    suspicious_parent = p.parent.name not in ["pause", "tini", "entrypoint.sh"]
+
+  score
+    45
+    +20 if prod
+    +15 if interactive
+    +10 if suspicious_parent
+    +10 if k8s
+    +10 if p.user.name == "root"
+
+  emit
+    fact container.interactive_shell(c.container_id) expires 2h
+
+  respond
+    if score >= 75 {
+      alert critical
+      snapshot p, c
+      open case "Interactive shell in container"
+    } else {
+      alert medium
+    }
+}</pre>
+        </div>
+
+        <div class="oil-panel" id="rule-privileged" role="tabpanel" aria-labelledby="tab-privileged">
+          <div class="oil-file">oilc/src/rules/launch_of_priviledge_container.oil</div>
+          <pre class="oil-code">rule "privileged_container_started" {
+  from container.runtime, k8s.admission, identity.session
+
+  correlate
+    container.start as c
+    with session.use as s on s.user_id == c.initiator.user_id
+
+  where
+    c.security.privileged == true
+
+  let
+    host_ns = c.namespaces.host_pid or c.namespaces.host_network or c.namespaces.host_ipc
+    dangerous_caps = count(c.capabilities.added) > 0
+    prod = c.labels.environment == "production"
+    initiator_new_geo = s.country not in user(s.user_id).baseline.countries
+
+  score
+    60
+    +15 if host_ns
+    +15 if dangerous_caps
+    +15 if prod
+    +10 if c.image.tag == "latest"
+    +10 if initiator_new_geo
+
+  emit
+    fact container.high_risk(c.container_id) expires 24h
+
+  respond
+    if score >= 85 {
+      alert critical
+      open case "Privileged container launched"
+      snapshot c, s
+    } else {
+      alert high
+    }
+}</pre>
+        </div>
+
+        <div class="oil-panel" id="rule-binary" role="tabpanel" aria-labelledby="tab-binary">
+          <div class="oil-file">oilc/src/rules/modify_binary_directories.oil</div>
+          <pre class="oil-code">set executable_dirs = [
+  "/bin",
+  "/sbin",
+  "/usr/bin",
+  "/usr/sbin",
+  "/usr/local/bin",
+  "/usr/local/sbin"
+]
+
+rule "binary_directory_modification" {
+  from endpoint.file, endpoint.process
+
+  correlate
+    file.write as f by process as p
+
+  where
+    f.path under executable_dirs
+
+  let
+    package_mgmt = p.name in ["apt", "apt-get", "dpkg", "yum", "dnf", "rpm"]
+    interactive = p.parent.name in ["bash", "sh", "zsh"]
+    suspicious_path = p.binary.path under ["/tmp", "/var/tmp", "/dev/shm"]
+
+  score
+    60
+    -30 if package_mgmt
+    +15 if interactive
+    +20 if suspicious_path
+    +10 if p.user.name != "root"
+
+  require
+    score >= 40
+
+  emit
+    fact host.binary_tamper(host.id) expires 24h
+
+  respond
+    if score >= 80 {
+      alert critical
+      snapshot p, f
+      open case "Executable directory modification"
+    } else {
+      alert medium
+    }
+}</pre>
+        </div>
+
+        <div class="oil-panel" id="rule-root-ssh" role="tabpanel" aria-labelledby="tab-root-ssh">
+          <div class="oil-file">oilc/src/rules/root_ssh_write_by_non_root_process.oil</div>
+          <pre class="oil-code">fact host.root_ssh_write(host_id) expires 6h
+
+rule "root_ssh_write_by_non_root_process" {
+  from endpoint.file, endpoint.process
+
+  correlate
+    file.write as f by process as p
+
+  where
+    f.path under "/root/.ssh"
+    and p.uid != 0
+
+  let
+    suspicious_proc = p.name not in ["sshd", "scp", "rsync"]
+    stealthy_target = f.path in ["/root/.ssh/authorized_keys", "/root/.ssh/id_rsa"]
+
+  score
+    60
+    +15 if suspicious_proc
+    +20 if stealthy_target
+
+  emit
+    fact host.root_ssh_write(host.id) expires 6h
+
+  respond
+    if score >= 80 {
+      alert critical
+      snapshot p, f
+      open case "Write under /root/.ssh by non-root process"
+    } else {
+      alert high
+    }
+}</pre>
+        </div>
       </div>
     </div>
   </section>
@@ -1416,7 +1691,7 @@
   <!-- BETA -->
   <div class="beta-section" id="beta">
     <div class="section-header">
-      <span class="section-num">06</span>
+      <span class="section-num">03</span>
       <h2>Beta Access</h2>
     </div>
     <div class="beta-box">
@@ -1477,7 +1752,25 @@
       });
     });
 
-    // Subtle stagger on cap cards
+    // OIL rule tabs
+    const oilTabs = Array.from(document.querySelectorAll('.oil-tab'));
+    const oilPanels = Array.from(document.querySelectorAll('.oil-panel'));
+    oilTabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        const targetPanel = tab.getAttribute('aria-controls');
+        oilTabs.forEach(t => {
+          const active = t === tab;
+          t.classList.toggle('is-active', active);
+          t.setAttribute('aria-selected', active ? 'true' : 'false');
+          t.tabIndex = active ? 0 : -1;
+        });
+        oilPanels.forEach(panel => {
+          panel.classList.toggle('is-active', panel.id === targetPanel);
+        });
+      });
+    });
+
+    // Subtle stagger on visible blocks
     const observer = new IntersectionObserver(entries => {
       entries.forEach((entry, i) => {
         if (entry.isIntersecting) {
@@ -1488,7 +1781,7 @@
       });
     }, { threshold: 0.1 });
 
-    document.querySelectorAll('.cap-card, .det-card, .owasp-card').forEach(el => {
+    document.querySelectorAll('.overview-card, .rule-pack-card, .oil-layout, .wip-box, .beta-box').forEach(el => {
       observer.observe(el);
     });
   </script>

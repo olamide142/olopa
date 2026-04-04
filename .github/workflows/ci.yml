@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  oilc-tests:
+    name: oilc tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run oilc tests
+        run: cargo test --manifest-path oilc/Cargo.toml
+
+  agent-tests:
+    name: agent tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run agent tests
+        run: cargo test --manifest-path agent/Cargo.toml -p olopa-agent
+
+  ingest-server-tests:
+    name: ingest server tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run ingest server tests
+        run: cargo test --manifest-path app/ingest_server/Cargo.toml
+
+  e2e-runtime-to-ingest:
+    name: e2e runtime->ingest
+    runs-on: ubuntu-latest
+    needs:
+      - oilc-tests
+      - agent-tests
+      - ingest-server-tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run ignored e2e integration test
+        run: cargo test --manifest-path agent/Cargo.toml -p olopa-agent agent::tests::e2e_rule_to_runtime_to_sender_to_ingest_runtime -- --ignored --exact

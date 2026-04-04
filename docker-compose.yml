@@ -1,0 +1,72 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: olopa-clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./deploy/clickhouse/init:/docker-entrypoint-initdb.d:ro
+
+  surrealdb:
+    image: surrealdb/surrealdb:v2.3.10
+    container_name: olopa-surrealdb
+    command:
+      - start
+      - --log
+      - info
+      - --user
+      - root
+      - --pass
+      - root
+      - file:/data/olopa.db
+    ports:
+      - "8001:8000"
+    volumes:
+      - surreal_data:/data
+
+  ingest-server:
+    build:
+      context: .
+      dockerfile: app/ingest_server/Dockerfile
+    container_name: olopa-ingest-server
+    depends_on:
+      - clickhouse
+      - surrealdb
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: "8000"
+      INGEST_PERSIST_JSONL_PATH: /var/lib/olopa/ingest/events.jsonl
+      INGEST_CLICKHOUSE_URL: http://clickhouse:8123/
+      INGEST_CLICKHOUSE_INSERT_SQL: INSERT INTO olopa.events_raw FORMAT JSONEachRow
+      INGEST_SURREAL_URL: http://surrealdb:8000/sql
+      INGEST_SURREAL_NAMESPACE: olopa
+      INGEST_SURREAL_DATABASE: events
+      INGEST_SURREAL_TABLE: events_raw
+      INGEST_SURREAL_USER: root
+      INGEST_SURREAL_PASSWORD: root
+    ports:
+      - "8000:8000"
+    volumes:
+      - ingest_data:/var/lib/olopa/ingest
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: app/control_plane/Dockerfile
+    container_name: olopa-control-plane
+    depends_on:
+      - ingest-server
+    environment:
+      CONTROL_HOST: 0.0.0.0
+      CONTROL_PORT: "8100"
+      RUST_INGEST_BASE_URL: http://ingest-server:8000
+      OILC_MANIFEST_PATH: /opt/olopa/oilc/Cargo.toml
+    ports:
+      - "8100:8100"
+
+volumes:
+  clickhouse_data:
+  surreal_data:
+  ingest_data:

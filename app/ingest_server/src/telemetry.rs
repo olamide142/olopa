@@ -20,7 +20,7 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, error};
 
-use crate::config::IngestConfig;
+use super::config::IngestConfig;
 
 /// Versioned ingest request envelope sent by agents.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -259,10 +259,14 @@ struct IngestInMemoryState {
     recent_rows: VecDeque<RecentIngestRow>,
     /// Aggregated counters by event kind.
     by_kind: HashMap<String, u64>,
+    /// Aggregated counters by event kind per tenant.
+    by_kind_by_tenant: HashMap<String, HashMap<String, u64>>,
     /// Aggregated counters by tenant.
     by_tenant: HashMap<String, u64>,
     /// Aggregated counters by host.
     by_host: HashMap<String, u64>,
+    /// Aggregated counters by host per tenant.
+    by_host_by_tenant: HashMap<String, HashMap<String, u64>>,
     /// Total rows tracked since process start.
     total_rows: u64,
 }
@@ -279,6 +283,8 @@ struct QueuedBatch {
 pub struct IngestRuntime {
     /// Runtime config snapshot.
     cfg: IngestConfig,
+    /// Optional prebuilt SurrealDB HTTP client.
+    surreal_client: Option<reqwest::Client>,
     /// Optional prebuilt ClickHouse HTTP client.
     clickhouse_client: Option<reqwest::Client>,
     /// Sender side of bounded ingest queue.
@@ -311,6 +317,16 @@ impl IngestRuntime {
     pub fn new(cfg: IngestConfig) -> Self {
         let (tx, rx) = mpsc::channel(cfg.queue_maxsize);
         let (shutdown_tx, _) = watch::channel(false);
+        let surreal_client = cfg.surreal_url.as_ref().and_then(|_| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_millis(cfg.surreal_timeout_ms))
+                .build()
+                .map_err(|err| {
+                    error!(error = %err, "failed to build surrealdb HTTP client; disabling SurrealDB sink");
+                    err
+                })
+                .ok()
+        });
         let clickhouse_client = cfg.clickhouse_url.as_ref().and_then(|_| {
             reqwest::Client::builder()
                 .timeout(Duration::from_millis(cfg.clickhouse_timeout_ms))
@@ -324,6 +340,7 @@ impl IngestRuntime {
 
         Self {
             cfg,
+            surreal_client,
             clickhouse_client,
             tx,
             rx: Mutex::new(Some(rx)),
@@ -437,8 +454,9 @@ impl IngestRuntime {
     ///
     /// Strategy:
     /// - flatten all event families into JSON rows,
-    /// - try ClickHouse when configured,
-    /// - always fall back to local JSONL on ClickHouse failure.
+    /// - try SurrealDB when configured,
+    /// - then try ClickHouse when configured,
+    /// - always fall back to local JSONL on sink failures.
     async fn persist_batches(&self, pending_batches: &[QueuedBatch]) -> Result<usize, String> {
         let rows = build_persist_rows(pending_batches)
             .map_err(|err| format!("serialize rows failed: {err}"))?;
@@ -446,27 +464,108 @@ impl IngestRuntime {
             return Ok(0);
         }
 
-        if self.cfg.clickhouse_url.is_some() {
-            match self.persist_clickhouse(&rows).await {
+        if self.cfg.surreal_url.is_some() {
+            match self.persist_surreal(&rows).await {
                 Ok(()) => {}
-                Err(err) => {
+                Err(surreal_err) => {
                     error!(
-                        error = %err,
-                        "clickhouse insert failed; falling back to JSONL persistence"
+                        error = %surreal_err,
+                        "surrealdb insert failed; trying clickhouse/jsonl fallback path"
                     );
-                    self.persist_jsonl(&rows)
-                        .await
-                        .map_err(|io_err| format!("jsonl fallback failed: {io_err}"))?;
+                    if self.cfg.clickhouse_url.is_some() {
+                        match self.persist_clickhouse(&rows).await {
+                            Ok(()) => {}
+                            Err(clickhouse_err) => {
+                                error!(
+                                    error = %clickhouse_err,
+                                    "clickhouse fallback insert failed; falling back to JSONL persistence"
+                                );
+                                self.persist_jsonl(&rows)
+                                    .await
+                                    .map_err(|io_err| format!("jsonl fallback failed: {io_err}"))?;
+                            }
+                        }
+                    } else {
+                        self.persist_jsonl(&rows)
+                            .await
+                            .map_err(|io_err| format!("jsonl fallback failed: {io_err}"))?;
+                    }
                 }
             }
         } else {
-            self.persist_jsonl(&rows)
-                .await
-                .map_err(|io_err| format!("jsonl persistence failed: {io_err}"))?;
+            if self.cfg.clickhouse_url.is_some() {
+                match self.persist_clickhouse(&rows).await {
+                    Ok(()) => {}
+                    Err(err) => {
+                        error!(
+                            error = %err,
+                            "clickhouse insert failed; falling back to JSONL persistence"
+                        );
+                        self.persist_jsonl(&rows)
+                            .await
+                            .map_err(|io_err| format!("jsonl fallback failed: {io_err}"))?;
+                    }
+                }
+            } else {
+                self.persist_jsonl(&rows)
+                    .await
+                    .map_err(|io_err| format!("jsonl persistence failed: {io_err}"))?;
+            }
         }
 
         self.record_rows(&rows).await;
         Ok(rows.len())
+    }
+
+    /// Try inserting flattened rows into SurrealDB over HTTP SQL endpoint.
+    async fn persist_surreal(&self, rows: &[PersistRow]) -> Result<(), String> {
+        let Some(url_base) = self.cfg.surreal_url.as_ref() else {
+            return Err("surrealdb URL not configured".to_string());
+        };
+        let Some(client) = self.surreal_client.as_ref() else {
+            return Err("surrealdb client unavailable".to_string());
+        };
+        if !is_valid_surreal_identifier(&self.cfg.surreal_table) {
+            return Err(format!(
+                "invalid surreal table name '{}': only [A-Za-z0-9_] allowed",
+                self.cfg.surreal_table
+            ));
+        }
+
+        let sql = build_surreal_insert_sql(rows, &self.cfg.surreal_table);
+        let mut req = client
+            .post(url_base)
+            .header(reqwest::header::CONTENT_TYPE, "text/plain")
+            .header("NS", &self.cfg.surreal_namespace)
+            .header("DB", &self.cfg.surreal_database)
+            .body(sql);
+
+        if let Some(token) = self.cfg.surreal_token.as_ref() {
+            req = req.bearer_auth(token);
+        } else if let Some(user) = self.cfg.surreal_user.as_ref() {
+            req = req.basic_auth(user, self.cfg.surreal_password.as_ref());
+        }
+
+        let resp = req
+            .send()
+            .await
+            .map_err(|err| format!("surrealdb HTTP request failed: {err}"))?;
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(format!(
+                "surrealdb insert failed (status={}): {}",
+                status,
+                truncate_for_log(&body, 512)
+            ));
+        }
+
+        if let Some(err_message) = extract_surreal_error(&body) {
+            return Err(format!("surrealdb insert returned error: {err_message}"));
+        }
+
+        Ok(())
     }
 
     /// Try inserting flattened rows into ClickHouse over HTTP.
@@ -543,16 +642,26 @@ impl IngestRuntime {
     async fn record_rows(&self, rows: &[PersistRow]) {
         let mut state = self.state.lock().await;
         for row in rows {
+            let tenant_id = row.recent.tenant_id.clone();
+            let host_id = row.recent.host_id.clone();
+            let event_kind = row.recent.event_kind.clone();
+
             state.total_rows = state.total_rows.saturating_add(1);
+            *state.by_kind.entry(event_kind.clone()).or_insert(0) += 1;
+            *state.by_tenant.entry(tenant_id.clone()).or_insert(0) += 1;
+            *state.by_host.entry(host_id.clone()).or_insert(0) += 1;
             *state
-                .by_kind
-                .entry(row.recent.event_kind.clone())
+                .by_kind_by_tenant
+                .entry(tenant_id.clone())
+                .or_default()
+                .entry(event_kind)
                 .or_insert(0) += 1;
             *state
-                .by_tenant
-                .entry(row.recent.tenant_id.clone())
+                .by_host_by_tenant
+                .entry(tenant_id)
+                .or_default()
+                .entry(host_id)
                 .or_insert(0) += 1;
-            *state.by_host.entry(row.recent.host_id.clone()).or_insert(0) += 1;
 
             state.recent_rows.push_back(row.recent.clone());
             while state.recent_rows.len() > self.cfg.recent_events_max {
@@ -653,6 +762,35 @@ impl IngestRuntime {
         }
     }
 
+    /// Return recent rows for a single tenant (newest first), capped by `limit`.
+    pub async fn recent_rows_for_tenant(
+        &self,
+        limit: usize,
+        tenant_id: &str,
+    ) -> RecentIngestResponse {
+        let state = self.state.lock().await;
+        let requested = limit.max(1).min(self.cfg.recent_events_max.max(1));
+        let rows = state
+            .recent_rows
+            .iter()
+            .rev()
+            .filter(|row| row.tenant_id == tenant_id)
+            .take(requested)
+            .cloned()
+            .collect::<Vec<_>>();
+        let total_available = state
+            .recent_rows
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .count();
+
+        RecentIngestResponse {
+            total_available,
+            returned: rows.len(),
+            rows,
+        }
+    }
+
     /// Return aggregate counters built from all successfully flushed rows.
     pub async fn data_summary(&self) -> IngestDataSummaryResponse {
         let state = self.state.lock().await;
@@ -661,6 +799,33 @@ impl IngestRuntime {
             by_kind: state.by_kind.clone(),
             by_tenant: state.by_tenant.clone(),
             by_host: state.by_host.clone(),
+        }
+    }
+
+    /// Return aggregate counters for one tenant only.
+    pub async fn data_summary_for_tenant(&self, tenant_id: &str) -> IngestDataSummaryResponse {
+        let state = self.state.lock().await;
+        let total_rows = state.by_tenant.get(tenant_id).copied().unwrap_or(0);
+        let by_kind = state
+            .by_kind_by_tenant
+            .get(tenant_id)
+            .cloned()
+            .unwrap_or_default();
+        let by_host = state
+            .by_host_by_tenant
+            .get(tenant_id)
+            .cloned()
+            .unwrap_or_default();
+        let mut by_tenant = HashMap::new();
+        if total_rows > 0 {
+            by_tenant.insert(tenant_id.to_string(), total_rows);
+        }
+
+        IngestDataSummaryResponse {
+            total_rows,
+            by_kind,
+            by_tenant,
+            by_host,
         }
     }
 
@@ -823,6 +988,42 @@ fn truncate_for_log(input: &str, max_len: usize) -> String {
     format!("{}...", &input[..end])
 }
 
+fn is_valid_surreal_identifier(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'))
+}
+
+fn build_surreal_insert_sql(rows: &[PersistRow], table: &str) -> String {
+    rows.iter()
+        .map(|row| format!("INSERT INTO {table} CONTENT {};", row.line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn extract_surreal_error(body: &str) -> Option<String> {
+    if body.trim().is_empty() {
+        return None;
+    }
+    let parsed: serde_json::Value = serde_json::from_str(body).ok()?;
+    let entries = parsed.as_array()?;
+    for entry in entries {
+        if entry.get("status").and_then(|v| v.as_str()) == Some("ERR") {
+            let message = entry
+                .get("result")
+                .map(|v| {
+                    v.as_str()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| v.to_string())
+                })
+                .unwrap_or_else(|| "unknown surrealdb error".to_string());
+            return Some(truncate_for_log(&message, 512));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -962,6 +1163,28 @@ mod tests {
         assert_eq!(rows[3].recent.event_kind, "agent_heartbeat");
     }
 
+    #[test]
+    fn surreal_insert_sql_contains_insert_per_row() {
+        let queued = vec![QueuedBatch {
+            rows: test_batch().row_count(),
+            payload: test_batch(),
+        }];
+        let rows = build_persist_rows(&queued).expect("rows");
+        let sql = build_surreal_insert_sql(&rows, "events_raw");
+        assert!(sql.contains("INSERT INTO events_raw CONTENT"));
+        assert_eq!(
+            sql.matches("INSERT INTO events_raw CONTENT").count(),
+            rows.len()
+        );
+    }
+
+    #[test]
+    fn surreal_error_parser_detects_err_status() {
+        let body = r#"[{"status":"OK","result":[]},{"status":"ERR","result":"bad query"}]"#;
+        let err = extract_surreal_error(body);
+        assert_eq!(err.as_deref(), Some("bad query"));
+    }
+
     #[tokio::test]
     async fn recent_rows_and_summary_are_populated_after_flush() {
         let cfg = IngestConfig {
@@ -990,6 +1213,52 @@ mod tests {
         assert!(summary.total_rows >= 1);
         assert!(summary.by_kind.get("process_exec").copied().unwrap_or(0) >= 1);
         assert!(summary.by_tenant.get("acme").copied().unwrap_or(0) >= 1);
+
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn tenant_scoped_recent_and_summary_filter_rows() {
+        let cfg = IngestConfig {
+            queue_maxsize: 8,
+            flush_interval_ms: 30,
+            flush_max_rows: 1000,
+            default_retry_after_ms: 500,
+            suggested_batch_bytes: 4_000_000,
+            recent_events_max: 16,
+            ..IngestConfig::default()
+        };
+        let runtime = Arc::new(IngestRuntime::new(cfg));
+        runtime.start_worker().await;
+
+        let first = test_batch();
+        assert!(runtime.ack_batch(first).accepted);
+
+        let mut second = test_batch();
+        second.tenant_id = "globex".to_string();
+        second.host_id = "host-02".to_string();
+        second.process_exec_events[0].pid = 777;
+        assert!(runtime.ack_batch(second).accepted);
+
+        tokio::time::sleep(Duration::from_millis(90)).await;
+
+        let recent_acme = runtime.recent_rows_for_tenant(10, "acme").await;
+        assert!(recent_acme.returned >= 1);
+        assert!(recent_acme.rows.iter().all(|r| r.tenant_id == "acme"));
+
+        let recent_globex = runtime.recent_rows_for_tenant(10, "globex").await;
+        assert!(recent_globex.returned >= 1);
+        assert!(recent_globex.rows.iter().all(|r| r.tenant_id == "globex"));
+
+        let summary_acme = runtime.data_summary_for_tenant("acme").await;
+        assert_eq!(summary_acme.total_rows, 1);
+        assert_eq!(summary_acme.by_tenant.get("acme").copied(), Some(1));
+        assert!(summary_acme.by_tenant.get("globex").is_none());
+
+        let summary_globex = runtime.data_summary_for_tenant("globex").await;
+        assert_eq!(summary_globex.total_rows, 1);
+        assert_eq!(summary_globex.by_tenant.get("globex").copied(), Some(1));
+        assert!(summary_globex.by_tenant.get("acme").is_none());
 
         runtime.shutdown().await;
     }

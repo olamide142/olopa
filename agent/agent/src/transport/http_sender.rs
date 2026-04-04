@@ -369,6 +369,27 @@ fn payload_to_batches(
     vec![batch]
 }
 
+#[cfg(test)]
+pub(crate) fn payload_to_batches_for_tests(
+    payload: &[u8],
+    tenant_id: &str,
+    host_id: &str,
+) -> Vec<serde_json::Value> {
+    // Reuse the real sender mapping logic so e2e tests validate the exact
+    // wire shape that would be posted to ingest in production.
+    let cfg = HttpSenderConfig {
+        ingest_url: "http://127.0.0.1:8000/api/v1/ingest/batches".to_string(),
+        tenant_id: tenant_id.to_string(),
+        host_id: host_id.to_string(),
+    };
+    let mut dec = DictDecompressor::new();
+    let mut seq = 0u64;
+    payload_to_batches(payload, &cfg, &mut dec, &mut seq)
+        .into_iter()
+        .map(|batch| serde_json::to_value(batch).expect("serialize batch payload"))
+        .collect()
+}
+
 fn try_decompress_frame(
     dec: &mut DictDecompressor,
     frame: &[u8],

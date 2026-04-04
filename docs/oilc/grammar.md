@@ -44,6 +44,8 @@ rule_decl       = "rule" (string | ident) "{" { rule_clause } "}" ;
 rule_clause     = from_clause
                 | match_clause
                 | correlate_clause
+                | graph_clause
+                | around_clause
                 | where_clause
                 | within_clause
                 | let_clause
@@ -64,6 +66,16 @@ match_step      = event_pattern
 correlate_clause= "correlate" correlate_arm { "with" correlate_arm } ;
 correlate_arm   = event_pattern "as" ident [ correlate_join ] ;
 correlate_join  = "on" expr | "by" ident [ "as" ident ] ;
+
+graph_clause    = "graph" source_spec "{"
+                  { graph_pattern [ "," ] }
+                  "}" ;
+graph_pattern   = name_atom "as" ident [ "->" name_atom ] ;
+
+around_clause   = "around" dotted_name [ "within" ] duration "{"
+                  { gather_arm [ "," ] }
+                  "}" ;
+gather_arm      = event_pattern "as" ident ;
 
 where_clause    = "where" expr ;
 within_clause   = "within" duration ;
@@ -125,7 +137,9 @@ dotted_name     = ident { "." ident } ;
 expr            = or_expr ;
 or_expr         = and_expr { "or" and_expr } ;
 and_expr        = cmp_expr { "and" cmp_expr } ;
-cmp_expr        = unary_expr { cmp_op unary_expr } ;
+cmp_expr        = add_expr { cmp_op add_expr } ;
+add_expr        = mul_expr { ("+" | "-") mul_expr } ;
+mul_expr        = unary_expr { ("*" | "/") unary_expr } ;
 cmp_op          = "==" | "!=" | "<" | ">" | "<=" | ">="
                 | "in" | "not" "in"
                 | "contains" | "starts_with" | "ends_with"
@@ -169,6 +183,8 @@ This section explains what each implemented clause/keyword does in practice.
 | `match` | Define an ordered sequence of event-pattern steps. | `match process.spawn as p then network.connect as n` |
 | `then` | Link additional `match` steps in order. | `... then network.connect as n` |
 | `correlate` | Define multi-arm correlation logic. | `correlate process.spawn as p with network.connect as n ...` |
+| `graph` | Define graph-shaped rule body with a root source and entity pattern list. | `graph endpoint.process as p { process as proc }` |
+| `around` | Define an entity-anchored temporal gather body. | `around host.id within 5m { process.spawn as p }` |
 | `with` | Add another correlate arm. | `with network.connect as n` |
 | `as` | Alias an event/variable for later references. | `process.spawn as p` |
 | `on` | Provide explicit join predicate between correlate arms. | `... with network.connect as n on p.pid == n.pid` |
@@ -224,10 +240,11 @@ This section explains what each implemented clause/keyword does in practice.
 Highest to lowest:
 
 1. Prefix: `not`, unary `-`
-2. Comparison/membership/string operators:
+2. Multiplicative: `*`, `/`
+3. Additive: `+`, `-`
+4. Comparison/membership/string operators:
    - `== != < > <= >=`
    - `in`, `not in`
    - `contains`, `starts_with`, `ends_with`, `matches`, `under`
-3. `and`
-4. `or`
-
+5. `and`
+6. `or`

@@ -3,11 +3,11 @@
 //! This module loads the JSON artifact emitted by `oilc --emit-runtime-ir`
 //! and evaluates each rule predicate against `IngestEvent`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -36,12 +36,61 @@ struct ClockAnchor {
 /// Optional global clock anchor cached on first use.
 static CLOCK_ANCHOR: OnceLock<Option<ClockAnchor>> = OnceLock::new();
 
+#[derive(Debug, Default)]
+struct CallableEvalState {
+    rare_counts: HashMap<String, u64>,
+    unusual_entity_value_counts: HashMap<(String, String), u64>,
+    rate_observations: HashMap<String, VecDeque<u64>>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuntimeProgram {
     /// Runtime IR schema version. Current supported version: 1.
     pub version: u32,
+    /// Compiler-emitted field metadata used for runtime field resolution.
+    #[serde(default)]
+    pub fields: Vec<RuntimeField>,
     /// Flat list of compiled rules.
     pub rules: Vec<RuntimeRule>,
+}
+
+/// Runtime field metadata entry emitted by compiler artifacts.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RuntimeField {
+    /// Canonical dotted field path.
+    pub canonical: String,
+    /// Runtime value-type tag.
+    pub value_type: RuntimeFieldType,
+    /// Optional alias paths accepted by runtime lookup.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    /// Wall-clock derived context marker.
+    #[serde(default)]
+    pub is_time_context: bool,
+}
+
+/// Wire value-type tags attached to runtime field metadata.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeFieldType {
+    Bool,
+    Number,
+    String,
+    Ip,
+    List,
+}
+
+/// Canonical duration units used in serialized runtime plans.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeDurationUnit {
+    Ns,
+    Us,
+    Ms,
+    S,
+    M,
+    H,
+    D,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -81,14 +130,28 @@ pub struct RuntimeAction {
 pub enum RuntimeExpr {
     /// Literal boolean.
     Bool { value: bool },
+    /// Literal null.
+    Null,
+    /// Literal list.
+    List { items: Vec<RuntimeExpr> },
     /// Literal integer.
     Int { value: i64 },
     /// Literal float.
     Float { value: f64 },
+    /// Literal duration.
+    Duration {
+        value: u64,
+        unit: RuntimeDurationUnit,
+    },
     /// Literal string.
     Str { value: String },
     /// Event field path such as `pid` or `event.pid`.
     Field { path: String },
+    /// Callable expression.
+    Call {
+        name: String,
+        args: Vec<RuntimeExpr>,
+    },
     /// Logical conjunction.
     And {
         lhs: Box<RuntimeExpr>,
@@ -128,6 +191,26 @@ pub enum RuntimeExpr {
     },
     /// Greater or equal.
     Ge {
+        lhs: Box<RuntimeExpr>,
+        rhs: Box<RuntimeExpr>,
+    },
+    /// Numeric addition.
+    Add {
+        lhs: Box<RuntimeExpr>,
+        rhs: Box<RuntimeExpr>,
+    },
+    /// Numeric subtraction.
+    Sub {
+        lhs: Box<RuntimeExpr>,
+        rhs: Box<RuntimeExpr>,
+    },
+    /// Numeric multiplication.
+    Mul {
+        lhs: Box<RuntimeExpr>,
+        rhs: Box<RuntimeExpr>,
+    },
+    /// Numeric division.
+    Div {
         lhs: Box<RuntimeExpr>,
         rhs: Box<RuntimeExpr>,
     },
@@ -171,6 +254,8 @@ enum Value {
     String(String),
     /// IPv4 value encoded as host-endian `u32`.
     Ip(u32),
+    /// List value used by collection operators.
+    List(Vec<Value>),
     /// Missing/unknown value.
     Null,
 }
@@ -182,159 +267,299 @@ enum FieldType {
     Number,
     String,
     Ip,
+    List,
 }
 
 /// Field lookup descriptor used by runtime evaluator.
 ///
-/// Instead of hardcoding path aliasing in one giant `match`, we keep
-/// canonical/suffix names and extraction behavior here.
+/// The compiler emits canonical + alias metadata, while agent provides
+/// extractor bindings for currently supported event fields.
+#[derive(Debug, Clone)]
 struct FieldSpec {
     /// Canonical schema-style field path (for diagnostics/docs).
-    canonical: &'static str,
+    canonical: String,
     /// Value type expected for this field.
     value_type: FieldType,
     /// Allowed suffix aliases (matched on segment boundary).
-    aliases: &'static [&'static str],
+    aliases: Vec<String>,
     /// Marks fields derived from wall-clock context.
     is_time_context: bool,
     /// Extract value from event.
-    extract: fn(&IngestEvent) -> Value,
+    extract: Option<fn(&IngestEvent) -> Value>,
 }
 
-/// Declarative field registry consumed by runtime lookup.
-const FIELD_SPECS: &[FieldSpec] = &[
-    // --- Time context -----------------------------------------------------
-    FieldSpec {
+/// Backward-compatible field metadata used for older artifacts that do not
+/// include compiler-emitted `fields` metadata.
+struct FallbackFieldMetadata {
+    canonical: &'static str,
+    value_type: FieldType,
+    aliases: &'static [&'static str],
+    is_time_context: bool,
+}
+
+const FALLBACK_FIELD_METADATA: &[FallbackFieldMetadata] = &[
+    FallbackFieldMetadata {
         canonical: "time.weekday",
         value_type: FieldType::String,
         aliases: &["weekday", "day_of_week", "time.day_of_week"],
         is_time_context: true,
-        extract: field_time_weekday,
     },
-    FieldSpec {
+    FallbackFieldMetadata {
         canonical: "time.hour",
         value_type: FieldType::Number,
         aliases: &["hour"],
         is_time_context: true,
-        extract: field_time_hour,
     },
-    FieldSpec {
+    FallbackFieldMetadata {
         canonical: "time.minute",
         value_type: FieldType::Number,
         aliases: &["minute"],
         is_time_context: true,
-        extract: field_time_minute,
     },
-    FieldSpec {
+    FallbackFieldMetadata {
         canonical: "time.is_business_hour",
         value_type: FieldType::Bool,
-        aliases: &[
-            "is_business_hour",
-            "business_hours",
-            "time.business_hours",
-        ],
+        aliases: &["is_business_hour", "business_hours", "time.business_hours"],
         is_time_context: true,
-        extract: field_time_business_hour,
     },
-    // --- Core event/process fields ---------------------------------------
-    FieldSpec {
+    FallbackFieldMetadata {
         canonical: "event.ts_ns",
         value_type: FieldType::Number,
         aliases: &["ts_ns"],
         is_time_context: false,
-        extract: field_ts_ns,
     },
-    FieldSpec {
+    FallbackFieldMetadata {
         canonical: "process.pid",
         value_type: FieldType::Number,
         aliases: &["pid", "process_id", "process.id"],
         is_time_context: false,
-        extract: field_pid,
     },
-    FieldSpec {
+    FallbackFieldMetadata {
+        canonical: "process.ppid",
+        value_type: FieldType::Number,
+        aliases: &[
+            "ppid",
+            "parent_pid",
+            "process.parent.pid",
+            "process.parent.id",
+            "parent.pid",
+            "parent.id",
+        ],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
         canonical: "process.uid",
         value_type: FieldType::Number,
-        aliases: &["uid", "user.uid"],
+        aliases: &["uid", "user.uid", "process.user.uid"],
         is_time_context: false,
-        extract: field_uid,
     },
-    FieldSpec {
+    FallbackFieldMetadata {
+        canonical: "process.elevated",
+        value_type: FieldType::Bool,
+        aliases: &["elevated", "is_root", "process.is_root"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
         canonical: "event.event_type",
         value_type: FieldType::Number,
         aliases: &["event_type", "event.type"],
         is_time_context: false,
-        extract: field_event_type,
     },
-    FieldSpec {
+    FallbackFieldMetadata {
         canonical: "event.vertex_id",
         value_type: FieldType::Number,
         aliases: &["vertex_id", "event.src_vertex_id"],
         is_time_context: false,
-        extract: field_vertex_id,
     },
-    FieldSpec {
+    FallbackFieldMetadata {
         canonical: "event.dst_vertex_id",
         value_type: FieldType::Number,
         aliases: &["dst_vertex_id", "event.dst_vertex_id"],
         is_time_context: false,
-        extract: field_dst_vertex_id,
     },
-    FieldSpec {
+    FallbackFieldMetadata {
         canonical: "process.name",
         value_type: FieldType::String,
         aliases: &["name", "comm", "process.comm"],
         is_time_context: false,
-        extract: field_process_name,
     },
-    FieldSpec {
+    FallbackFieldMetadata {
         canonical: "event.comm_id",
         value_type: FieldType::Number,
         aliases: &["comm_id", "process.comm_id"],
         is_time_context: false,
-        extract: field_comm_id,
     },
-    FieldSpec {
+    FallbackFieldMetadata {
         canonical: "event.risk_score",
         value_type: FieldType::Number,
         aliases: &["risk_score", "score"],
         is_time_context: false,
-        extract: field_risk_score,
     },
-    // --- Network fields ---------------------------------------------------
-    FieldSpec {
+    FallbackFieldMetadata {
+        canonical: "host.risk_score",
+        value_type: FieldType::Number,
+        aliases: &["host.risk_score", "host.rs"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "network.process_id",
+        value_type: FieldType::Number,
+        aliases: &["network.process_id", "net.process_id", "net.proc_id"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
         canonical: "network.direction",
         value_type: FieldType::String,
         aliases: &["direction"],
         is_time_context: false,
-        extract: field_network_direction,
     },
-    FieldSpec {
+    FallbackFieldMetadata {
         canonical: "network.dest.domain",
         value_type: FieldType::Ip,
         aliases: &["domain", "dest.domain"],
         is_time_context: false,
-        extract: field_network_dest_ip,
     },
-    FieldSpec {
+    FallbackFieldMetadata {
         canonical: "network.dest.ip",
         value_type: FieldType::Ip,
         aliases: &["dst_ip", "ip", "dest.ip"],
         is_time_context: false,
-        extract: field_network_dest_ip,
     },
-    FieldSpec {
+    FallbackFieldMetadata {
         canonical: "network.dest.port",
         value_type: FieldType::Number,
         aliases: &["dst_port", "port", "dest.port"],
         is_time_context: false,
-        extract: field_network_dest_port,
+    },
+    FallbackFieldMetadata {
+        canonical: "network.dest.is_internal",
+        value_type: FieldType::Bool,
+        aliases: &[
+            "network.dest.is_internal",
+            "dest.is_internal",
+            "dest.internal",
+            "is_internal",
+        ],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "file.process_id",
+        value_type: FieldType::Number,
+        aliases: &["file.process_id", "file.proc_id"],
+        is_time_context: false,
     },
 ];
+
+fn build_field_specs(program: &RuntimeProgram) -> Vec<FieldSpec> {
+    if program.fields.is_empty() {
+        return FALLBACK_FIELD_METADATA
+            .iter()
+            .map(|field| {
+                let canonical = normalize_field_path(field.canonical);
+                let mut aliases = field
+                    .aliases
+                    .iter()
+                    .map(|alias| normalize_field_path(alias))
+                    .collect::<Vec<_>>();
+                aliases.sort();
+                aliases.dedup();
+                aliases.retain(|alias| alias != &canonical);
+                FieldSpec {
+                    canonical: canonical.clone(),
+                    value_type: field.value_type,
+                    aliases,
+                    is_time_context: field.is_time_context,
+                    extract: lookup_field_extractor(&canonical),
+                }
+            })
+            .collect();
+    }
+
+    program
+        .fields
+        .iter()
+        .map(|field| {
+            let canonical = normalize_field_path(&field.canonical);
+            let mut aliases = field
+                .aliases
+                .iter()
+                .map(|alias| normalize_field_path(alias))
+                .collect::<Vec<_>>();
+            aliases.sort();
+            aliases.dedup();
+            aliases.retain(|alias| alias != &canonical);
+
+            FieldSpec {
+                canonical: canonical.clone(),
+                value_type: runtime_field_type_override(
+                    &canonical,
+                    runtime_field_type_to_internal(field.value_type),
+                ),
+                aliases,
+                is_time_context: field.is_time_context,
+                extract: lookup_field_extractor(&canonical),
+            }
+        })
+        .collect()
+}
+
+fn runtime_field_type_to_internal(value_type: RuntimeFieldType) -> FieldType {
+    match value_type {
+        RuntimeFieldType::Bool => FieldType::Bool,
+        RuntimeFieldType::Number => FieldType::Number,
+        RuntimeFieldType::String => FieldType::String,
+        RuntimeFieldType::Ip => FieldType::Ip,
+        RuntimeFieldType::List => FieldType::List,
+    }
+}
+
+/// Some schema-declared string fields are represented in-agent as IPv4 values.
+fn runtime_field_type_override(canonical: &str, value_type: FieldType) -> FieldType {
+    match canonical {
+        "network.dest.domain" => FieldType::Ip,
+        _ => value_type,
+    }
+}
+
+fn lookup_field_extractor(canonical: &str) -> Option<fn(&IngestEvent) -> Value> {
+    match canonical {
+        "time.weekday" => Some(field_time_weekday),
+        "time.hour" => Some(field_time_hour),
+        "time.minute" => Some(field_time_minute),
+        "time.is_business_hour" => Some(field_time_business_hour),
+        "event.ts_ns" => Some(field_ts_ns),
+        "process.id" => Some(field_process_id),
+        "process.pid" => Some(field_pid),
+        "process.ppid" => Some(field_process_ppid),
+        "process.parent.id" | "process.parent.pid" => Some(field_process_parent_id),
+        "process.uid" => Some(field_uid),
+        "process.user.uid" | "user.uid" => Some(field_user_uid),
+        "process.elevated" => Some(field_process_elevated),
+        "host.risk_score" => Some(field_host_risk_score),
+        "event.event_type" => Some(field_event_type),
+        "event.vertex_id" => Some(field_vertex_id),
+        "event.dst_vertex_id" => Some(field_dst_vertex_id),
+        "process.name" => Some(field_process_name),
+        "event.comm_id" => Some(field_comm_id),
+        "event.risk_score" => Some(field_risk_score),
+        "network.process_id" => Some(field_network_process_id),
+        "network.direction" => Some(field_network_direction),
+        "network.dest.domain" | "network.dest.ip" => Some(field_network_dest_ip),
+        "network.dest.port" => Some(field_network_dest_port),
+        "network.dest.is_internal" => Some(field_network_dest_is_internal),
+        "file.process_id" => Some(field_file_process_id),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct RuntimeIrRuleEngine {
     /// Loaded, compiler-produced runtime program.
     program: RuntimeProgram,
+    /// Runtime field metadata/extractor bindings used during evaluation.
+    field_specs: Vec<FieldSpec>,
+    /// Stateful memory used by novelty-oriented callables.
+    callable_state: Arc<Mutex<CallableEvalState>>,
 }
 
 /// Multi-unit runtime artifact wrapper emitted by compiler in bundled mode.
@@ -373,7 +598,12 @@ impl RuntimeIrRuleEngine {
                 path.display()
             );
         }
-        Ok(Self { program })
+        let field_specs = build_field_specs(&program);
+        Ok(Self {
+            program,
+            field_specs,
+            callable_state: Arc::new(Mutex::new(CallableEvalState::default())),
+        })
     }
 
     /// Evaluate all rules for a single event and return every match.
@@ -385,8 +615,11 @@ impl RuntimeIrRuleEngine {
 
         let mut out = Vec::new();
         for rule in &self.program.rules {
-            let uses_time_context = rule_uses_time_context(rule);
-            let matched = rule.predicates.iter().all(|pred| eval_bool(pred, event));
+            let uses_time_context = rule_uses_time_context(rule, &self.field_specs);
+            let matched = rule
+                .predicates
+                .iter()
+                .all(|pred| eval_bool(pred, event, &self.field_specs, &self.callable_state));
             if should_debug_time_ir() && uses_time_context {
                 debug_time_ir_eval(rule, event, matched);
             }
@@ -417,16 +650,30 @@ fn parse_runtime_program(content: &str) -> Result<RuntimeProgram> {
 
     let multi: RuntimeArtifactMultiUnit = serde_json::from_str(content)?;
     let mut merged_rules = Vec::new();
+    let mut merged_fields = Vec::new();
     for unit in multi.units {
         // Keep `id` consumed intentionally; useful for future per-unit routing.
         let _unit_id = unit.id;
+        merged_fields.extend(unit.program.fields);
         merged_rules.extend(unit.program.rules);
     }
 
     Ok(RuntimeProgram {
         version: multi.version,
+        fields: dedupe_runtime_fields(merged_fields),
         rules: merged_rules,
     })
+}
+
+fn dedupe_runtime_fields(fields: Vec<RuntimeField>) -> Vec<RuntimeField> {
+    let mut by_canonical: HashMap<String, RuntimeField> = HashMap::new();
+    for field in fields {
+        let canonical = normalize_field_path(&field.canonical);
+        by_canonical.entry(canonical).or_insert(field);
+    }
+    let mut merged = by_canonical.into_values().collect::<Vec<_>>();
+    merged.sort_by(|a, b| a.canonical.cmp(&b.canonical));
+    merged
 }
 
 /// Check whether any response branch requests `block_egress`.
@@ -474,14 +721,21 @@ fn debug_time_ir_eval(rule: &RuntimeRule, event: &IngestEvent, matched: bool) {
 }
 
 /// Return true when any rule predicate references time-derived fields.
-fn rule_uses_time_context(rule: &RuntimeRule) -> bool {
-    rule.predicates.iter().any(expr_uses_time_context)
+fn rule_uses_time_context(rule: &RuntimeRule, field_specs: &[FieldSpec]) -> bool {
+    rule.predicates
+        .iter()
+        .any(|expr| expr_uses_time_context(expr, field_specs))
 }
 
 /// Recursively inspect expression tree for time-context field usage.
-fn expr_uses_time_context(expr: &RuntimeExpr) -> bool {
+fn expr_uses_time_context(expr: &RuntimeExpr, field_specs: &[FieldSpec]) -> bool {
     match expr {
-        RuntimeExpr::Field { path } => lookup_field_spec(path).is_some_and(|s| s.is_time_context),
+        RuntimeExpr::Field { path } => {
+            lookup_field_spec(field_specs, path).is_some_and(|s| s.is_time_context)
+        }
+        RuntimeExpr::Call { name: _, args } => args
+            .iter()
+            .any(|arg| expr_uses_time_context(arg, field_specs)),
         RuntimeExpr::And { lhs, rhs }
         | RuntimeExpr::Or { lhs, rhs }
         | RuntimeExpr::Eq { lhs, rhs }
@@ -490,19 +744,31 @@ fn expr_uses_time_context(expr: &RuntimeExpr) -> bool {
         | RuntimeExpr::Gt { lhs, rhs }
         | RuntimeExpr::Le { lhs, rhs }
         | RuntimeExpr::Ge { lhs, rhs }
+        | RuntimeExpr::Add { lhs, rhs }
+        | RuntimeExpr::Sub { lhs, rhs }
+        | RuntimeExpr::Mul { lhs, rhs }
+        | RuntimeExpr::Div { lhs, rhs }
         | RuntimeExpr::StartsWith { lhs, rhs }
         | RuntimeExpr::EndsWith { lhs, rhs }
         | RuntimeExpr::Contains { lhs, rhs } => {
-            expr_uses_time_context(lhs) || expr_uses_time_context(rhs)
+            expr_uses_time_context(lhs, field_specs) || expr_uses_time_context(rhs, field_specs)
         }
-        RuntimeExpr::Matches { lhs, .. } => expr_uses_time_context(lhs),
+        RuntimeExpr::Matches { lhs, .. } => expr_uses_time_context(lhs, field_specs),
+        RuntimeExpr::List { items } => items
+            .iter()
+            .any(|item| expr_uses_time_context(item, field_specs)),
         RuntimeExpr::In { lhs, rhs } => {
-            expr_uses_time_context(lhs) || rhs.iter().any(expr_uses_time_context)
+            expr_uses_time_context(lhs, field_specs)
+                || rhs
+                    .iter()
+                    .any(|item| expr_uses_time_context(item, field_specs))
         }
-        RuntimeExpr::Not { expr } => expr_uses_time_context(expr),
+        RuntimeExpr::Not { expr } => expr_uses_time_context(expr, field_specs),
         RuntimeExpr::Bool { .. }
+        | RuntimeExpr::Null
         | RuntimeExpr::Int { .. }
         | RuntimeExpr::Float { .. }
+        | RuntimeExpr::Duration { .. }
         | RuntimeExpr::Str { .. }
         | RuntimeExpr::Unsupported { .. } => false,
     }
@@ -510,48 +776,102 @@ fn expr_uses_time_context(expr: &RuntimeExpr) -> bool {
 
 // Evaluate expression in boolean context.
 /// Evaluate an expression in boolean context.
-fn eval_bool(expr: &RuntimeExpr, event: &IngestEvent) -> bool {
+fn eval_bool(
+    expr: &RuntimeExpr,
+    event: &IngestEvent,
+    field_specs: &[FieldSpec],
+    callable_state: &Mutex<CallableEvalState>,
+) -> bool {
     match expr {
         RuntimeExpr::Bool { value } => *value,
-        RuntimeExpr::And { lhs, rhs } => eval_bool(lhs, event) && eval_bool(rhs, event),
-        RuntimeExpr::Or { lhs, rhs } => eval_bool(lhs, event) || eval_bool(rhs, event),
-        RuntimeExpr::Not { expr } => !eval_bool(expr, event),
-        RuntimeExpr::Eq { lhs, rhs } => eval_eq(lhs, rhs, event),
-        RuntimeExpr::Ne { lhs, rhs } => !eval_eq(lhs, rhs, event),
-        RuntimeExpr::Lt { lhs, rhs } => compare_ord(lhs, rhs, event, |a, b| a < b),
-        RuntimeExpr::Gt { lhs, rhs } => compare_ord(lhs, rhs, event, |a, b| a > b),
-        RuntimeExpr::Le { lhs, rhs } => compare_ord(lhs, rhs, event, |a, b| a <= b),
-        RuntimeExpr::Ge { lhs, rhs } => compare_ord(lhs, rhs, event, |a, b| a >= b),
-        RuntimeExpr::In { lhs, rhs } => eval_in(lhs, rhs, event),
+        RuntimeExpr::Null => false,
+        RuntimeExpr::List { .. } => false,
+        RuntimeExpr::And { lhs, rhs } => {
+            eval_bool(lhs, event, field_specs, callable_state)
+                && eval_bool(rhs, event, field_specs, callable_state)
+        }
+        RuntimeExpr::Or { lhs, rhs } => {
+            eval_bool(lhs, event, field_specs, callable_state)
+                || eval_bool(rhs, event, field_specs, callable_state)
+        }
+        RuntimeExpr::Not { expr } => !eval_bool(expr, event, field_specs, callable_state),
+        RuntimeExpr::Eq { lhs, rhs } => eval_eq(lhs, rhs, event, field_specs, callable_state),
+        RuntimeExpr::Ne { lhs, rhs } => {
+            !eval_eq(lhs, rhs, event, field_specs, callable_state)
+        }
+        RuntimeExpr::Lt { lhs, rhs } => {
+            compare_ord(lhs, rhs, event, field_specs, callable_state, |a, b| a < b)
+        }
+        RuntimeExpr::Gt { lhs, rhs } => {
+            compare_ord(lhs, rhs, event, field_specs, callable_state, |a, b| a > b)
+        }
+        RuntimeExpr::Le { lhs, rhs } => {
+            compare_ord(lhs, rhs, event, field_specs, callable_state, |a, b| a <= b)
+        }
+        RuntimeExpr::Ge { lhs, rhs } => {
+            compare_ord(lhs, rhs, event, field_specs, callable_state, |a, b| a >= b)
+        }
+        RuntimeExpr::In { lhs, rhs } => eval_in(lhs, rhs, event, field_specs, callable_state),
         RuntimeExpr::StartsWith { lhs, rhs } => {
-            to_string(eval_value(lhs, event)).starts_with(&to_string(eval_value(rhs, event)))
+            to_string(eval_value(lhs, event, field_specs, callable_state))
+                .starts_with(&to_string(eval_value(rhs, event, field_specs, callable_state)))
         }
         RuntimeExpr::EndsWith { lhs, rhs } => {
-            to_string(eval_value(lhs, event)).ends_with(&to_string(eval_value(rhs, event)))
+            to_string(eval_value(lhs, event, field_specs, callable_state))
+                .ends_with(&to_string(eval_value(rhs, event, field_specs, callable_state)))
         }
         RuntimeExpr::Contains { lhs, rhs } => {
-            to_string(eval_value(lhs, event)).contains(&to_string(eval_value(rhs, event)))
+            let lhs_value = eval_value(lhs, event, field_specs, callable_state);
+            let rhs_value = eval_value(rhs, event, field_specs, callable_state);
+            match lhs_value {
+                Value::List(items) => items.iter().any(|item| values_equal(item, &rhs_value)),
+                _ => to_string(lhs_value).contains(&to_string(rhs_value)),
+            }
         }
         RuntimeExpr::Matches { lhs, pattern } => {
-            value_matches_pattern(eval_value(lhs, event), pattern)
+            value_matches_pattern(eval_value(lhs, event, field_specs, callable_state), pattern)
         }
+        RuntimeExpr::Call { name, args } => value_as_bool(eval_call(
+            name,
+            args,
+            event,
+            field_specs,
+            callable_state,
+        )),
+        RuntimeExpr::Add { .. }
+        | RuntimeExpr::Sub { .. }
+        | RuntimeExpr::Mul { .. }
+        | RuntimeExpr::Div { .. } => to_number(eval_value(expr, event, field_specs, callable_state))
+            .is_some_and(|value| value != 0.0),
         RuntimeExpr::Unsupported { .. } => false,
         _ => false,
     }
 }
 
 /// Evaluate equality with typed coercion rules.
-fn eval_eq(lhs: &RuntimeExpr, rhs: &RuntimeExpr, event: &IngestEvent) -> bool {
-    let lhs_value = eval_value(lhs, event);
-    let rhs_value = eval_value(rhs, event);
+fn eval_eq(
+    lhs: &RuntimeExpr,
+    rhs: &RuntimeExpr,
+    event: &IngestEvent,
+    field_specs: &[FieldSpec],
+    callable_state: &Mutex<CallableEvalState>,
+) -> bool {
+    let lhs_value = eval_value(lhs, event, field_specs, callable_state);
+    let rhs_value = eval_value(rhs, event, field_specs, callable_state);
     values_equal(&lhs_value, &rhs_value)
 }
 
 /// Evaluate membership predicate (`lhs in rhs_list`).
-fn eval_in(lhs: &RuntimeExpr, rhs: &[RuntimeExpr], event: &IngestEvent) -> bool {
-    let lhs_value = eval_value(lhs, event);
+fn eval_in(
+    lhs: &RuntimeExpr,
+    rhs: &[RuntimeExpr],
+    event: &IngestEvent,
+    field_specs: &[FieldSpec],
+    callable_state: &Mutex<CallableEvalState>,
+) -> bool {
+    let lhs_value = eval_value(lhs, event, field_specs, callable_state);
     rhs.iter().any(|item| {
-        let rhs_value = eval_value(item, event);
+        let rhs_value = eval_value(item, event, field_specs, callable_state);
         values_equal(&lhs_value, &rhs_value)
     })
 }
@@ -657,26 +977,400 @@ fn compare_ord(
     lhs: &RuntimeExpr,
     rhs: &RuntimeExpr,
     event: &IngestEvent,
+    field_specs: &[FieldSpec],
+    callable_state: &Mutex<CallableEvalState>,
     cmp: impl Fn(f64, f64) -> bool,
 ) -> bool {
     match (
-        to_number(eval_value(lhs, event)),
-        to_number(eval_value(rhs, event)),
+        to_number(eval_value(lhs, event, field_specs, callable_state)),
+        to_number(eval_value(rhs, event, field_specs, callable_state)),
     ) {
         (Some(a), Some(b)) => cmp(a, b),
         _ => false,
     }
 }
 
+/// Evaluate a binary arithmetic expression in numeric context.
+fn eval_arithmetic(
+    lhs: &RuntimeExpr,
+    rhs: &RuntimeExpr,
+    event: &IngestEvent,
+    field_specs: &[FieldSpec],
+    callable_state: &Mutex<CallableEvalState>,
+    op: impl Fn(f64, f64) -> Option<f64>,
+) -> Value {
+    let Some(lhs_num) = to_number(eval_value(lhs, event, field_specs, callable_state)) else {
+        return Value::Null;
+    };
+    let Some(rhs_num) = to_number(eval_value(rhs, event, field_specs, callable_state)) else {
+        return Value::Null;
+    };
+    op(lhs_num, rhs_num)
+        .map(Value::Number)
+        .unwrap_or(Value::Null)
+}
+
+/// Convert a duration literal to nanoseconds using checked arithmetic.
+fn duration_to_ns(value: u64, unit: RuntimeDurationUnit) -> Option<u64> {
+    let factor = match unit {
+        RuntimeDurationUnit::Ns => 1u64,
+        RuntimeDurationUnit::Us => 1_000u64,
+        RuntimeDurationUnit::Ms => 1_000_000u64,
+        RuntimeDurationUnit::S => 1_000_000_000u64,
+        RuntimeDurationUnit::M => 60 * 1_000_000_000u64,
+        RuntimeDurationUnit::H => 60 * 60 * 1_000_000_000u64,
+        RuntimeDurationUnit::D => 24 * 60 * 60 * 1_000_000_000u64,
+    };
+    value.checked_mul(factor)
+}
+
+fn eval_call(
+    name: &str,
+    args: &[RuntimeExpr],
+    event: &IngestEvent,
+    field_specs: &[FieldSpec],
+    callable_state: &Mutex<CallableEvalState>,
+) -> Value {
+    let normalized = name.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "count" => {
+            if args.len() != 1 {
+                return Value::Null;
+            }
+            match eval_value(&args[0], event, field_specs, callable_state) {
+                Value::List(items) => Value::Number(items.len() as f64),
+                Value::Null => Value::Number(0.0),
+                _ => Value::Number(1.0),
+            }
+        }
+        "max" => {
+            if args.len() != 1 {
+                return Value::Null;
+            }
+            let Some(numbers) =
+                eval_call_numeric_items(&args[0], event, field_specs, callable_state)
+            else {
+                return Value::Null;
+            };
+            numbers
+                .into_iter()
+                .reduce(f64::max)
+                .map(Value::Number)
+                .unwrap_or(Value::Null)
+        }
+        "min" => {
+            if args.len() != 1 {
+                return Value::Null;
+            }
+            let Some(numbers) =
+                eval_call_numeric_items(&args[0], event, field_specs, callable_state)
+            else {
+                return Value::Null;
+            };
+            numbers
+                .into_iter()
+                .reduce(f64::min)
+                .map(Value::Number)
+                .unwrap_or(Value::Null)
+        }
+        "sum" => {
+            if args.len() != 1 {
+                return Value::Null;
+            }
+            let Some(numbers) =
+                eval_call_numeric_items(&args[0], event, field_specs, callable_state)
+            else {
+                return Value::Null;
+            };
+            Value::Number(numbers.into_iter().sum())
+        }
+        "avg" => {
+            if args.len() != 1 {
+                return Value::Null;
+            }
+            let Some(numbers) =
+                eval_call_numeric_items(&args[0], event, field_specs, callable_state)
+            else {
+                return Value::Null;
+            };
+            if numbers.is_empty() {
+                Value::Null
+            } else {
+                let total: f64 = numbers.iter().sum();
+                Value::Number(total / numbers.len() as f64)
+            }
+        }
+        "distinct" => {
+            if args.len() != 1 {
+                return Value::Null;
+            }
+            eval_call_distinct(&args[0], event, field_specs, callable_state)
+        }
+        "rate" => {
+            if args.len() != 2 {
+                return Value::Null;
+            }
+            let Some(value_key) = eval_call_arg_key(&args[0], event, field_specs, callable_state)
+            else {
+                return Value::Number(0.0);
+            };
+            let Some(window_ns) =
+                eval_call_window_ns(&args[1], event, field_specs, callable_state)
+            else {
+                return Value::Null;
+            };
+            let mut guard = match callable_state.lock() {
+                Ok(guard) => guard,
+                Err(_) => return Value::Number(0.0),
+            };
+            let observations = guard.rate_observations.entry(value_key).or_default();
+            observations.push_back(event.ts_ns);
+            let cutoff = event.ts_ns.saturating_sub(window_ns);
+            while observations.front().is_some_and(|ts| *ts < cutoff) {
+                observations.pop_front();
+            }
+            Value::Number(observations.len() as f64)
+        }
+        "is_shell" => {
+            if args.len() != 1 {
+                return Value::Null;
+            }
+            let candidate = eval_shell_candidate(&args[0], event, field_specs, callable_state);
+            let is_shell = matches!(
+                candidate.as_deref(),
+                Some("sh" | "bash" | "zsh" | "dash" | "fish")
+            );
+            Value::Bool(is_shell)
+        }
+        "rare" => {
+            if args.len() != 1 {
+                return Value::Null;
+            }
+            let Some(value_key) = eval_call_arg_key(&args[0], event, field_specs, callable_state)
+            else {
+                return Value::Bool(false);
+            };
+            let mut guard = match callable_state.lock() {
+                Ok(guard) => guard,
+                Err(_) => return Value::Bool(false),
+            };
+            let prev = guard.rare_counts.get(&value_key).copied().unwrap_or(0);
+            guard
+                .rare_counts
+                .insert(value_key, prev.saturating_add(1));
+            Value::Bool(prev == 0)
+        }
+        "unusual_for" | "unusualfor" => {
+            if args.len() != 2 {
+                return Value::Null;
+            }
+            let Some(value_key) = eval_call_arg_key(&args[0], event, field_specs, callable_state)
+            else {
+                return Value::Bool(false);
+            };
+            let Some(entity_key) =
+                eval_call_arg_key(&args[1], event, field_specs, callable_state)
+            else {
+                return Value::Bool(false);
+            };
+            let mut guard = match callable_state.lock() {
+                Ok(guard) => guard,
+                Err(_) => return Value::Bool(false),
+            };
+            let key = (entity_key, value_key);
+            let prev = guard
+                .unusual_entity_value_counts
+                .get(&key)
+                .copied()
+                .unwrap_or(0);
+            guard
+                .unusual_entity_value_counts
+                .insert(key, prev.saturating_add(1));
+            Value::Bool(prev == 0)
+        }
+        _ => Value::Null,
+    }
+}
+
+fn eval_call_numeric_items(
+    arg: &RuntimeExpr,
+    event: &IngestEvent,
+    field_specs: &[FieldSpec],
+    callable_state: &Mutex<CallableEvalState>,
+) -> Option<Vec<f64>> {
+    let value = eval_value(arg, event, field_specs, callable_state);
+    match value {
+        Value::List(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                let Some(num) = to_number(item) else {
+                    return None;
+                };
+                out.push(num);
+            }
+            Some(out)
+        }
+        Value::Null => Some(Vec::new()),
+        other => to_number(other).map(|num| vec![num]),
+    }
+}
+
+fn eval_call_distinct(
+    arg: &RuntimeExpr,
+    event: &IngestEvent,
+    field_specs: &[FieldSpec],
+    callable_state: &Mutex<CallableEvalState>,
+) -> Value {
+    match eval_value(arg, event, field_specs, callable_state) {
+        Value::List(items) => {
+            let mut unique = Vec::with_capacity(items.len());
+            for item in items {
+                if !unique.contains(&item) {
+                    unique.push(item);
+                }
+            }
+            Value::List(unique)
+        }
+        Value::Null => Value::List(Vec::new()),
+        other => Value::List(vec![other]),
+    }
+}
+
+fn eval_call_window_ns(
+    arg: &RuntimeExpr,
+    event: &IngestEvent,
+    field_specs: &[FieldSpec],
+    callable_state: &Mutex<CallableEvalState>,
+) -> Option<u64> {
+    let window_raw = to_number(eval_value(arg, event, field_specs, callable_state))?;
+    if !window_raw.is_finite() || window_raw <= 0.0 || window_raw > u64::MAX as f64 {
+        return None;
+    }
+    Some(window_raw.floor() as u64)
+}
+
+fn eval_call_arg_key(
+    arg: &RuntimeExpr,
+    event: &IngestEvent,
+    field_specs: &[FieldSpec],
+    callable_state: &Mutex<CallableEvalState>,
+) -> Option<String> {
+    match eval_value(arg, event, field_specs, callable_state) {
+        Value::Null => {
+            if let RuntimeExpr::Field { path } = arg {
+                let fallback_path = format!("{path}.name");
+                if let Value::String(name) = lookup_field(field_specs, &fallback_path, event) {
+                    return normalize_call_key(&name);
+                }
+            }
+            None
+        }
+        Value::String(s) => normalize_call_key(&s),
+        other => normalize_call_key(&to_string(other)),
+    }
+}
+
+fn normalize_call_key(raw: &str) -> Option<String> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn eval_shell_candidate(
+    arg: &RuntimeExpr,
+    event: &IngestEvent,
+    field_specs: &[FieldSpec],
+    callable_state: &Mutex<CallableEvalState>,
+) -> Option<String> {
+    match eval_value(arg, event, field_specs, callable_state) {
+        Value::String(name) => return Some(name.to_ascii_lowercase()),
+        Value::Null => {}
+        other => {
+            let rendered = to_string(other).trim().to_ascii_lowercase();
+            if !rendered.is_empty() {
+                return Some(rendered);
+            }
+        }
+    }
+
+    if let RuntimeExpr::Field { path } = arg {
+        let name_path = format!("{path}.name");
+        if let Value::String(name) = lookup_field(field_specs, &name_path, event) {
+            let normalized = name.trim().to_ascii_lowercase();
+            if !normalized.is_empty() {
+                return Some(normalized);
+            }
+        }
+    }
+
+    None
+}
+
+fn value_as_bool(value: Value) -> bool {
+    match value {
+        Value::Bool(v) => v,
+        Value::Number(v) => v != 0.0,
+        Value::String(v) => !v.is_empty(),
+        Value::Ip(v) => v != 0,
+        Value::List(v) => !v.is_empty(),
+        Value::Null => false,
+    }
+}
+
 // Evaluate expression in value context (bool/number/string/null).
 /// Evaluate an expression in value context.
-fn eval_value(expr: &RuntimeExpr, event: &IngestEvent) -> Value {
+fn eval_value(
+    expr: &RuntimeExpr,
+    event: &IngestEvent,
+    field_specs: &[FieldSpec],
+    callable_state: &Mutex<CallableEvalState>,
+) -> Value {
     match expr {
         RuntimeExpr::Bool { value } => Value::Bool(*value),
+        RuntimeExpr::Null => Value::Null,
+        RuntimeExpr::List { items } => Value::List(
+            items
+                .iter()
+                .map(|item| eval_value(item, event, field_specs, callable_state))
+                .collect(),
+        ),
         RuntimeExpr::Int { value } => Value::Number(*value as f64),
         RuntimeExpr::Float { value } => Value::Number(*value),
+        RuntimeExpr::Duration { value, unit } => duration_to_ns(*value, *unit)
+            .map(|ns| Value::Number(ns as f64))
+            .unwrap_or(Value::Null),
         RuntimeExpr::Str { value } => Value::String(value.clone()),
-        RuntimeExpr::Field { path } => lookup_field(path, event),
+        RuntimeExpr::Field { path } => lookup_field(field_specs, path, event),
+        RuntimeExpr::Call { name, args } => {
+            eval_call(name, args, event, field_specs, callable_state)
+        }
+        RuntimeExpr::Add { lhs, rhs } => {
+            eval_arithmetic(lhs, rhs, event, field_specs, callable_state, |a, b| {
+                Some(a + b)
+            })
+        }
+        RuntimeExpr::Sub { lhs, rhs } => {
+            eval_arithmetic(lhs, rhs, event, field_specs, callable_state, |a, b| {
+                Some(a - b)
+            })
+        }
+        RuntimeExpr::Mul { lhs, rhs } => {
+            eval_arithmetic(lhs, rhs, event, field_specs, callable_state, |a, b| {
+                Some(a * b)
+            })
+        }
+        RuntimeExpr::Div { lhs, rhs } => {
+            eval_arithmetic(lhs, rhs, event, field_specs, callable_state, |a, b| {
+                if b == 0.0 {
+                    None
+                } else {
+                    Some(a / b)
+                }
+            })
+        }
         RuntimeExpr::Eq { .. }
         | RuntimeExpr::Ne { .. }
         | RuntimeExpr::Lt { .. }
@@ -690,16 +1384,21 @@ fn eval_value(expr: &RuntimeExpr, event: &IngestEvent) -> Value {
         | RuntimeExpr::Matches { .. }
         | RuntimeExpr::And { .. }
         | RuntimeExpr::Or { .. }
-        | RuntimeExpr::Not { .. } => Value::Bool(eval_bool(expr, event)),
+        | RuntimeExpr::Not { .. } => {
+            Value::Bool(eval_bool(expr, event, field_specs, callable_state))
+        }
         RuntimeExpr::Unsupported { .. } => Value::Null,
     }
 }
 
 // Resolve known event field names into runtime values.
 /// Resolve field path aliases from `IngestEvent` into typed `Value`.
-fn lookup_field(path: &str, event: &IngestEvent) -> Value {
-    if let Some(spec) = lookup_field_spec(path) {
-        let value = (spec.extract)(event);
+fn lookup_field(field_specs: &[FieldSpec], path: &str, event: &IngestEvent) -> Value {
+    if let Some(spec) = lookup_field_spec(field_specs, path) {
+        let value = spec
+            .extract
+            .map(|extract| extract(event))
+            .unwrap_or(Value::Null);
         debug_assert!(
             value_matches_field_type(&value, spec.value_type),
             "field '{}' produced value {:?} that mismatches declared type {:?}",
@@ -714,27 +1413,36 @@ fn lookup_field(path: &str, event: &IngestEvent) -> Value {
 }
 
 /// Resolve runtime field metadata by exact path or suffix alias.
-fn lookup_field_spec(path: &str) -> Option<&'static FieldSpec> {
+fn lookup_field_spec<'a>(field_specs: &'a [FieldSpec], path: &str) -> Option<&'a FieldSpec> {
     let normalized = normalize_field_path(path);
-    FIELD_SPECS
+
+    if let Some(exact) = field_specs.iter().find(|spec| spec.canonical == normalized) {
+        return Some(exact);
+    }
+
+    field_specs
         .iter()
-        .find(|spec| matches_field_path(spec, &normalized))
+        .filter_map(|spec| {
+            let best_alias_len = spec
+                .aliases
+                .iter()
+                .filter(|alias| alias_matches_path(alias, &normalized))
+                .map(|alias| alias.len())
+                .max()?;
+            Some((spec, best_alias_len))
+        })
+        .max_by(|(a_spec, a_len), (b_spec, b_len)| {
+            a_len
+                .cmp(b_len)
+                .then_with(|| (a_spec.extract.is_some()).cmp(&(b_spec.extract.is_some())))
+                .then_with(|| b_spec.canonical.cmp(&a_spec.canonical).reverse())
+        })
+        .map(|(spec, _)| spec)
 }
 
 /// Normalize incoming field path for case-insensitive matching.
 fn normalize_field_path(path: &str) -> String {
     path.trim().to_ascii_lowercase()
-}
-
-/// Match path against canonical or alias suffix on segment boundary.
-fn matches_field_path(spec: &FieldSpec, normalized_path: &str) -> bool {
-    if normalized_path == spec.canonical {
-        return true;
-    }
-    spec.aliases
-        .iter()
-        .copied()
-        .any(|alias| alias_matches_path(alias, normalized_path))
 }
 
 /// Alias match that supports arbitrary source aliases (`p.pid`, `n.dest.port`).
@@ -757,6 +1465,7 @@ fn value_matches_field_type(value: &Value, value_type: FieldType) -> bool {
             | (Value::Number(_), FieldType::Number)
             | (Value::String(_), FieldType::String)
             | (Value::Ip(_), FieldType::Ip)
+            | (Value::List(_), FieldType::List)
             | (Value::Null, _)
     )
 }
@@ -793,8 +1502,36 @@ fn field_pid(event: &IngestEvent) -> Value {
     Value::Number(event.pid as f64)
 }
 
+fn field_process_id(event: &IngestEvent) -> Value {
+    Value::Number(event.pid as f64)
+}
+
+fn field_process_ppid(event: &IngestEvent) -> Value {
+    if event.event_type == 1 {
+        Value::Number(event.dst_vertex_id as f64)
+    } else {
+        Value::Null
+    }
+}
+
+fn field_process_parent_id(event: &IngestEvent) -> Value {
+    field_process_ppid(event)
+}
+
 fn field_uid(event: &IngestEvent) -> Value {
     Value::Number(event.uid as f64)
+}
+
+fn field_user_uid(event: &IngestEvent) -> Value {
+    field_uid(event)
+}
+
+fn field_process_elevated(event: &IngestEvent) -> Value {
+    Value::Bool(event.uid == 0)
+}
+
+fn field_host_risk_score(event: &IngestEvent) -> Value {
+    Value::Number(event.risk_score as f64)
 }
 
 fn field_event_type(event: &IngestEvent) -> Value {
@@ -829,6 +1566,14 @@ fn field_network_direction(event: &IngestEvent) -> Value {
     }
 }
 
+fn field_network_process_id(event: &IngestEvent) -> Value {
+    if event.event_type == 3 {
+        Value::Number(event.pid as f64)
+    } else {
+        Value::Null
+    }
+}
+
 fn field_network_dest_ip(event: &IngestEvent) -> Value {
     if event.event_type == 3 && event.net_dst_ip != 0 {
         Value::Ip(event.net_dst_ip)
@@ -845,6 +1590,22 @@ fn field_network_dest_port(event: &IngestEvent) -> Value {
     }
 }
 
+fn field_network_dest_is_internal(event: &IngestEvent) -> Value {
+    if event.event_type != 3 || event.net_dst_ip == 0 {
+        return Value::Null;
+    }
+    let ip = Ipv4Addr::from(event.net_dst_ip);
+    Value::Bool(ip.is_private() || ip.is_loopback() || ip.is_link_local())
+}
+
+fn field_file_process_id(event: &IngestEvent) -> Value {
+    if event.event_type == 2 {
+        Value::Number(event.pid as f64)
+    } else {
+        Value::Null
+    }
+}
+
 // Convert Value into number if possible.
 /// Convert typed value into numeric representation when possible.
 fn to_number(value: Value) -> Option<f64> {
@@ -853,6 +1614,7 @@ fn to_number(value: Value) -> Option<f64> {
         Value::Bool(v) => Some(if v { 1.0 } else { 0.0 }),
         Value::String(v) => v.parse::<f64>().ok(),
         Value::Ip(v) => Some(v as f64),
+        Value::List(_) => None,
         Value::Null => None,
     }
 }
@@ -870,6 +1632,14 @@ fn to_string(value: Value) -> String {
             } else {
                 "false".to_string()
             }
+        }
+        Value::List(items) => {
+            let rendered = items
+                .into_iter()
+                .map(to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{rendered}]")
         }
         Value::Null => String::new(),
     }
@@ -928,7 +1698,12 @@ fn parse_grouped_alternation(pattern: &str) -> Option<Vec<String>> {
         return None;
     }
 
-    Some(parts.into_iter().map(|p| unescape_pattern_part(&p)).collect())
+    Some(
+        parts
+            .into_iter()
+            .map(|p| unescape_pattern_part(&p))
+            .collect(),
+    )
 }
 
 fn unescape_pattern_part(input: &str) -> String {
@@ -1125,24 +1900,40 @@ mod tests {
         std::env::temp_dir().join(format!("olopa_runtime_ir_dir_{ts}"))
     }
 
+    fn fallback_field_specs() -> Vec<FieldSpec> {
+        build_field_specs(&RuntimeProgram {
+            version: 1,
+            fields: Vec::new(),
+            rules: Vec::new(),
+        })
+    }
+
+    fn engine_from_program(program: RuntimeProgram) -> RuntimeIrRuleEngine {
+        RuntimeIrRuleEngine {
+            field_specs: build_field_specs(&program),
+            callable_state: Arc::new(Mutex::new(CallableEvalState::default())),
+            program,
+        }
+    }
+
     #[test]
     fn evaluates_numeric_rule() {
-        let engine = RuntimeIrRuleEngine {
-            program: RuntimeProgram {
-                version: 1,
-                rules: vec![RuntimeRule {
-                    id: "r1".to_string(),
-                    name: "r1".to_string(),
-                    predicates: vec![RuntimeExpr::Eq {
-                        lhs: Box::new(RuntimeExpr::Field {
-                            path: "pid".to_string(),
-                        }),
-                        rhs: Box::new(RuntimeExpr::Int { value: 42 }),
-                    }],
-                    respond: RuntimeRespondPlan::default(),
+        let program = RuntimeProgram {
+            version: 1,
+            fields: Vec::new(),
+            rules: vec![RuntimeRule {
+                id: "r1".to_string(),
+                name: "r1".to_string(),
+                predicates: vec![RuntimeExpr::Eq {
+                    lhs: Box::new(RuntimeExpr::Field {
+                        path: "pid".to_string(),
+                    }),
+                    rhs: Box::new(RuntimeExpr::Int { value: 42 }),
                 }],
-            },
+                respond: RuntimeRespondPlan::default(),
+            }],
         };
+        let engine = engine_from_program(program);
 
         let event = IngestEvent {
             ts_ns: 0,
@@ -1164,7 +1955,579 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_duration_literal_comparison_rule() {
+        let program = RuntimeProgram {
+            version: 1,
+            fields: Vec::new(),
+            rules: vec![RuntimeRule {
+                id: "r-duration".to_string(),
+                name: "r-duration".to_string(),
+                predicates: vec![RuntimeExpr::Gt {
+                    lhs: Box::new(RuntimeExpr::Field {
+                        path: "event.ts_ns".to_string(),
+                    }),
+                    rhs: Box::new(RuntimeExpr::Duration {
+                        value: 1,
+                        unit: RuntimeDurationUnit::S,
+                    }),
+                }],
+                respond: RuntimeRespondPlan::default(),
+            }],
+        };
+        let engine = engine_from_program(program);
+
+        let event = IngestEvent {
+            ts_ns: 2_000_000_000,
+            pid: 42,
+            uid: 0,
+            event_type: 1,
+            vertex_id: 42,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.1,
+        };
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule_id, "r-duration");
+    }
+
+    #[test]
+    fn evaluates_arithmetic_expression_rule() {
+        let program = RuntimeProgram {
+            version: 1,
+            fields: Vec::new(),
+            rules: vec![RuntimeRule {
+                id: "r-arith".to_string(),
+                name: "r-arith".to_string(),
+                predicates: vec![RuntimeExpr::Eq {
+                    lhs: Box::new(RuntimeExpr::Add {
+                        lhs: Box::new(RuntimeExpr::Field {
+                            path: "pid".to_string(),
+                        }),
+                        rhs: Box::new(RuntimeExpr::Int { value: 8 }),
+                    }),
+                    rhs: Box::new(RuntimeExpr::Int { value: 50 }),
+                }],
+                respond: RuntimeRespondPlan::default(),
+            }],
+        };
+        let engine = engine_from_program(program);
+
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 42,
+            uid: 0,
+            event_type: 1,
+            vertex_id: 42,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.1,
+        };
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule_id, "r-arith");
+    }
+
+    #[test]
+    fn evaluates_count_call_rule() {
+        let program = RuntimeProgram {
+            version: 1,
+            fields: Vec::new(),
+            rules: vec![RuntimeRule {
+                id: "r-count".to_string(),
+                name: "r-count".to_string(),
+                predicates: vec![RuntimeExpr::Gt {
+                    lhs: Box::new(RuntimeExpr::Call {
+                        name: "count".to_string(),
+                        args: vec![RuntimeExpr::List {
+                            items: vec![
+                                RuntimeExpr::Str {
+                                    value: "a".to_string(),
+                                },
+                                RuntimeExpr::Str {
+                                    value: "b".to_string(),
+                                },
+                                RuntimeExpr::Str {
+                                    value: "c".to_string(),
+                                },
+                            ],
+                        }],
+                    }),
+                    rhs: Box::new(RuntimeExpr::Int { value: 2 }),
+                }],
+                respond: RuntimeRespondPlan::default(),
+            }],
+        };
+        let engine = engine_from_program(program);
+
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 42,
+            uid: 0,
+            event_type: 1,
+            vertex_id: 42,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.1,
+        };
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule_id, "r-count");
+    }
+
+    #[test]
+    fn evaluates_numeric_aggregate_call_rules() {
+        let aggregate_list = RuntimeExpr::List {
+            items: vec![
+                RuntimeExpr::Int { value: 1 },
+                RuntimeExpr::Int { value: 3 },
+                RuntimeExpr::Int { value: 2 },
+            ],
+        };
+        let program = RuntimeProgram {
+            version: 1,
+            fields: Vec::new(),
+            rules: vec![
+                RuntimeRule {
+                    id: "r-max".to_string(),
+                    name: "r-max".to_string(),
+                    predicates: vec![RuntimeExpr::Eq {
+                        lhs: Box::new(RuntimeExpr::Call {
+                            name: "max".to_string(),
+                            args: vec![aggregate_list.clone()],
+                        }),
+                        rhs: Box::new(RuntimeExpr::Int { value: 3 }),
+                    }],
+                    respond: RuntimeRespondPlan::default(),
+                },
+                RuntimeRule {
+                    id: "r-min".to_string(),
+                    name: "r-min".to_string(),
+                    predicates: vec![RuntimeExpr::Eq {
+                        lhs: Box::new(RuntimeExpr::Call {
+                            name: "min".to_string(),
+                            args: vec![aggregate_list.clone()],
+                        }),
+                        rhs: Box::new(RuntimeExpr::Int { value: 1 }),
+                    }],
+                    respond: RuntimeRespondPlan::default(),
+                },
+                RuntimeRule {
+                    id: "r-sum".to_string(),
+                    name: "r-sum".to_string(),
+                    predicates: vec![RuntimeExpr::Eq {
+                        lhs: Box::new(RuntimeExpr::Call {
+                            name: "sum".to_string(),
+                            args: vec![aggregate_list.clone()],
+                        }),
+                        rhs: Box::new(RuntimeExpr::Int { value: 6 }),
+                    }],
+                    respond: RuntimeRespondPlan::default(),
+                },
+                RuntimeRule {
+                    id: "r-avg".to_string(),
+                    name: "r-avg".to_string(),
+                    predicates: vec![RuntimeExpr::Eq {
+                        lhs: Box::new(RuntimeExpr::Call {
+                            name: "avg".to_string(),
+                            args: vec![aggregate_list],
+                        }),
+                        rhs: Box::new(RuntimeExpr::Float { value: 2.0 }),
+                    }],
+                    respond: RuntimeRespondPlan::default(),
+                },
+            ],
+        };
+        let engine = engine_from_program(program);
+
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 42,
+            uid: 0,
+            event_type: 1,
+            vertex_id: 42,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.1,
+        };
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 4);
+        assert!(matches.iter().any(|m| m.rule_id == "r-max"));
+        assert!(matches.iter().any(|m| m.rule_id == "r-min"));
+        assert!(matches.iter().any(|m| m.rule_id == "r-sum"));
+        assert!(matches.iter().any(|m| m.rule_id == "r-avg"));
+    }
+
+    #[test]
+    fn evaluates_distinct_call_with_count() {
+        let program = RuntimeProgram {
+            version: 1,
+            fields: Vec::new(),
+            rules: vec![RuntimeRule {
+                id: "r-distinct-count".to_string(),
+                name: "r-distinct-count".to_string(),
+                predicates: vec![RuntimeExpr::Eq {
+                    lhs: Box::new(RuntimeExpr::Call {
+                        name: "count".to_string(),
+                        args: vec![RuntimeExpr::Call {
+                            name: "distinct".to_string(),
+                            args: vec![RuntimeExpr::List {
+                                items: vec![
+                                    RuntimeExpr::Str {
+                                        value: "bash".to_string(),
+                                    },
+                                    RuntimeExpr::Str {
+                                        value: "bash".to_string(),
+                                    },
+                                    RuntimeExpr::Str {
+                                        value: "sh".to_string(),
+                                    },
+                                ],
+                            }],
+                        }],
+                    }),
+                    rhs: Box::new(RuntimeExpr::Int { value: 2 }),
+                }],
+                respond: RuntimeRespondPlan::default(),
+            }],
+        };
+        let engine = engine_from_program(program);
+
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 9000,
+            uid: 0,
+            event_type: 1,
+            vertex_id: 9000,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.1,
+        };
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule_id, "r-distinct-count");
+    }
+
+    #[test]
+    fn evaluates_rate_call_over_sliding_window_by_key() {
+        let program = RuntimeProgram {
+            version: 1,
+            fields: Vec::new(),
+            rules: vec![RuntimeRule {
+                id: "r-rate".to_string(),
+                name: "r-rate".to_string(),
+                predicates: vec![RuntimeExpr::Ge {
+                    lhs: Box::new(RuntimeExpr::Call {
+                        name: "rate".to_string(),
+                        args: vec![
+                            RuntimeExpr::Field {
+                                path: "p.name".to_string(),
+                            },
+                            RuntimeExpr::Duration {
+                                value: 30,
+                                unit: RuntimeDurationUnit::S,
+                            },
+                        ],
+                    }),
+                    rhs: Box::new(RuntimeExpr::Int { value: 2 }),
+                }],
+                respond: RuntimeRespondPlan::default(),
+            }],
+        };
+        let engine = engine_from_program(program);
+
+        let mut bash = [0u8; 16];
+        bash[..4].copy_from_slice(b"bash");
+        let mut sh = [0u8; 16];
+        sh[..2].copy_from_slice(b"sh");
+
+        let event1 = IngestEvent {
+            ts_ns: 5_000_000_000,
+            pid: 100,
+            uid: 0,
+            event_type: 1,
+            vertex_id: 100,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: bash,
+            comm_id: 0,
+            risk_score: 0.0,
+        };
+        assert!(
+            engine.evaluate_matches(&event1).is_empty(),
+            "first key observation should be below threshold"
+        );
+
+        let event2 = IngestEvent {
+            ts_ns: 10_000_000_000,
+            comm: sh,
+            ..event1
+        };
+        assert!(
+            engine.evaluate_matches(&event2).is_empty(),
+            "different key should maintain an independent rate bucket"
+        );
+
+        let event3 = IngestEvent {
+            ts_ns: 20_000_000_000,
+            comm: bash,
+            ..event1
+        };
+        let matches3 = engine.evaluate_matches(&event3);
+        assert_eq!(matches3.len(), 1);
+        assert_eq!(matches3[0].rule_id, "r-rate");
+
+        let event4 = IngestEvent {
+            ts_ns: 70_000_000_000,
+            comm: bash,
+            ..event1
+        };
+        assert!(
+            engine.evaluate_matches(&event4).is_empty(),
+            "older observations should age out of the sliding window"
+        );
+    }
+
+    #[test]
+    fn evaluates_is_shell_call_rule_with_alias_argument() {
+        let program = RuntimeProgram {
+            version: 1,
+            fields: Vec::new(),
+            rules: vec![RuntimeRule {
+                id: "r-shell".to_string(),
+                name: "r-shell".to_string(),
+                predicates: vec![RuntimeExpr::Call {
+                    name: "is_shell".to_string(),
+                    args: vec![RuntimeExpr::Field {
+                        path: "p".to_string(),
+                    }],
+                }],
+                respond: RuntimeRespondPlan::default(),
+            }],
+        };
+        let engine = engine_from_program(program);
+
+        let mut comm = [0u8; 16];
+        comm[..4].copy_from_slice(b"bash");
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 42,
+            uid: 0,
+            event_type: 1,
+            vertex_id: 42,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm,
+            comm_id: 0,
+            risk_score: 0.1,
+        };
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule_id, "r-shell");
+    }
+
+    #[test]
+    fn evaluates_rare_call_as_first_seen_value_only() {
+        let program = RuntimeProgram {
+            version: 1,
+            fields: Vec::new(),
+            rules: vec![RuntimeRule {
+                id: "r-rare".to_string(),
+                name: "r-rare".to_string(),
+                predicates: vec![RuntimeExpr::Call {
+                    name: "rare".to_string(),
+                    args: vec![RuntimeExpr::Field {
+                        path: "process.name".to_string(),
+                    }],
+                }],
+                respond: RuntimeRespondPlan::default(),
+            }],
+        };
+        let engine = engine_from_program(program);
+
+        let mut comm = [0u8; 16];
+        comm[..4].copy_from_slice(b"bash");
+        let first = IngestEvent {
+            ts_ns: 0,
+            pid: 1,
+            uid: 0,
+            event_type: 1,
+            vertex_id: 1,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm,
+            comm_id: 0,
+            risk_score: 0.1,
+        };
+        let first_matches = engine.evaluate_matches(&first);
+        assert_eq!(first_matches.len(), 1);
+        assert_eq!(first_matches[0].rule_id, "r-rare");
+
+        let second_matches = engine.evaluate_matches(&first);
+        assert!(
+            second_matches.is_empty(),
+            "second observation should not be rare"
+        );
+    }
+
+    #[test]
+    fn evaluates_unusual_for_as_entity_scoped_novelty() {
+        let program = RuntimeProgram {
+            version: 1,
+            fields: Vec::new(),
+            rules: vec![RuntimeRule {
+                id: "r-unusual-for".to_string(),
+                name: "r-unusual-for".to_string(),
+                predicates: vec![RuntimeExpr::Call {
+                    name: "unusual_for".to_string(),
+                    args: vec![
+                        RuntimeExpr::Field {
+                            path: "process.name".to_string(),
+                        },
+                        RuntimeExpr::Field {
+                            path: "process.uid".to_string(),
+                        },
+                    ],
+                }],
+                respond: RuntimeRespondPlan::default(),
+            }],
+        };
+        let engine = engine_from_program(program);
+
+        let mut bash = [0u8; 16];
+        bash[..4].copy_from_slice(b"bash");
+        let first = IngestEvent {
+            ts_ns: 0,
+            pid: 1,
+            uid: 1001,
+            event_type: 1,
+            vertex_id: 1,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: bash,
+            comm_id: 0,
+            risk_score: 0.1,
+        };
+
+        let first_matches = engine.evaluate_matches(&first);
+        assert_eq!(first_matches.len(), 1);
+
+        let second_matches = engine.evaluate_matches(&first);
+        assert!(
+            second_matches.is_empty(),
+            "repeat value for same entity should not remain unusual"
+        );
+
+        let mut zsh = [0u8; 16];
+        zsh[..3].copy_from_slice(b"zsh");
+        let new_value_same_entity = IngestEvent {
+            comm: zsh,
+            ..first
+        };
+        let third_matches = engine.evaluate_matches(&new_value_same_entity);
+        assert_eq!(
+            third_matches.len(),
+            1,
+            "new value for same entity should be unusual"
+        );
+    }
+
+    #[test]
+    fn division_by_zero_evaluates_to_null() {
+        let program = RuntimeProgram {
+            version: 1,
+            fields: Vec::new(),
+            rules: vec![RuntimeRule {
+                id: "r-div-zero".to_string(),
+                name: "r-div-zero".to_string(),
+                predicates: vec![RuntimeExpr::Eq {
+                    lhs: Box::new(RuntimeExpr::Div {
+                        lhs: Box::new(RuntimeExpr::Int { value: 1 }),
+                        rhs: Box::new(RuntimeExpr::Int { value: 0 }),
+                    }),
+                    rhs: Box::new(RuntimeExpr::Int { value: 0 }),
+                }],
+                respond: RuntimeRespondPlan::default(),
+            }],
+        };
+        let engine = engine_from_program(program);
+
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 42,
+            uid: 0,
+            event_type: 1,
+            vertex_id: 42,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.1,
+        };
+        let matches = engine.evaluate_matches(&event);
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn evaluates_null_literal_rule_against_missing_field() {
+        let program = RuntimeProgram {
+            version: 1,
+            fields: Vec::new(),
+            rules: vec![RuntimeRule {
+                id: "r-null".to_string(),
+                name: "r-null".to_string(),
+                predicates: vec![RuntimeExpr::Eq {
+                    lhs: Box::new(RuntimeExpr::Field {
+                        path: "unknown.field".to_string(),
+                    }),
+                    rhs: Box::new(RuntimeExpr::Null),
+                }],
+                respond: RuntimeRespondPlan::default(),
+            }],
+        };
+        let engine = engine_from_program(program);
+
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 42,
+            uid: 0,
+            event_type: 1,
+            vertex_id: 42,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.1,
+        };
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule_id, "r-null");
+    }
+
+    #[test]
     fn detects_time_context_usage_in_rule_predicates() {
+        let field_specs = fallback_field_specs();
         let rule = RuntimeRule {
             id: "r1".to_string(),
             name: "time_rule".to_string(),
@@ -1186,11 +2549,12 @@ mod tests {
             }],
             respond: RuntimeRespondPlan::default(),
         };
-        assert!(rule_uses_time_context(&rule));
+        assert!(rule_uses_time_context(&rule, &field_specs));
     }
 
     #[test]
     fn does_not_flag_non_time_predicates_as_time_context() {
+        let field_specs = fallback_field_specs();
         let rule = RuntimeRule {
             id: "r1".to_string(),
             name: "pid_rule".to_string(),
@@ -1202,7 +2566,7 @@ mod tests {
             }],
             respond: RuntimeRespondPlan::default(),
         };
-        assert!(!rule_uses_time_context(&rule));
+        assert!(!rule_uses_time_context(&rule, &field_specs));
     }
 
     #[test]
@@ -1754,6 +3118,57 @@ rule "uid_7" {
     }
 
     #[test]
+    fn matches_list_contains_predicate_against_process_name() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "rules": [
+    {
+      "id": "rule:0:list_contains_process_name",
+      "name": "list_contains_process_name",
+      "predicates": [
+        {
+          "op": "contains",
+          "lhs": {
+            "op": "list",
+            "items": [
+              { "op": "str", "value": "zsh" },
+              { "op": "str", "value": "bash" }
+            ]
+          },
+          "rhs": { "op": "field", "path": "p.name" }
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+        let mut comm = [0u8; 16];
+        comm[..4].copy_from_slice(b"bash");
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 1338,
+            uid: 0,
+            event_type: 1,
+            vertex_id: 1338,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm,
+            comm_id: 0,
+            risk_score: 0.2,
+        };
+
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule_name, "list_contains_process_name");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn matches_process_name_with_wildcard_pattern() {
         let path = temp_runtime_ir_path();
         let json = r#"{
@@ -1900,10 +3315,427 @@ rule "uid_7" {
 
     #[test]
     fn field_spec_boundary_match_avoids_partial_suffix_collisions() {
-        assert!(lookup_field_spec("n.dest.port").is_some());
-        assert!(lookup_field_spec("proc.pid").is_some());
-        assert!(lookup_field_spec("proc.pid_extra").is_none());
-        assert!(lookup_field_spec("n.dest.port_suffix").is_none());
+        let field_specs = fallback_field_specs();
+        assert!(lookup_field_spec(&field_specs, "n.dest.port").is_some());
+        assert!(lookup_field_spec(&field_specs, "proc.pid").is_some());
+        assert!(lookup_field_spec(&field_specs, "proc.pid_extra").is_none());
+        assert!(lookup_field_spec(&field_specs, "n.dest.port_suffix").is_none());
+    }
+
+    #[test]
+    fn consumes_compiler_emitted_field_metadata_aliases() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "fields": [
+    {
+      "canonical": "process.pid",
+      "value_type": "number",
+      "aliases": ["identity.process_id"],
+      "is_time_context": false
+    }
+  ],
+  "rules": [
+    {
+      "id": "rule:0:metadata_alias",
+      "name": "metadata_alias",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "identity.process_id" },
+          "rhs": { "op": "int", "value": 1337 }
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 1337,
+            uid: 0,
+            event_type: 1,
+            vertex_id: 1337,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.0,
+        };
+
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule_name, "metadata_alias");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn consumes_compiler_domain_field_metadata_as_ip_backed_value() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "fields": [
+    {
+      "canonical": "network.dest.domain",
+      "value_type": "string",
+      "aliases": ["dest.domain"],
+      "is_time_context": false
+    }
+  ],
+  "rules": [
+    {
+      "id": "rule:0:domain_alias",
+      "name": "domain_alias",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "n.dest.domain" },
+          "rhs": { "op": "str", "value": "localhost" }
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 4242,
+            uid: 0,
+            event_type: 3,
+            vertex_id: 4242,
+            dst_vertex_id: 0,
+            net_dst_ip: u32::from(Ipv4Addr::LOCALHOST),
+            net_dst_port: 443,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.0,
+        };
+
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule_name, "domain_alias");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn consumes_additional_compiler_field_metadata_extractors() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "fields": [
+    {
+      "canonical": "process.id",
+      "value_type": "number",
+      "aliases": ["proc.identifier"],
+      "is_time_context": false
+    },
+    {
+      "canonical": "process.ppid",
+      "value_type": "number",
+      "aliases": ["proc.parent_pid"],
+      "is_time_context": false
+    },
+    {
+      "canonical": "process.elevated",
+      "value_type": "bool",
+      "aliases": ["proc.is_root"],
+      "is_time_context": false
+    },
+    {
+      "canonical": "network.process_id",
+      "value_type": "number",
+      "aliases": ["net.proc_id"],
+      "is_time_context": false
+    },
+    {
+      "canonical": "file.process_id",
+      "value_type": "number",
+      "aliases": ["file.proc_id"],
+      "is_time_context": false
+    }
+  ],
+  "rules": [
+    {
+      "id": "rule:0:process_fields",
+      "name": "process_fields",
+      "predicates": [
+        {
+          "op": "and",
+          "lhs": {
+            "op": "and",
+            "lhs": { "op": "eq", "lhs": { "op": "field", "path": "proc.identifier" }, "rhs": { "op": "int", "value": 4242 } },
+            "rhs": { "op": "eq", "lhs": { "op": "field", "path": "proc.parent_pid" }, "rhs": { "op": "int", "value": 313 } }
+          },
+          "rhs": { "op": "eq", "lhs": { "op": "field", "path": "proc.is_root" }, "rhs": { "op": "bool", "value": true } }
+        }
+      ]
+    },
+    {
+      "id": "rule:0:network_process",
+      "name": "network_process",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "net.proc_id" },
+          "rhs": { "op": "int", "value": 4242 }
+        }
+      ]
+    },
+    {
+      "id": "rule:0:file_process",
+      "name": "file_process",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "file.proc_id" },
+          "rhs": { "op": "int", "value": 4242 }
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+
+        let exec_event = IngestEvent {
+            ts_ns: 0,
+            pid: 4242,
+            uid: 0,
+            event_type: 1,
+            vertex_id: 4242,
+            dst_vertex_id: 313,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.0,
+        };
+        let exec_matches = engine.evaluate_matches(&exec_event);
+        assert!(exec_matches.iter().any(|m| m.rule_name == "process_fields"));
+        assert!(!exec_matches.iter().any(|m| m.rule_name == "network_process"));
+        assert!(!exec_matches.iter().any(|m| m.rule_name == "file_process"));
+
+        let net_event = IngestEvent {
+            event_type: 3,
+            ..exec_event
+        };
+        let net_matches = engine.evaluate_matches(&net_event);
+        assert!(net_matches.iter().any(|m| m.rule_name == "network_process"));
+        assert!(!net_matches.iter().any(|m| m.rule_name == "file_process"));
+
+        let file_event = IngestEvent {
+            event_type: 2,
+            ..exec_event
+        };
+        let file_matches = engine.evaluate_matches(&file_event);
+        assert!(file_matches.iter().any(|m| m.rule_name == "file_process"));
+        assert!(!file_matches.iter().any(|m| m.rule_name == "network_process"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn consumes_nested_and_derived_compiler_field_metadata_extractors() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "fields": [
+    {
+      "canonical": "host.risk_score",
+      "value_type": "number",
+      "aliases": ["host.rs"],
+      "is_time_context": false
+    },
+    {
+      "canonical": "user.uid",
+      "value_type": "number",
+      "aliases": ["usr.uid"],
+      "is_time_context": false
+    },
+    {
+      "canonical": "process.user.uid",
+      "value_type": "number",
+      "aliases": ["proc.user_uid"],
+      "is_time_context": false
+    },
+    {
+      "canonical": "process.parent.pid",
+      "value_type": "number",
+      "aliases": ["proc.parent_pid"],
+      "is_time_context": false
+    },
+    {
+      "canonical": "process.parent.id",
+      "value_type": "number",
+      "aliases": ["proc.parent_id"],
+      "is_time_context": false
+    },
+    {
+      "canonical": "network.dest.is_internal",
+      "value_type": "bool",
+      "aliases": ["net.dest.internal"],
+      "is_time_context": false
+    }
+  ],
+  "rules": [
+    {
+      "id": "rule:0:identity_fields",
+      "name": "identity_fields",
+      "predicates": [
+        {
+          "op": "and",
+          "lhs": {
+            "op": "and",
+            "lhs": { "op": "eq", "lhs": { "op": "field", "path": "usr.uid" }, "rhs": { "op": "int", "value": 1001 } },
+            "rhs": { "op": "eq", "lhs": { "op": "field", "path": "proc.user_uid" }, "rhs": { "op": "int", "value": 1001 } }
+          },
+          "rhs": { "op": "eq", "lhs": { "op": "field", "path": "host.rs" }, "rhs": { "op": "float", "value": 0.75 } }
+        }
+      ]
+    },
+    {
+      "id": "rule:0:parent_fields_exec_only",
+      "name": "parent_fields_exec_only",
+      "predicates": [
+        {
+          "op": "and",
+          "lhs": { "op": "eq", "lhs": { "op": "field", "path": "proc.parent_pid" }, "rhs": { "op": "int", "value": 313 } },
+          "rhs": { "op": "eq", "lhs": { "op": "field", "path": "proc.parent_id" }, "rhs": { "op": "int", "value": 313 } }
+        }
+      ]
+    },
+    {
+      "id": "rule:0:net_internal_only",
+      "name": "net_internal_only",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "net.dest.internal" },
+          "rhs": { "op": "bool", "value": true }
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+
+        let exec_event = IngestEvent {
+            ts_ns: 0,
+            pid: 4242,
+            uid: 1001,
+            event_type: 1,
+            vertex_id: 4242,
+            dst_vertex_id: 313,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.75,
+        };
+        let exec_matches = engine.evaluate_matches(&exec_event);
+        assert!(exec_matches.iter().any(|m| m.rule_name == "identity_fields"));
+        assert!(exec_matches
+            .iter()
+            .any(|m| m.rule_name == "parent_fields_exec_only"));
+        assert!(!exec_matches.iter().any(|m| m.rule_name == "net_internal_only"));
+
+        let net_event_internal = IngestEvent {
+            event_type: 3,
+            net_dst_ip: u32::from(Ipv4Addr::LOCALHOST),
+            net_dst_port: 443,
+            ..exec_event
+        };
+        let net_internal_matches = engine.evaluate_matches(&net_event_internal);
+        assert!(net_internal_matches
+            .iter()
+            .any(|m| m.rule_name == "net_internal_only"));
+        assert!(!net_internal_matches
+            .iter()
+            .any(|m| m.rule_name == "parent_fields_exec_only"));
+
+        let net_event_external = IngestEvent {
+            net_dst_ip: u32::from(Ipv4Addr::new(8, 8, 8, 8)),
+            ..net_event_internal
+        };
+        let net_external_matches = engine.evaluate_matches(&net_event_external);
+        assert!(!net_external_matches
+            .iter()
+            .any(|m| m.rule_name == "net_internal_only"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn fallback_metadata_resolves_parent_and_internal_fields_without_compiler_fields() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "rules": [
+    {
+      "id": "rule:0:fallback_parent",
+      "name": "fallback_parent",
+      "predicates": [
+        {
+          "op": "and",
+          "lhs": { "op": "eq", "lhs": { "op": "field", "path": "p.parent.pid" }, "rhs": { "op": "int", "value": 313 } },
+          "rhs": { "op": "eq", "lhs": { "op": "field", "path": "p.is_root" }, "rhs": { "op": "bool", "value": false } }
+        }
+      ]
+    },
+    {
+      "id": "rule:0:fallback_internal",
+      "name": "fallback_internal",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "n.dest.is_internal" },
+          "rhs": { "op": "bool", "value": true }
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+
+        let exec_event = IngestEvent {
+            ts_ns: 0,
+            pid: 4242,
+            uid: 1001,
+            event_type: 1,
+            vertex_id: 4242,
+            dst_vertex_id: 313,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.0,
+        };
+        let exec_matches = engine.evaluate_matches(&exec_event);
+        assert!(exec_matches.iter().any(|m| m.rule_name == "fallback_parent"));
+        assert!(!exec_matches.iter().any(|m| m.rule_name == "fallback_internal"));
+
+        let net_event = IngestEvent {
+            event_type: 3,
+            net_dst_ip: u32::from(Ipv4Addr::LOCALHOST),
+            net_dst_port: 443,
+            ..exec_event
+        };
+        let net_matches = engine.evaluate_matches(&net_event);
+        assert!(net_matches.iter().any(|m| m.rule_name == "fallback_internal"));
+
+        let _ = fs::remove_file(path);
     }
 
     #[test]

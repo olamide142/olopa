@@ -12,6 +12,7 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
 - [x] Replace server `persist_placeholder(...)` with real persistence (ClickHouse/Kafka path).
   - Implemented durable JSONL persistence in `app/server/src/telemetry.rs`.
   - Added optional ClickHouse HTTP sink (`INGEST_CLICKHOUSE_URL`) with JSONL fallback on insert failure.
+  - Added optional SurrealDB HTTP SQL sink (`INGEST_SURREAL_URL`) with fallback to ClickHouse and then JSONL.
   - Follow-up: add Kafka/queue fanout for decoupled high-throughput ingest.
 - [x] Keep runtime-IR execution as the default path and fail loudly on schema mismatch.
   - Agent now fails startup when runtime-ir load/schema validation fails.
@@ -25,17 +26,41 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
   - Downstream runtime-IR lowering and Cypher codegen now consume typed MIR expressions directly.
 - [ ] Expand runtime evaluator coverage for currently unsupported expression kinds.
   - Progress: added end-to-end support for `matches` (`AST -> MIR -> runtime-ir -> agent evaluator`) with runtime wildcard (`*`, `?`) and grouped-alternation (`(a|b|c)`) handling.
+  - Progress: added end-to-end support for `null` literals (`AST -> MIR -> runtime-ir -> agent evaluator`) instead of lowering them to runtime `Unsupported`.
+  - Progress: added end-to-end support for list literals in runtime expressions (including `contains` with list lhs), replacing another prior `Unsupported` lowering path.
+  - Progress: added end-to-end support for arithmetic expressions (`+`, `-`, `*`, `/`, unary `-`) in `where`/predicate evaluation.
+  - Progress: added end-to-end support for duration literals inside expressions (for example `event.ts_ns > 5m`) with runtime unit normalization.
+  - Progress: added end-to-end support for callable expressions in runtime plans, including evaluator support for `count(...)` and `is_shell(...)`, and call-chain field projection (for example `host(...).baseline.domains`).
+  - Progress: added runtime novelty helpers `rare(...)` and `unusual_for(...)` with stateful evaluation memory for first-seen value detection.
+  - Progress: added aggregate callable evaluation support for `max(...)`, `min(...)`, `sum(...)`, `avg(...)`, and `distinct(...)` in runtime evaluator.
+  - Progress: added stateful `rate(value, window)` callable support in runtime evaluator using per-key sliding-window counting.
 - [ ] Replace hardcoded/special-case field semantics with generic typed field resolution.
   - Progress: domain/IP comparisons now use a generic typed comparator (no `.domain`-only special case).
   - Progress: runtime field lookup/path aliasing moved to a typed, declarative field-spec table (including suffix alias resolution like `n.dest.port`, `proc.pid`, `time.hour`) instead of one-off matcher branches.
-  - Remaining: emit/consume schema-derived field metadata from compiler artifacts so runtime mapping is generated from schema (not static in agent code).
-- [ ] Complete parser semantics for currently partial/unsupported top-level forms (`template`, `policy`) and remaining clause semantics.
+  - Progress: compiler now emits `RuntimeProgram.fields` metadata derived from stdlib schema (+ synthetic runtime event fields), and agent consumes this metadata for field resolution with backward-compatible fallback for older artifacts.
+  - Progress: added extractor bindings for additional schema fields from ingest events (`process.id`, `process.ppid`, `process.elevated`, `network.process_id`, `file.process_id`) with metadata-alias tests.
+  - Progress: added extractor bindings for nested/derived schema fields (`user.uid`, `process.user.uid`, `process.parent.{pid,id}`, `host.risk_score`, `network.dest.is_internal`) with metadata-alias tests.
+  - Progress: expanded fallback field metadata for older artifacts (no compiler `fields`) and kept `network.dest.domain` evaluator semantics compatible with IP-backed domain matching.
+  - Remaining: extend runtime extractor bindings so more schema-emitted fields resolve to concrete event values (currently unknown fields safely evaluate as `null`).
+- [ ] Complete remaining parser clause semantics.
+  - Progress: parser now accepts `graph` and `around` rule-body clauses (with typed AST blocks), plus MIR source fallback derivation from body arms/source when `from` is omitted.
+  - Progress: resolver/type-check now bind `graph`/`around` aliases into rule scope so `where` predicates can reference aliases (for example `p.pid`, `n.dest.port`) without unknown-identifier fallback.
 - [x] Remove legacy compiled-shared-object backend path and references.
   - Deleted the legacy backend module and removed its dedicated CLI mode.
   - Removed dormant agent rule-engine implementation file tied to that path.
 
 ## P2 - Kernel/Data Plane Hardening
 
+- [ ] Add end-to-end cgroup support in agent telemetry and policy evaluation.
+  - Capture cgroup identity from eBPF events (stable id + optional path metadata where available).
+  - Propagate cgroup fields through agent wire payloads to ingest storage.
+  - Extend runtime field resolution so rules can reference cgroup-scoped context.
+  - Add cgroup-targeted policy controls (allow/deny/rate limit) and tests for container workloads.
+- [ ] Add SQL query visibility via uprobes for process->table attribution.
+  - Attach uprobes/uretprobes to common SQL client/server symbols (starting with `libpq` and MySQL client APIs).
+  - Emit normalized DB query events carrying process identity, db target, statement fingerprint, operation kind, and resolved table list.
+  - Correlate prepared statement lifecycle (`prepare`/`bind`/`execute`) so table access is visible even when literals are omitted.
+  - Add query text redaction/tokenization safeguards to avoid storing sensitive literal values.
 - [x] Implement TC egress policy enforcement path (beyond pass-through).
   - Added kernel-side TC policy enforcement map (`TC_EGRESS_POLICY`) in `agent/ebpf/src/tc.rs`.
   - TC program now parses IPv4+TCP/UDP egress tuple and returns `TC_ACT_SHOT` on deny policy match.
@@ -54,8 +79,13 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
   - Progress: explicit backend/agent connection state is visible in topbar/sidebar/banner; UI freezes live visuals when offline.
   - Progress: introduced Python control-plane scaffold (`app/control_plane`) to host dashboard/control/compiler APIs while proxying ingest reads to Rust.
   - Remaining: replace static demo graph panel data with live graph/runtime-backed data.
-- [ ] Add API authn/authz and tenancy checks for ingest/stats endpoints.
+- [x] Add API authn/authz and tenancy checks for ingest/stats endpoints.
+  - Progress: added token-based API auth (`Authorization: Bearer ...` or `x-api-key`) via `INGEST_API_TOKENS` with global and tenant-scoped token support.
+  - Progress: ingest write path now enforces tenant authorization (`POST /api/v1/ingest/batches` must match token scope).
+  - Progress: read paths now enforce tenant scoping (`/api/v1/ingest/recent`, `/api/v1/ingest/summary`), and `/api/v1/ingest/stats` is restricted to global-scope tokens.
 - [ ] Add end-to-end integration tests: `oilc -> runtime-ir artifact -> agent eval -> server ingest`.
+  - Progress: added `agent::tests::e2e_rule_to_runtime_to_sender_to_ingest_runtime` to validate `oilc` compilation, runtime-ir evaluation, alert payload conversion via HTTP sender logic, and ingest API contract (`/api/v1/ingest/batches` + `/api/v1/ingest/recent`).
+  - Note: test is `#[ignore]` by default because it requires local TCP bind + external ingest server process spawn (not available in restricted sandboxes).
 - [ ] Add CI workflows for deterministic checks/tests across `oilc`, `agent`, and `app/server`.
 - [ ] Add observability surface: metrics/traces/log correlation across compiler, agent, server.
 
@@ -63,3 +93,7 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
 
 - [ ] Integrate Memgraph-trigger execution path where required by graph rules.
 - [ ] Add rule package/version lifecycle (load, reload, rollback) with compatibility checks.
+- [ ] Add SQL semantic policy support (example: block process X from reading table `finance` on DB Y).
+  - Extend OIL/runtime field model with DB entities (`db.query`, `db.table`, `db.operation`, `db.server`).
+  - Add policy evaluation mode transitions: observe -> enforce for staged rollout safety.
+  - Define enforcement strategy per engine path (client-library fail-close hook, DB proxy, or native DB plugin) with deterministic rollback.

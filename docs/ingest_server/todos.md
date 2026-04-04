@@ -31,8 +31,10 @@ Implemented today:
   - `GET /health`
   - `POST /api/v1/ingest/batches`
   - `GET /api/v1/ingest/stats`
-  - `GET /api/v1/ingest/recent?limit=`
-  - `GET /api/v1/ingest/summary`
+  - `GET /api/v1/ingest/recent?limit=&tenant_id=`
+  - `GET /api/v1/ingest/summary?tenant_id=`
+- Token-based API auth (`Authorization: Bearer` or `x-api-key`) when `INGEST_API_TOKENS` is configured.
+- Tenant-scoped authorization on ingest/read endpoints; global-scope only on stats endpoint.
 - Single background worker drains a bounded `mpsc` queue.
 - Flush is triggered by interval (`INGEST_FLUSH_INTERVAL_MS`) and row threshold (`INGEST_FLUSH_MAX_ROWS`).
 
@@ -59,9 +61,10 @@ Implemented today:
 
 - Row flattening to JSON envelope with shared metadata and `event_kind`.
 - Persistence strategy:
-  - ClickHouse HTTP insert when `INGEST_CLICKHOUSE_URL` is configured,
-  - JSONL fallback sink on ClickHouse failure,
-  - JSONL primary sink when ClickHouse is disabled.
+  - SurrealDB HTTP SQL insert when `INGEST_SURREAL_URL` is configured,
+  - ClickHouse HTTP fallback insert when `INGEST_CLICKHOUSE_URL` is configured,
+  - JSONL fallback sink on downstream sink failure,
+  - JSONL primary sink when both database sinks are disabled.
 - Recent in-memory ring buffer and aggregate counters by kind/tenant/host.
 
 ### 3.4 Configuration and Ops Controls
@@ -69,7 +72,9 @@ Implemented today:
 Implemented today:
 
 - Environment-driven typed config in `config.rs`.
-- Queue, flush cadence, flush size, fallback path, ClickHouse credentials, timeout are configurable.
+- Queue, flush cadence, flush size, fallback path, and sink timeouts are configurable.
+- ClickHouse and SurrealDB connection/auth settings are configurable via environment variables.
+- API tokens and tenant scopes are configurable via `INGEST_API_TOKENS`.
 - Stats counters include queue depth, accepted/rejected, flushed, failed flushes, last flush timestamp.
 
 ### 3.5 Test Coverage Baseline
@@ -80,16 +85,20 @@ Implemented today:
   - queue acceptance and rejection,
   - worker flush behavior,
   - row flattening across event families,
-  - recent rows and summary population.
-- Current local test result: 5/5 passing.
+  - recent rows and summary population,
+  - tenant-scoped recent/summary filtering,
+  - Surreal SQL generation and Surreal error parsing.
+- Unit tests in `main.rs` and `config.rs` cover auth token parsing and tenant scope behavior.
+- Current local test result: 13/13 passing.
 
 ## 4) Current Gaps
 
 Not implemented yet:
 
-- authentication/authorization/tenancy enforcement on ingest APIs,
+- advanced identity integration beyond static API tokens (for example mTLS identity binding, token rotation/revocation),
 - request size/rate limiting safeguards,
 - idempotency and duplicate suppression using `batch_id`,
+- SQL query event family ingestion (`db_query_events`) for uprobe-derived database telemetry,
 - durable pre-flush spool/WAL for crash recovery,
 - retry policy and circuit-breaker logic for ClickHouse,
 - Prometheus/OpenTelemetry metrics/traces,
@@ -118,6 +127,11 @@ Done criteria:
 
 - all non-health endpoints require authenticated identity,
 - tenant spoofing attempts are rejected and tested.
+
+Current status:
+
+- token auth + tenant scope enforcement is implemented,
+- remaining work is mTLS/identity binding and richer auth failure audit telemetry.
 
 #### Epic 0.2 Input and Abuse Controls
 
@@ -153,6 +167,20 @@ Objective:
 
 - improve correctness under retries, restarts, and downstream outages.
 
+#### Epic 1.0 DB Query Event Family Support
+
+Implementation procedure:
+
+1. Extend ingest wire schema with `db_query_events` (versioned, backwards compatible).
+2. Define normalized DB event shape (`db_engine`, `db_server`, `database`, `operation`, `tables`, `statement_fingerprint`).
+3. Persist DB query rows with explicit `event_kind` and summary counters.
+4. Add compatibility tests for mixed old/new batch payloads.
+
+Done criteria:
+
+- ingest accepts and stores DB query telemetry without breaking existing senders,
+- query-event rows are visible in `recent` and `summary` APIs.
+
 #### Epic 1.1 Idempotency and Deduplication
 
 Implementation procedure:
@@ -172,7 +200,7 @@ Done criteria:
 Implementation procedure:
 
 1. Add local WAL/spool for accepted batches before async processing.
-2. Mark checkpoint after successful ClickHouse/JSONL persistence.
+2. Mark checkpoint after successful SurrealDB/ClickHouse/JSONL persistence.
 3. Rehydrate pending spool items on restart.
 4. Add corruption handling and quarantine path.
 
