@@ -286,11 +286,19 @@ impl StatusReporter {
         firewall_approve: u64,
     ) -> RuntimeStatusSnapshot {
         let snapshot = budget_tracker.snapshot();
+        let logical_cores = std::thread::available_parallelism()
+            .map(|n| n.get() as f32)
+            .unwrap_or(1.0)
+            .max(1.0);
         let cpu_util = if snapshot.total[CPU] > 0.0 {
             1.0 - (snapshot.remaining[CPU] / snapshot.total[CPU]).clamp(0.0, 1.0)
         } else {
             0.0
         };
+        // Convert host-normalized process utilization into per-core normalized
+        // percentage so one saturated core is shown as ~100%.
+        let cpu_pct_per_core = cpu_util * 100.0 * logical_cores;
+        let cpu_budget_pct_per_core = DEFAULT_CPU_BUDGET_PCT * logical_cores;
         let bw_limit_pct = if snapshot.total[BW] > 0.0 {
             ((transmitted_bytes as f32 / snapshot.total[BW]) * 100.0).clamp(0.0, 100.0)
         } else {
@@ -309,8 +317,8 @@ impl StatusReporter {
                 rtt_ms: sender_stats.backend_rtt_ms,
             },
             resources: RuntimeResourceStatus {
-                cpu_pct: cpu_util * 100.0,
-                cpu_budget_pct: DEFAULT_CPU_BUDGET_PCT,
+                cpu_pct: cpu_pct_per_core,
+                cpu_budget_pct: cpu_budget_pct_per_core,
                 mem_mb: (snapshot.total[MEM] - snapshot.remaining[MEM]) / 1_048_576.0,
                 mem_ceiling_mb: snapshot.total[MEM] / 1_048_576.0,
                 bw_mb_s: transmitted_bytes as f32 / 5.0 / 1_048_576.0,
@@ -420,9 +428,10 @@ impl OlopaAgent {
         let mut window_transmitted = 0u64;
         let mut window_dropped_budget = 0u64;
         let mut window_transmitted_bytes = 0u64;
-        let mut window_firewall_allow = 0u64;
-        let mut window_firewall_deny = 0u64;
-        let mut window_firewall_approve = 0u64;
+        // Lifetime firewall counters for the current agent process.
+        let mut lifetime_firewall_allow = 0u64;
+        let mut lifetime_firewall_deny = 0u64;
+        let mut lifetime_firewall_approve = 0u64;
         let status_reporter = StatusReporter::from_env();
 
         // Capture ctrl-c once and poll it alongside a cooperative yield.
@@ -465,10 +474,11 @@ impl OlopaAgent {
             ingested_since_housekeeping =
                 ingested_since_housekeeping.saturating_add(ingested.processed as u64);
             window_captured = window_captured.saturating_add(ingested.processed as u64);
-            window_firewall_allow = window_firewall_allow.saturating_add(ingested.firewall_allow);
-            window_firewall_deny = window_firewall_deny.saturating_add(ingested.firewall_deny);
-            window_firewall_approve =
-                window_firewall_approve.saturating_add(ingested.firewall_approve);
+            lifetime_firewall_allow =
+                lifetime_firewall_allow.saturating_add(ingested.firewall_allow);
+            lifetime_firewall_deny = lifetime_firewall_deny.saturating_add(ingested.firewall_deny);
+            lifetime_firewall_approve =
+                lifetime_firewall_approve.saturating_add(ingested.firewall_approve);
 
             let now = Instant::now();
 
@@ -508,20 +518,24 @@ impl OlopaAgent {
                     window_transmitted,
                     window_dropped_budget,
                     window_transmitted_bytes,
-                    window_firewall_allow,
-                    window_firewall_deny,
-                    window_firewall_approve,
+                    lifetime_firewall_allow,
+                    lifetime_firewall_deny,
+                    lifetime_firewall_approve,
                 );
                 status_reporter.write(&snapshot);
                 window_captured = 0;
                 window_transmitted = 0;
                 window_dropped_budget = 0;
                 window_transmitted_bytes = 0;
-                window_firewall_allow = 0;
-                window_firewall_deny = 0;
-                window_firewall_approve = 0;
                 // Same cadence discipline for housekeeping.
                 next_housekeeping_tick += Duration::from_secs(5);
+            }
+
+            // Avoid hot spinning when no ring-buffer events are available.
+            // This keeps idle CPU utilization low while preserving sub-ms
+            // reaction time for the next ingest pass.
+            if ingested.processed == 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
         }
 
@@ -682,13 +696,17 @@ impl OlopaAgent {
 
         // Incident path: bypass scheduler entirely, send immediately.
         let mut stats = IngestLoopStats::default();
-        for matched_rule in &matches {
-            if matched_rule.enforce_block_egress {
-                enforce_block_egress_pid(&event, matched_rule);
+        // Record one firewall verdict per network event.
+        if event.event_type == 3 {
+            if let Some(block_rule) = matches.iter().find(|m| m.enforce_block_egress) {
+                enforce_block_egress_pid(&event, block_rule);
                 stats.firewall_deny = stats.firewall_deny.saturating_add(1);
             } else {
                 stats.firewall_allow = stats.firewall_allow.saturating_add(1);
             }
+        }
+
+        for matched_rule in &matches {
             sender.send_or_spool(encode_alert_payload(&event, matched_rule))?;
         }
 

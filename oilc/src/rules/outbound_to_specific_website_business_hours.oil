@@ -11,8 +11,8 @@ rule "outbound_to_specific_website_business_hours" {
     and time.weekday == "tuesday"
     and time.hour >= 9
     and time.hour < 17
-    // Replace with your org's developer UID set.
-    // and p.uid in [1000, 1001, 1002]
+    // Replace with your org's developer UID Or GID set.
+    // and p.uid in [1000, 1001, 1002] or p.gid in [...]
 
   respond
     alert critical

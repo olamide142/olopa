@@ -83,6 +83,8 @@ struct ProcSample {
 }
 
 pub struct BudgetTracker {
+    // Immutable baseline totals used as PI anchor.
+    baseline_total: [f32; N_RESOURCES],
     // Current PI-adjusted budget snapshot.
     current: BudgetSnapshot,
     // Controller setpoints (desired utilization levels).
@@ -100,6 +102,7 @@ impl BudgetTracker {
     // Construct tracker with defaults and empty previous sample.
     pub fn new() -> Self {
         Self {
+            baseline_total: DEFAULT_TOTAL_BUDGETS,
             current: BudgetSnapshot::default_budgets(),
             target: DEFAULT_TARGET_UTILIZATION,
             kp: [0.35, 0.25, 0.20, 0.20, 0.25],
@@ -170,8 +173,9 @@ impl BudgetTracker {
             // PI control signal.
             let control = self.kp[i] * error + self.ki[i] * self.integral[i];
 
-            // Adjust budget multiplicatively, constrained to sane bounds.
-            let base = self.current.total[i];
+            // Adjust around the immutable baseline budget so totals do not
+            // drift upward/downward without bound across updates.
+            let base = self.baseline_total[i];
             let adjusted = (base * (1.0 + control)).clamp(base * 0.5, base * 1.5);
 
             self.current.total[i] = adjusted;

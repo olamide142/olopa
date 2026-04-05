@@ -488,7 +488,8 @@ fn print_status(opt: StatusOpt) -> Result<()> {
         }
     };
 
-    let running = snapshot.running && snapshot.pid > 0;
+    let pid_alive = snapshot.pid > 0 && PathBuf::from(format!("/proc/{}", snapshot.pid)).exists();
+    let running = snapshot.running && pid_alive;
 
     if !opt.no_mascot {
         print_mascot_bitmap(color);
@@ -497,11 +498,27 @@ fn print_status(opt: StatusOpt) -> Result<()> {
     if running {
         println!("{} agent running pid={}", glyph_ok(color), snapshot.pid);
     } else {
+        if snapshot.pid > 0 && !pid_alive {
+            println!(
+                "{} agent stopped (stale status snapshot, last pid={})",
+                glyph_error(color),
+                snapshot.pid
+            );
+        } else {
+            println!(
+                "{} agent stopped (last pid={})",
+                glyph_error(color),
+                snapshot.pid
+            );
+        }
+    }
+
+    if snapshot.pid > 0 && !pid_alive {
         println!(
-            "{} agent stopped (last pid={})",
-            glyph_error(color),
-            snapshot.pid
+            "{} status snapshot is stale; start olopa to refresh live metrics",
+            glyph_warn(color)
         );
+        return Ok(());
     }
 
     if snapshot.backend.reachable {
@@ -562,7 +579,7 @@ fn print_status(opt: StatusOpt) -> Result<()> {
     );
 
     println!("{}", separator(color));
-    println!("{}", heading(color, "firewall verdicts"));
+    println!("{}", heading(color, "firewall verdicts / lifetime"));
     println!(
         "{} {}",
         verdict_allow_label(color),
@@ -583,50 +600,43 @@ fn print_status(opt: StatusOpt) -> Result<()> {
 }
 
 fn print_mascot_bitmap(color: bool) {
-    // Tiny bitmap mascot rendered as ANSI background blocks.
-    const PIXELS: &[&str] = &[
-        "....111111....",
-        "...122222221...",
-        "..12222222221..",
-        ".122223..322221.",
-        ".122222..222221.",
-        ".12222222222221.",
-        ".12221111112221.",
-        "..122222222221..",
-        "...1222222221...",
-        "....11111111....",
-    ];
+    // Keep banner in a dedicated asset file so updates do not require code edits.
+    const ASCII_ART: &str = include_str!("assets/ascii_art.txt");
     if !color {
-        const FALLBACK: &[&str] = &[
-            "  ▄█▀▀▀▀█▄  ",
-            " ███▄  ▄███ ",
-            " ██████████ ",
-            " ███ ▀▀ ███ ",
-            " ███ ██ ███ ",
-            "  ▀██▄▄██▀  ",
-        ];
-        for row in FALLBACK {
-            println!("{}", row);
+        for row in ASCII_ART.lines() {
+            println!("{row}");
         }
         return;
     }
 
-    for row in PIXELS {
-        let mut line = String::new();
-        for px in row.chars() {
-            match px {
-                '.' => line.push_str("  "),
-                // Outline.
-                '1' => line.push_str("\x1b[48;5;24m  \x1b[0m"),
-                // Main fill.
-                '2' => line.push_str("\x1b[48;5;45m  \x1b[0m"),
-                // Eyes.
-                '3' => line.push_str("\x1b[48;5;16m  \x1b[0m"),
-                _ => line.push_str("  "),
-            }
-        }
-        println!("{}", line);
+    for row in ASCII_ART.lines() {
+        println!("{}", themed_ascii_row(row));
     }
+}
+
+fn themed_ascii_row(row: &str) -> String {
+    const BLUE: &str = "\x1b[38;5;25m";
+    const YELLOW: &str = "\x1b[38;5;220m";
+    const RESET: &str = "\x1b[0m";
+
+    let mut out = String::with_capacity(row.len() * 8);
+    for ch in row.chars() {
+        if ch == ' ' {
+            out.push(' ');
+            continue;
+        }
+
+        // Police-theme split: body text in blue, strokes/highlights in yellow.
+        let tone = if matches!(ch, '$' | '/' | '\\' | '_' | '-') {
+            YELLOW
+        } else {
+            BLUE
+        };
+        out.push_str(tone);
+        out.push(ch);
+        out.push_str(RESET);
+    }
+    out
 }
 
 fn separator(color: bool) -> String {
