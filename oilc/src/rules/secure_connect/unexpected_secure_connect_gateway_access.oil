@@ -1,0 +1,20 @@
+set secure_connect_gateways = ["10.10.0.1", "10.10.0.2"]
+
+rule "unexpected_secure_connect_gateway_access" {
+    from network.connect as n, secure_connect.session as sc
+
+    correlate network.connect as n with secure_connect.session as sc by user_id
+
+    where
+        n.dest.ip in secure_connect_gateways
+        and sc.active == false
+
+    score 80 
+        +20 if n.direction == "outbound"
+
+    respond
+        alert critical "Unexpected connection attempt to Secure Connect gateway"
+        snapshot host.timeline, process.tree(n.pid)
+        open_case "Possible unauthorized tunnel bootstrap"
+        notify "SOC page now"
+}

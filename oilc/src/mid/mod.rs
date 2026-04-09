@@ -524,7 +524,12 @@ fn validate_expr_unsupported(
         }
         MirExpr::Call { name: _, args } => {
             for (idx, arg) in args.iter().enumerate() {
-                validate_expr_unsupported(arg, &format!("{path}.arg[{idx}]"), rule_name, diagnostics);
+                validate_expr_unsupported(
+                    arg,
+                    &format!("{path}.arg[{idx}]"),
+                    rule_name,
+                    diagnostics,
+                );
             }
         }
         MirExpr::Matches { lhs, pattern: _ } => {
@@ -754,21 +759,19 @@ fn lower_expr(expr: &Expr) -> MirExpr {
             name: name.clone(),
             args: args.iter().map(|a| lower_expr(&a.node)).collect(),
         },
-        Expr::Member { base, field } => {
-            match lower_expr(&base.node) {
-                MirExpr::Field { path } => MirExpr::Field {
-                    path: format!("{path}.{field}"),
-                },
-                MirExpr::Call { name, args } if can_project_call_to_field(&name, &args) => {
-                    MirExpr::Field {
-                        path: format!("{name}.{field}"),
-                    }
+        Expr::Member { base, field } => match lower_expr(&base.node) {
+            MirExpr::Field { path } => MirExpr::Field {
+                path: format!("{path}.{field}"),
+            },
+            MirExpr::Call { name, args } if can_project_call_to_field(&name, &args) => {
+                MirExpr::Field {
+                    path: format!("{name}.{field}"),
                 }
-                _ => MirExpr::Unsupported {
-                    kind: format!("{expr:?}"),
-                },
             }
-        }
+            _ => MirExpr::Unsupported {
+                kind: format!("{expr:?}"),
+            },
+        },
         Expr::List(items) => MirExpr::List(items.iter().map(|i| lower_expr(&i.node)).collect()),
         Expr::And(lhs, rhs) => MirExpr::And {
             lhs: Box::new(lower_expr(&lhs.node)),

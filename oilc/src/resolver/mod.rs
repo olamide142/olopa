@@ -306,7 +306,8 @@ impl<'a> Resolver<'a> {
                 }
                 for pattern in &g.patterns {
                     scope.insert(pattern.alias.node.clone());
-                    if let Some(entity) = map_graph_entity_to_entity(self.schema, &pattern.entity_type)
+                    if let Some(entity) =
+                        map_graph_entity_to_entity(self.schema, &pattern.entity_type)
                     {
                         alias_entity.insert(pattern.alias.node.clone(), entity);
                     }
@@ -668,20 +669,31 @@ fn map_source_to_entity(domain: &str, event: &str) -> Option<&'static str> {
         ("k8s", "workload") => Some("WorkloadInfo"),
         ("identity", "session") => Some("Session"),
         ("dns", "query") => Some("DnsQuery"),
+        ("secure_connect", "session") => Some("SecureConnectSession"),
+        ("secure_connect", "connect") => Some("SecureConnectSession"),
+        ("secure_connect", "profile") => Some("SecureConnectProfile"),
+        ("secure_connect", "gateway") => Some("SecureConnectGateway"),
+        ("secure_connect", "peer") => Some("SecureConnectPeer"),
         _ => None,
     }
 }
 
 fn map_event_to_entity(domain: &str, _kind: &str) -> Option<&'static str> {
-    match domain {
-        "process" => Some("Process"),
-        "file" => Some("FileEvent"),
-        "network" => Some("NetworkFlow"),
-        "container" => Some("ContainerContext"),
-        "workload" => Some("WorkloadInfo"),
-        "session" => Some("Session"),
-        "dns" => Some("DnsQuery"),
-        _ => None,
+    match (domain, _kind) {
+        ("secure_connect", "profile") => Some("SecureConnectProfile"),
+        ("secure_connect", "gateway") => Some("SecureConnectGateway"),
+        ("secure_connect", "peer") => Some("SecureConnectPeer"),
+        ("secure_connect", _) => Some("SecureConnectSession"),
+        (domain, _) => match domain {
+            "process" => Some("Process"),
+            "file" => Some("FileEvent"),
+            "network" => Some("NetworkFlow"),
+            "container" => Some("ContainerContext"),
+            "workload" => Some("WorkloadInfo"),
+            "session" => Some("Session"),
+            "dns" => Some("DnsQuery"),
+            _ => None,
+        },
     }
 }
 

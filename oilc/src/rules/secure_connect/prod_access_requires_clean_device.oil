@@ -1,0 +1,38 @@
+rule "prod_access_requires_clean_device" {
+    from secure_connect.connect as sc, endpoint.process as p, identity.session as s
+
+    match secure_connect.connect as sc then identity.session as s
+
+    where
+        sc.profile == "prod-admin"
+        and device.posture.kernel_sensor == true
+        and device.posture.disk_encryption == true
+        and device.posture.agent_healthy == true
+
+    let age_risk = s.age > 8h
+    let host_risk = host.risk_score > 0.7
+    let medium_risk = age_risk or host_risk
+    let high_risk = age_risk and host_risk
+
+    score 20 
+        +20 if age_risk 
+        +40 if host_risk
+
+    verify require user.device.trusted
+
+    respond
+        if high_risk {
+            alert high "prod access requires approval"
+            challenge mfa
+            notify "High-risk Secure Connect access attempt"
+            open_case "High-risk prod access attempt"
+        }
+        else if medium_risk {
+            alert medium "prod access requires MFA"
+            challenge mfa
+            notify "Medium-risk Secure Connect access attempt"
+        }
+        else {
+            alert informational "prod access granted"
+        }
+}

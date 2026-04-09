@@ -1,0 +1,40 @@
+set prod_db_read_domains = ["db.internal.prod"]
+set corp_internal_domains = ["corp.internal", "api.corp.internal"]
+
+rule "secure_connect_scope_violation" {
+    from secure_connect.session as sc, network.connect as n
+
+    correlate secure_connect.session as sc with network.connect as n on sc.session_id == n.session_id
+
+    where
+        (
+            sc.scope == "prod-db-read"
+            and n.dest_domain not in prod_db_read_domains
+        )
+        or
+        (
+            sc.scope == "corp-internal-web"
+            and n.dest_domain not in corp_internal_domains
+        )
+
+    let outbound = n.direction == "outbound"
+    let suspicious_tool = n.process_name in ["curl", "wget", "python", "bash"]
+
+    score 70 
+        +10 if outbound 
+        +20 if suspicious_tool
+
+    emit fact secure_connect.scope_violation(sc.session_id, n.dest_domain) expires 24h
+
+    respond
+        if suspicious_tool {
+            alert high "Secure Connect scope violation with suspicious process"
+            block egress n.dest_domain
+            open_case "Scope violation with suspicious tool"
+            notify "Secure Connect scope violation blocked"
+        }
+        else {
+            alert medium "Secure Connect scope violation"
+            notify "Secure Connect scope violation detected"
+        }
+}

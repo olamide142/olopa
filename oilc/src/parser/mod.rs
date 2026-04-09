@@ -632,7 +632,9 @@ impl Parser {
         let entity_type = self.name_atom_text(&entity_tok)?;
 
         let alias = if self.match_ident_text("as") {
-            let tok = self.expect_ident("expected alias after 'as' in graph pattern")?.clone();
+            let tok = self
+                .expect_ident("expected alias after 'as' in graph pattern")?
+                .clone();
             Spanned::new(self.ident_text(&tok)?, tok.span)
         } else {
             self.error_here("expected 'as <alias>' in graph pattern");
@@ -640,7 +642,9 @@ impl Parser {
         };
 
         let edge_type = if self.match_kind(&TokenKind::Arrow) {
-            let edge_tok = self.expect_name_atom("expected edge type after '->'")?.clone();
+            let edge_tok = self
+                .expect_name_atom("expected edge type after '->'")?
+                .clone();
             Some(self.name_atom_text(&edge_tok)?)
         } else {
             None
@@ -709,7 +713,9 @@ impl Parser {
                 }
             };
             let alias = if self.match_ident_text("as") {
-                let tok = self.expect_ident("expected alias after 'as' in around arm")?.clone();
+                let tok = self
+                    .expect_ident("expected alias after 'as' in around arm")?
+                    .clone();
                 Spanned::new(self.ident_text(&tok)?, tok.span.clone())
             } else {
                 self.error_here("expected 'as <alias>' in around arm");
@@ -2511,7 +2517,10 @@ rule "graph_shape" {
             RuleBody::Graph(graph) => {
                 assert_eq!(graph.source.domain, "endpoint");
                 assert_eq!(graph.source.event, "process");
-                assert_eq!(graph.source.alias.as_ref().map(|a| a.node.as_str()), Some("p"));
+                assert_eq!(
+                    graph.source.alias.as_ref().map(|a| a.node.as_str()),
+                    Some("p")
+                );
                 assert_eq!(graph.patterns.len(), 2);
                 assert_eq!(graph.patterns[0].entity_type, "process");
                 assert_eq!(graph.patterns[0].alias.node, "proc");

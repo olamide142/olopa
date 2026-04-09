@@ -3,16 +3,15 @@
 // 1) Runtime roots available without declaration (host, process, user, ...)
 // 2) Entity/field contracts used by resolver and type-checking.
 
-// --------------------------------------------------------------------------
-// Root model
-// --------------------------------------------------------------------------
-// A root can be used as:
-// - variable-like entity root: `host.id`
-// - callable lookup root: `host(p.host_id).baseline.domains`
 root host: Host
 root process: Process
 root user: User
 root session: Session
+root device: Device
+root secure_connect: SecureConnectSession
+root sc_profile: SecureConnectProfile
+root sc_gateway: SecureConnectGateway
+root sc_peer: SecureConnectPeer
 root container: ContainerContext
 root workload: WorkloadInfo
 root network: NetworkFlow
@@ -20,23 +19,13 @@ root file: FileEvent
 root dns: DnsQuery
 root time: TimeContext
 
-// --------------------------------------------------------------------------
-// Core entities
-// --------------------------------------------------------------------------
-
-// Virtual wall-clock context derived from event timestamp.
 entity TimeContext {
-    // Lower-case names: monday..sunday
     weekday: Str,
-    // Local hour [0, 23]
     hour: Int,
-    // Local minute [0, 59]
     minute: Int,
-    // Monday-Friday and hour in [9,17]
     is_business_hour: Bool,
 }
 
-// Process and execution context.
 entity Process {
     id: Int,
     pid: Int,
@@ -52,9 +41,10 @@ entity Process {
     parent: Process?,
     user: User?,
     binary: Binary?,
+    session_id: Str?,
+    secure_connect_session_id: Str?,
 }
 
-// Binary metadata attached to a process execution.
 entity Binary {
     path: Path,
     filename: Path?,
@@ -62,15 +52,15 @@ entity Binary {
     hash: Str?,
 }
 
-// Host state and baseline profile.
 entity Host {
     id: Str,
     hostname: Str?,
     risk_score: Float?,
     baseline: HostBaseline,
+    device_id: Str?,
+    secure_connect_enabled: Bool?,
 }
 
-// Host baseline used by anomaly checks.
 entity HostBaseline {
     domains: Set<Str>,
     ips: Set<IpAddr>,
@@ -78,12 +68,10 @@ entity HostBaseline {
     users: Set<Str>,
 }
 
-// External baseline profile queried by baseline.image(...) / baseline.workload(...).
 entity BaselineProfile {
     allowed_processes: Set<Str>,
 }
 
-// User identity and behavior profile.
 entity User {
     id: Str,
     uid: Int?,
@@ -92,9 +80,9 @@ entity User {
     trust_score: Float?,
     baseline: UserBaseline,
     last_known_device: Str?,
+    secure_connect_groups: Set<Str>,
 }
 
-// User baseline used in geo/device/time checks.
 entity UserBaseline {
     countries: Set<Str>,
     hosts: Set<Str>,
@@ -102,21 +90,19 @@ entity UserBaseline {
     login_hours: Set<Int>,
 }
 
-// Authentication/session telemetry.
 entity Session {
     id: Str,
     user_id: Str,
     device_id: Str?,
     country: Str?,
+    geo: Str?,
     mfa_present: Bool?,
     age: Duration?,
+    trust_score: Float?,
+    auth_method: Str?,
+    active: Bool?,
 }
 
-// --------------------------------------------------------------------------
-// File and network entities
-// --------------------------------------------------------------------------
-
-// File event payload (open/write/etc).
 entity FileEvent {
     path: Path,
     mode: Str?,
@@ -126,15 +112,17 @@ entity FileEvent {
     last_modified: Duration?,
 }
 
-// Network flow event payload.
 entity NetworkFlow {
     process_id: Int?,
+    session_id: Str?,
+    secure_connect_session_id: Str?,
     direction: Str?,
     bytes_out: Int?,
+    bytes_in: Int?,
+    tunneled: Bool?,
     dest: NetworkEndpoint,
 }
 
-// Endpoint details for network telemetry.
 entity NetworkEndpoint {
     ip: IpAddr?,
     port: Int?,
@@ -145,24 +133,19 @@ entity NetworkEndpoint {
     asn: Str?,
     reputation: Str?,
     domain: Str?,
+    is_secure_connect_gateway: Bool?,
+    service_class: Str?,
 }
 
-// DNS query telemetry used in stress-test rules.
 entity DnsQuery {
     domain: DnsDomain,
 }
 
-// DNS domain features for detection logic.
 entity DnsDomain {
     value: Str?,
     entropy: Float?,
 }
 
-// --------------------------------------------------------------------------
-// Container and workload entities
-// --------------------------------------------------------------------------
-
-// Container context/runtime view.
 entity ContainerContext {
     container_id: Str,
     pod_uid: Str?,
@@ -177,43 +160,118 @@ entity ContainerContext {
     initiator: InitiatorRef?,
 }
 
-// Container image identity.
 entity ContainerImage {
     id: Str?,
     repo: Str?,
     tag: Str?,
 }
 
-// Container labels that are commonly referenced.
 entity ContainerLabels {
     environment: Str?,
 }
 
-// Security configuration for container launch.
 entity ContainerSecurity {
     privileged: Bool,
 }
 
-// Namespace escape/host-sharing indicators.
 entity ContainerNamespaces {
     host_pid: Bool,
     host_network: Bool,
     host_ipc: Bool,
 }
 
-// Capability additions requested by the container.
 entity ContainerCapabilities {
     added: Set<Str>,
 }
 
-// Actor that initiated an operation.
 entity InitiatorRef {
     user_id: Str?,
 }
 
-// Kubernetes/workload metadata.
 entity WorkloadInfo {
     pod_uid: Str?,
     namespace: Str?,
     name: Str?,
+}
+
+entity SecureConnectSession {
+    id: Str,
+    user_id: Str?,
+    device_id: Str?,
+    host_id: Str?,
+    profile_id: Str?,
+    gateway_id: Str?,
+    peer_id: Str?,
+    active: Bool,
+    state: Str?,
+    established: Bool?,
+    age: Duration?,
+    risk_score: Float?,
+    mfa_bound: Bool?,
+    route_mode: Str?,
+    dns_mode: Str?,
+    client_ip: IpAddr?,
+    tunnel_ip: IpAddr?,
+    country: Str?,
+    geo: Str?,
+    declared_scope: Str?,
+}
+
+entity Device {
+    id: Str,
+    hostname: Str?,
+    serial: Str?,
+    managed: Bool?,
+    compliant: Bool?,
+    trust_score: Float?,
+    posture: DevicePosture,
+}
+
+entity DevicePosture {
+    agent_healthy: Bool?,
+    kernel_sensor: Bool?,
+    disk_encryption: Bool?,
+    screen_lock: Bool?,
+    os_supported: Bool?,
+    firewall_enabled: Bool?,
+    edr_present: Bool?,
+    last_seen_age: Duration?,
+    risk_score: Float?,
+}
+
+entity SecureConnectProfile {
+    id: Str,
+    name: Str,
+    mode: Str?,
+    scope: Str?,
+    allow_cidrs: Set<Str>,
+    allow_domains: Set<Str>,
+    allow_ports: Set<Int>,
+    dns_servers: Set<IpAddr>,
+    require_mfa: Bool?,
+    require_managed_device: Bool?,
+    require_compliant_device: Bool?,
+    max_session_age: Duration?,
+}
+
+entity SecureConnectGateway {
+    id: Str,
+    name: Str?,
+    region: Str?,
+    hostname: Str?,
+    public_ip: IpAddr?,
+    internal_ip: IpAddr?,
+    port: Int?,
+    healthy: Bool?,
+    environment: Str?,
+}
+
+entity SecureConnectPeer {
+    id: Str,
+    public_key: Str?,
+    endpoint_ip: IpAddr?,
+    endpoint_port: Int?,
+    latest_handshake_age: Duration?,
+    rx_bytes: Int?,
+    tx_bytes: Int?,
 }

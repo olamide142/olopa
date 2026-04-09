@@ -1,0 +1,18 @@
+rule "revoke_session_on_critical_host_signal" {
+    from secure_connect.session as sc, endpoint.alert as a
+
+    correlate secure_connect.session as sc with endpoint.alert as a on sc.host_id == a.host_id
+
+    where
+        a.severity == "critical"
+        and a.resolved == false
+
+    score 90 + 10 if a.category == "runtime"
+
+    respond
+        alert critical "Secure Connect session revoked due to critical host risk"
+        revoke session
+        snapshot host.timeline, attack.graph(sc.host_id)
+        open_case "ZTNA revocation triggered by host detection"
+        notify "Secure Connect session revoked"
+}

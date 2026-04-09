@@ -1,0 +1,23 @@
+rule "secure_connect_graph_risk_chain" {
+    from secure_connect.session as sc
+
+    graph secure_connect.session as sc {
+        session as s -> host,
+        host as h -> process,
+        process as p -> alert,
+        alert as a
+    }
+
+    where
+        a.severity == "critical"
+        and a.resolved == false
+
+    score 85 
+        +15 if p.name in ["bash", "sh", "python", "curl"]
+
+    respond
+        alert critical "Critical graph-linked Secure Connect risk chain"
+        revoke session
+        snapshot attack.graph(sc.session_id), host.timeline
+        open_case "Graph-linked Secure Connect risk chain"
+}
