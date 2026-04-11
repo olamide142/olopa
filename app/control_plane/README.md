@@ -32,11 +32,16 @@ uvicorn control_server.main:app --host 0.0.0.0 --port 8100
 - `RUST_REQUEST_TIMEOUT_S` (default `3.0`)
 - `COMPILER_TIMEOUT_S` (default `20`)
 - `OILC_MANIFEST_PATH` (default `<repo>/oilc/Cargo.toml`)
+- `AGENT_DOWNLOAD_URL` (optional upstream URL for `/downloads/agent/latest`)
+- `AGENT_BINARY_PATH` (optional local file path for `/downloads/agent/latest`)
 
 ## Endpoints
 
 - `GET /` (render `template/index.html`)
 - `GET /app` (render `template/app.html`)
+- `GET /install` (redirect to `/app#install`)
+- `GET /install.sh` (bootstrap install script)
+- `GET /downloads/agent/latest` (agent binary download/redirect)
 - `GET /health`
 - `GET /api/v1/control/status`
 - `GET /api/v1/ingest/stats` (proxy to Rust ingest)

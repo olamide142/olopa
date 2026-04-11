@@ -17,7 +17,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, Request
 import httpx
 from pydantic import BaseModel, Field
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -48,6 +48,51 @@ async def app_page(request: Request) -> HTMLResponse:
         request=request,
         name="app.html",
         context={"request": request},
+    )
+
+
+@app.get("/install")
+async def install_page_redirect() -> RedirectResponse:
+    """Route install landing traffic into the in-app install panel."""
+    return RedirectResponse(url="/app#install", status_code=307)
+
+
+@app.get("/install.sh")
+async def install_script() -> FileResponse:
+    """Return the checked-in installer script from template/install.sh."""
+    script_path = template_root / "install.sh"
+    if not script_path.exists() or not script_path.is_file():
+        raise HTTPException(status_code=404, detail="install script not found")
+    return FileResponse(
+        path=str(script_path),
+        media_type="text/x-shellscript",
+        filename="install.sh",
+    )
+
+
+@app.get("/downloads/agent/latest")
+async def download_agent_latest() -> FileResponse | RedirectResponse:
+    """Download latest agent binary from local path or configured upstream URL."""
+    configured_path = settings.agent_binary_path.strip()
+    if configured_path:
+        local_path = Path(configured_path)
+        if local_path.exists() and local_path.is_file():
+            return FileResponse(
+                path=str(local_path),
+                media_type="application/octet-stream",
+                filename=local_path.name,
+            )
+
+    configured_url = settings.agent_download_url.strip()
+    if configured_url:
+        return RedirectResponse(url=configured_url, status_code=307)
+
+    raise HTTPException(
+        status_code=404,
+        detail=(
+            "agent download is not configured; set AGENT_BINARY_PATH or "
+            "AGENT_DOWNLOAD_URL in control-plane environment"
+        ),
     )
 
 

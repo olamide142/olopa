@@ -272,6 +272,94 @@
       letter-spacing: 0.08em;
     }
 
+    .install-oneliner {
+      margin-top: 18px;
+      padding: 14px;
+      border: 1px solid var(--border2);
+      background: rgba(14, 29, 53, 0.82);
+      font-family: var(--mono);
+      max-width: 680px;
+    }
+
+    .install-head {
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-size: 10px;
+      margin-bottom: 8px;
+    }
+
+    .install-head .rec {
+      color: var(--warn);
+      margin-left: 8px;
+    }
+
+    .install-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .install-row code {
+      flex: 1 1 320px;
+      min-width: 0;
+      padding: 9px 10px;
+      border: 1px solid var(--border);
+      background: rgba(8, 20, 39, 0.9);
+      color: var(--text-hi);
+      font-size: 11px;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      overflow-x: auto;
+    }
+
+    .install-copy-btn {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-hi);
+      border: 1px solid var(--border2);
+      background: var(--bg2);
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+
+    .install-copy-btn:hover {
+      background: var(--bg3);
+    }
+
+    .install-footnote {
+      font-size: 12px;
+      line-height: 1.7;
+      color: var(--text);
+    }
+
+    .install-footnote a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .install-footnote a:hover {
+      text-decoration: underline;
+    }
+
+    .install-security {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--text-dim);
+      line-height: 1.6;
+    }
+
+    .install-copy-status {
+      margin-top: 8px;
+      font-size: 10px;
+      color: var(--text-dim);
+      letter-spacing: 0.05em;
+    }
+
     /* ── HERO TERMINAL ── */
     .hero-terminal {
       background: var(--bg2);
@@ -1275,6 +1363,33 @@
         <a href="#beta" class="btn-primary">Request Beta Access</a>
         <span class="cta-note">Limited early-access cohort · Linux 5.8+</span>
       </div>
+      <div class="install-oneliner">
+        <div class="install-head">one-line install</div>
+        <div class="install-row">
+          <code>$ curl -fLs install.olopa.io | sudo sh</code>
+          <button class="install-copy-btn" type="button"
+            data-copy="curl -fLs install.olopa.io | sudo sh">COPY</button>
+        </div>
+
+        <div class="install-head">with enrollment token <span class="rec">RECOMMENDED</span></div>
+        <div class="install-row">
+          <code>$ curl -fLs install.olopa.io | OLOPA_TOKEN=your_token_here sudo -E sh</code>
+          <button class="install-copy-btn" type="button"
+            data-copy="curl -fLs install.olopa.io | OLOPA_TOKEN=your_token_here sudo -E sh">COPY</button>
+        </div>
+
+        <p class="install-footnote">
+          Requires Linux ≥ 5.4 and root. The script installs the binary, writes
+          <code>/etc/olopa/config.toml</code>, and registers a systemd service.
+          <a href="https://install.olopa.io/install.sh" target="_blank" rel="noopener noreferrer">View install script source</a>
+          ·
+          <a href="#security-notes">Security notes</a>
+        </p>
+        <p class="install-security" id="security-notes">
+          Security notes: review script contents before execution and run only on trusted hosts.
+        </p>
+        <p class="install-copy-status" id="install-copy-status">Click COPY to copy command.</p>
+      </div>
     </div>
 
     <div class="hero-terminal fade-in">
@@ -1737,6 +1852,25 @@ rule "root_ssh_write_by_non_root_process" {
           e.preventDefault();
           target.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
+      });
+    });
+
+    // Install command copy buttons
+    const installCopyStatus = document.getElementById('install-copy-status');
+    document.querySelectorAll('.install-copy-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const value = btn.getAttribute('data-copy') || '';
+        if (!navigator.clipboard || !navigator.clipboard.writeText) {
+          if (installCopyStatus) installCopyStatus.textContent = 'Clipboard unavailable. Copy manually.';
+          return;
+        }
+        navigator.clipboard.writeText(value)
+          .then(() => {
+            if (installCopyStatus) installCopyStatus.textContent = 'Command copied.';
+          })
+          .catch(() => {
+            if (installCopyStatus) installCopyStatus.textContent = 'Clipboard unavailable. Copy manually.';
+          });
       });
     });
 

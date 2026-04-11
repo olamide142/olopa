@@ -5,6 +5,23 @@
 :{$PORT} {
 	encode zstd gzip
 
+	@install_downloads {
+		host install.olopa.io
+		path /downloads/* /install.sh /health
+	}
+	handle @install_downloads {
+		reverse_proxy 127.0.0.1:8100
+	}
+
+	@install_root {
+		host install.olopa.io
+		path /
+	}
+	redir @install_root /install.sh 308
+
+	@install_host host install.olopa.io
+	redir @install_host https://console.olopa.io/app#install 308
+
 	@root path /
 	redir @root /app 308
 

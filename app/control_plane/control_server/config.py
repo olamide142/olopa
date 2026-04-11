@@ -44,6 +44,8 @@ class Settings:
     rust_request_timeout_s: float
     compiler_timeout_s: int
     oilc_manifest_path: str
+    agent_download_url: str
+    agent_binary_path: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -58,4 +60,6 @@ class Settings:
             rust_request_timeout_s=_env_float("RUST_REQUEST_TIMEOUT_S", 3.0),
             compiler_timeout_s=_env_int("COMPILER_TIMEOUT_S", 20),
             oilc_manifest_path=_env_str("OILC_MANIFEST_PATH", str(default_manifest)),
+            agent_download_url=_env_str("AGENT_DOWNLOAD_URL", ""),
+            agent_binary_path=_env_str("AGENT_BINARY_PATH", ""),
         )

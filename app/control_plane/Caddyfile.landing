@@ -5,6 +5,24 @@
 :{$PORT} {
 	encode zstd gzip
 
+	# install.olopa.io routes into the in-app install panel.
+	@install_downloads {
+		host install.olopa.io
+		path /downloads/* /install.sh /health
+	}
+	handle @install_downloads {
+		reverse_proxy 127.0.0.1:8100
+	}
+
+	@install_root {
+		host install.olopa.io
+		path /
+	}
+	redir @install_root /install.sh 308
+
+	@install_host host install.olopa.io
+	redir @install_host https://console.olopa.io/app#install 308
+
 	# Keep Railway healthchecks working.
 	@health path /health
 	handle @health {

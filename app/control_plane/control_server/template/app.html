@@ -639,6 +639,46 @@ body > *{position:relative;z-index:1}
 .run-progress{flex:1;height:2px;background:var(--border);overflow:hidden}
 .run-progress-fill{height:100%;background:var(--accent);width:0;transition:width 0.4s}
 
+/* ══════════════════════════════════════
+   INSTALL PANEL
+══════════════════════════════════════ */
+#panel-install{overflow:hidden}
+.install-layout{flex:1;overflow-y:auto;padding:14px;display:grid;grid-template-columns:1fr 340px;gap:10px;background:var(--bg3)}
+.install-card{
+  background:var(--bg2);
+  border:1px solid var(--border);
+  border-radius:var(--radius-sm);
+  box-shadow:var(--shadow-card);
+  padding:14px;
+}
+.install-title{
+  font-family:var(--mono);
+  font-size:10px;
+  letter-spacing:0.14em;
+  text-transform:uppercase;
+  color:var(--text-hi);
+  margin-bottom:10px;
+}
+.install-copy{font-size:12px;color:var(--text);line-height:1.7;margin-bottom:10px}
+.install-code{
+  margin-top:8px;
+  padding:12px;
+  background:var(--bg3);
+  border:1px solid var(--border2);
+  border-radius:var(--radius-xs);
+  font-family:var(--mono);
+  font-size:10px;
+  color:var(--text-hi);
+  white-space:pre-wrap;
+  word-break:break-word;
+}
+.install-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.install-note{font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:0.05em}
+.install-kv{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)}
+.install-kv:last-child{border-bottom:none}
+.install-k{font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:0.08em}
+.install-v{font-family:var(--mono);font-size:9px;color:var(--text-hi);text-align:right}
+
 @keyframes panelIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 
 /* ══════════════════════════════════════
@@ -648,6 +688,7 @@ body > *{position:relative;z-index:1}
   .metrics-grid{grid-template-columns:repeat(2,1fr)}
   .incidents-layout{grid-template-columns:300px 1fr}
   .oil-layout{grid-template-columns:1fr 300px}
+  .install-layout{grid-template-columns:1fr}
 }
 @media (max-width:1100px){
   :root{--sidebar:196px}
@@ -770,6 +811,9 @@ body > *{position:relative;z-index:1}
       </div>
       <div class="sb-item" data-panel="compiler" onclick="switchPanel('compiler',this)">
         <span class="sb-icon">⚙</span> Compiler
+      </div>
+      <div class="sb-item" data-panel="install" onclick="switchPanel('install',this)">
+        <span class="sb-icon">⇩</span> Install Agent
       </div>
     </div>
     <div style="flex:1"></div>
@@ -1075,6 +1119,37 @@ body > *{position:relative;z-index:1}
       </div>
     </div>
 
+    <!-- ═══ INSTALL PANEL ═══ -->
+    <div class="panel" id="panel-install">
+      <div class="panel-header">
+        <span class="panel-title">Install Agent</span>
+        <span class="panel-sub">/ bootstrap Linux host enrollment</span>
+        <div class="panel-actions">
+          <a class="btn btn-primary" id="install-download-btn" href="/downloads/agent/latest">Download Agent</a>
+          <a class="btn" id="install-script-btn" href="/install.sh">Download install.sh</a>
+        </div>
+      </div>
+      <div class="install-layout">
+        <div class="install-card">
+          <div class="install-title">Quick Install</div>
+          <p class="install-copy">Use the installer script to download and place the latest Olopa agent binary.</p>
+          <pre class="install-code" id="install-cmd">curl -fsSL https://console.olopa.io/install.sh | sh</pre>
+          <div class="install-row">
+            <button class="btn btn-primary" onclick="copyInstallCommand()">Copy Command</button>
+            <button class="btn" onclick="window.open('/install.sh','_blank')">Open Script</button>
+          </div>
+          <p class="install-note" id="install-copy-status">Copies command to clipboard for terminal paste.</p>
+        </div>
+        <div class="install-card">
+          <div class="install-title">Artifacts</div>
+          <div class="install-kv"><span class="install-k">Install Endpoint</span><span class="install-v">/install.sh</span></div>
+          <div class="install-kv"><span class="install-k">Binary Endpoint</span><span class="install-v">/downloads/agent/latest</span></div>
+          <div class="install-kv"><span class="install-k">Install Redirect</span><span class="install-v">install.olopa.io → /app#install</span></div>
+          <div class="install-kv"><span class="install-k">Status</span><span class="install-v" id="install-status">checking…</span></div>
+        </div>
+      </div>
+    </div>
+
   </div><!-- /content -->
 </div><!-- /main -->
 
@@ -1083,12 +1158,88 @@ body > *{position:relative;z-index:1}
    NAVIGATION
 ════════════════════════════════════════════════ */
 function switchPanel(name, el) {
+  const panel = document.getElementById('panel-' + name);
+  if (!panel) return;
+
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.sb-item').forEach(s => s.classList.remove('active'));
-  document.getElementById('panel-' + name).classList.add('active');
-  el.classList.add('active');
+  panel.classList.add('active');
+
+  const navItem = el || document.querySelector(`.sb-item[data-panel="${name}"]`);
+  if (navItem) navItem.classList.add('active');
+
+  if (window.location.hash !== '#' + name) {
+    window.history.replaceState(null, '', '#' + name);
+  }
+
   if (name === 'graph') { setTimeout(initGraph, 50); }
   if (name === 'compiler') { initCompilerUI(); }
+}
+
+function initPanelFromHash() {
+  const hash = (window.location.hash || '').replace(/^#/, '').trim();
+  if (!hash) return;
+  const navItem = document.querySelector(`.sb-item[data-panel="${hash}"]`);
+  if (navItem) switchPanel(hash, navItem);
+}
+
+window.addEventListener('hashchange', initPanelFromHash);
+
+function buildInstallBaseUrl() {
+  if (window.location.hostname === 'install.olopa.io') return 'https://console.olopa.io';
+  return window.location.origin;
+}
+
+function configureInstallPanel() {
+  const base = buildInstallBaseUrl();
+  const installScriptUrl = `${base}/install.sh`;
+  const downloadUrl = `${base}/downloads/agent/latest`;
+
+  const cmdEl = document.getElementById('install-cmd');
+  const downloadBtn = document.getElementById('install-download-btn');
+  const scriptBtn = document.getElementById('install-script-btn');
+  if (cmdEl) cmdEl.textContent = `curl -fsSL ${installScriptUrl} | sh`;
+  if (downloadBtn) downloadBtn.href = downloadUrl;
+  if (scriptBtn) scriptBtn.href = installScriptUrl;
+
+  const statusEl = document.getElementById('install-status');
+  if (!statusEl) return;
+  statusEl.textContent = 'checking…';
+  fetch(downloadUrl, { method: 'HEAD', redirect: 'manual' })
+    .then(resp => {
+      if (resp.ok || [301, 302, 307, 308].includes(resp.status)) {
+        statusEl.textContent = 'download ready';
+        statusEl.style.color = 'var(--ok)';
+      } else {
+        statusEl.textContent = `not ready (${resp.status})`;
+        statusEl.style.color = 'var(--warn)';
+      }
+    })
+    .catch(() => {
+      statusEl.textContent = 'unreachable';
+      statusEl.style.color = 'var(--red)';
+    });
+}
+
+function copyInstallCommand() {
+  const cmdEl = document.getElementById('install-cmd');
+  const statusEl = document.getElementById('install-copy-status');
+  if (!cmdEl || !statusEl) return;
+  const cmd = cmdEl.textContent || '';
+  if (!navigator.clipboard || !navigator.clipboard.writeText) {
+    statusEl.textContent = 'Clipboard unavailable. Copy command manually.';
+    statusEl.style.color = 'var(--warn)';
+    return;
+  }
+  navigator.clipboard.writeText(cmd)
+    .then(() => {
+      statusEl.textContent = 'Install command copied.';
+      statusEl.style.color = 'var(--ok)';
+    })
+    .catch(() => {
+      statusEl.textContent = 'Clipboard unavailable. Copy command manually.';
+      statusEl.style.color = 'var(--warn)';
+    });
 }
 
 /* ════════════════════════════════════════════════
@@ -2978,7 +3129,9 @@ function runFullCompile(){
    INIT
 ════════════════════════════════════════════════ */
 initCompilerUI();
+configureInstallPanel();
 loadTemplate('webshell');
+initPanelFromHash();
 setTimeout(liveUpdate,50);
 </script>
 </body>
