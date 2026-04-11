@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 import httpx
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -76,8 +76,8 @@ async def install_script() -> FileResponse:
     )
 
 
-@app.get("/downloads/agent/latest")
-async def download_agent_latest() -> FileResponse | RedirectResponse:
+@app.get("/downloads/agent/latest", response_model=None)
+async def download_agent_latest() -> Response:
     """Download latest agent binary from local path or configured upstream URL."""
     configured_path = settings.agent_binary_path.strip()
     if configured_path:
