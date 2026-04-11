@@ -1144,7 +1144,7 @@ body > *{position:relative;z-index:1}
           <div class="install-title">Artifacts</div>
           <div class="install-kv"><span class="install-k">Install Endpoint</span><span class="install-v">/install.sh</span></div>
           <div class="install-kv"><span class="install-k">Binary Endpoint</span><span class="install-v">/downloads/agent/latest</span></div>
-          <div class="install-kv"><span class="install-k">Install Redirect</span><span class="install-v">install.olopa.io → /#install</span></div>
+          <div class="install-kv"><span class="install-k">Install Endpoint</span><span class="install-v">https://console.olopa.io/install.sh</span></div>
           <div class="install-kv"><span class="install-k">Status</span><span class="install-v" id="install-status">checking…</span></div>
         </div>
       </div>
@@ -1186,7 +1186,6 @@ function initPanelFromHash() {
 window.addEventListener('hashchange', initPanelFromHash);
 
 function buildInstallBaseUrl() {
-  if (window.location.hostname === 'install.olopa.io') return 'https://console.olopa.io';
   return window.location.origin;
 }
 

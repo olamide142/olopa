@@ -1383,22 +1383,22 @@
       <div class="install-oneliner">
         <div class="install-head">one-line install</div>
         <div class="install-row">
-          <code class="install-cmd" data-cmd="curl -fLs install.olopa.io | sudo sh">$ curl -fLs install.olopa.io | sudo sh</code>
+          <code class="install-cmd" data-cmd="curl -fLs https://console.olopa.io/install.sh | sudo sh">$ curl -fLs https://console.olopa.io/install.sh | sudo sh</code>
           <button class="install-copy-btn" type="button"
-            data-copy="curl -fLs install.olopa.io | sudo sh">COPY</button>
+            data-copy="curl -fLs https://console.olopa.io/install.sh | sudo sh">COPY</button>
         </div>
 
         <div class="install-head">with enrollment token <span class="rec">RECOMMENDED</span></div>
         <div class="install-row">
-          <code class="install-cmd" data-cmd="curl -fLs install.olopa.io | OLOPA_TOKEN=your_token_here sudo -E sh">$ curl -fLs install.olopa.io | OLOPA_TOKEN=your_token_here sudo -E sh</code>
+          <code class="install-cmd" data-cmd="curl -fLs https://console.olopa.io/install.sh | OLOPA_TOKEN=your_token_here sudo -E sh">$ curl -fLs https://console.olopa.io/install.sh | OLOPA_TOKEN=your_token_here sudo -E sh</code>
           <button class="install-copy-btn" type="button"
-            data-copy="curl -fLs install.olopa.io | OLOPA_TOKEN=your_token_here sudo -E sh">COPY</button>
+            data-copy="curl -fLs https://console.olopa.io/install.sh | OLOPA_TOKEN=your_token_here sudo -E sh">COPY</button>
         </div>
 
         <p class="install-footnote">
           Requires Linux ≥ 5.4 and root. The script installs the binary, writes
           <code>/etc/olopa/config.toml</code>, and registers a systemd service.
-          <a href="https://install.olopa.io/install.sh" target="_blank" rel="noopener noreferrer">View install script source</a>
+          <a href="https://console.olopa.io/install.sh" target="_blank" rel="noopener noreferrer">View install script source</a>
           ·
           <a href="#security-notes">Security notes</a>
         </p>

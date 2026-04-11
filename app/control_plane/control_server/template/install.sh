@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Olopa Agent Installer
-# Usage: curl -fLs install.olopa.io | sh
-# Usage: curl -fLs install.olopa.io | OLOPA_TOKEN=<token> sh
+# Usage: curl -fLs https://console.olopa.io/install.sh | sh
+# Usage: curl -fLs https://console.olopa.io/install.sh | OLOPA_TOKEN=<token> sh
 #
 # Environment variables:
 #   OLOPA_TOKEN        - Enrollment token (required for managed install)
@@ -23,16 +23,22 @@ CYAN="\033[36m"
 RESET="\033[0m"
 
 print_banner() {
-  printf "\n"
-  printf "${BOLD}${CYAN}"
-  printf "  ██████╗ ██╗      ██████╗ ██████╗  █████╗ \n"
-  printf " ██╔═══██╗██║     ██╔═══██╗██╔══██╗██╔══██╗\n"
-  printf " ██║   ██║██║     ██║   ██║██████╔╝███████║\n"
-  printf " ██║   ██║██║     ██║   ██║██╔═══╝ ██╔══██║\n"
-  printf " ╚██████╔╝███████╗╚██████╔╝██║     ██║  ██║\n"
-  printf "  ╚═════╝ ╚══════╝ ╚═════╝ ╚═╝     ╚═╝  ╚═╝\n"
-  printf "${RESET}"
-  printf "  ${DIM}kernel-native security agent${RESET}\n\n"
+    printf "\n"
+    printf "${BOLD}${CYAN}"
+    printf "  /$$$$$$  /$$                              
+    printf " /$$__  $$| $$                              \n"
+    printf "| $$  \ $$| $$  /$$$$$$   /$$$$$$   /$$$$$$ \n"
+    printf "| $$  | $$| $$ /$$__  $$ /$$__  $$ |____  $$\n"
+    printf "| $$  | $$| $$| $$  \ $$| $$  \ $$  /$$$$$$$\n"
+    printf "| $$  | $$| $$| $$  | $$| $$  | $$ /$$__  $$\n"
+    printf "|  $$$$$$/| $$|  $$$$$$/| $$$$$$$/|  $$$$$$$\n"
+    printf " \______/ |__/ \______/ | $$____/  \_______/\n"
+    printf "                        | $$\n"
+    printf "                        | $$\n"
+    printf "                        |__/\n"
+    printf "--------------------------------------v0.0.1----\n"
+    printf "${RESET}"
+    printf "  ${DIM}kernel-native security agent${RESET}\n\n"
 }
 
 info()    { printf "  ${CYAN}→${RESET}  %s\n" "$1"; }
@@ -61,7 +67,7 @@ RELEASES_URL="https://releases.olopa.io"
 
 check_root() {
   if [ "$(id -u)" -ne 0 ]; then
-    die "This installer must be run as root. Try: curl -fLs install.olopa.io | sudo sh"
+    die "This installer must be run as root. Try: curl -fLs https://console.olopa.io/install.sh | sudo sh"
   fi
 }
 
