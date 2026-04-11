@@ -52,7 +52,15 @@ class Settings:
         """Create settings from environment with safe defaults."""
         repo_root = Path(__file__).resolve().parents[3]
         default_manifest = repo_root / "oilc" / "Cargo.toml"
-        rust_base = _env_str("RUST_INGEST_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+        # Prefer explicit control-plane config, but accept ingest URL aliases
+        # typically used in deployment systems (for example Railway).
+        rust_base = _env_str(
+            "RUST_INGEST_BASE_URL",
+            _env_str("INGEST_SERVER_URL", "http://127.0.0.1:8000"),
+        ).strip()
+        if "://" not in rust_base:
+            rust_base = f"http://{rust_base}"
+        rust_base = rust_base.rstrip("/")
         return cls(
             host=_env_str("CONTROL_HOST", "0.0.0.0"),
             port=_env_int("CONTROL_PORT", 8100),

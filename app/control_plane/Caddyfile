@@ -5,6 +5,11 @@
 :{$PORT} {
 	encode zstd gzip
 
+	@console_host host console.olopa.io
+	handle @console_host {
+		reverse_proxy 127.0.0.1:8100
+	}
+
 	@install_downloads {
 		host install.olopa.io
 		path /downloads/* /install.sh /health
@@ -20,10 +25,49 @@
 	redir @install_root /install.sh 308
 
 	@install_host host install.olopa.io
-	redir @install_host https://console.olopa.io/app#install 308
+	redir @install_host https://console.olopa.io/#install 308
 
-	@root path /
-	redir @root /app 308
+	@landing_health {
+		host olopa.io www.olopa.io
+		path /health
+	}
+	handle @landing_health {
+		reverse_proxy 127.0.0.1:8100
+	}
+
+	@landing_assets {
+		host olopa.io www.olopa.io
+		path /assets/*
+	}
+	handle @landing_assets {
+		reverse_proxy 127.0.0.1:8100
+	}
+
+	@landing_console {
+		host olopa.io www.olopa.io
+		path /app /app/*
+	}
+	redir @landing_console https://console.olopa.io/ 308
+
+	@landing_api {
+		host olopa.io www.olopa.io
+		path /api/* /docs /openapi.json
+	}
+	redir @landing_api https://console.olopa.io{uri} 308
+
+	@landing_root {
+		host olopa.io www.olopa.io
+		path /
+	}
+	handle @landing_root {
+		rewrite * /landing
+		reverse_proxy 127.0.0.1:8100
+	}
+
+	@landing_other host olopa.io www.olopa.io
+	handle @landing_other {
+		redir / 308
+	}
 
 	reverse_proxy 127.0.0.1:8100
 }

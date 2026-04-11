@@ -32,16 +32,6 @@ app.mount("/assets", StaticFiles(directory=str(template_root / "assets")), name=
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index_page(request: Request) -> HTMLResponse:
-    """Render the public index page from the control-server template directory."""
-    return templates.TemplateResponse(
-        request=request,
-        name="index.html",
-        context={"request": request},
-    )
-
-
-@app.get("/app", response_class=HTMLResponse)
 async def app_page(request: Request) -> HTMLResponse:
     """Render the control dashboard shell."""
     return templates.TemplateResponse(
@@ -51,10 +41,26 @@ async def app_page(request: Request) -> HTMLResponse:
     )
 
 
+@app.get("/landing", response_class=HTMLResponse)
+async def landing_page(request: Request) -> HTMLResponse:
+    """Render the public landing page."""
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={"request": request},
+    )
+
+
+@app.get("/app")
+async def legacy_app_route() -> RedirectResponse:
+    """Backwards-compatible redirect from /app to /."""
+    return RedirectResponse(url="/", status_code=307)
+
+
 @app.get("/install")
 async def install_page_redirect() -> RedirectResponse:
     """Route install landing traffic into the in-app install panel."""
-    return RedirectResponse(url="/app#install", status_code=307)
+    return RedirectResponse(url="/#install", status_code=307)
 
 
 @app.get("/install.sh")

@@ -315,6 +315,26 @@
       overflow-x: auto;
     }
 
+    .cmd-prompt {
+      color: var(--text-dim);
+    }
+
+    .cmd-bin {
+      color: var(--accent);
+    }
+
+    .cmd-url {
+      color: var(--ok);
+    }
+
+    .cmd-env {
+      color: var(--warn);
+    }
+
+    .cmd-op {
+      color: var(--text-dim);
+    }
+
     .install-copy-btn {
       font-family: var(--mono);
       font-size: 10px;
@@ -1359,21 +1379,18 @@
       <p class="hero-sub">Olopa is a kernel-native security research project exploring how runtime telemetry, agentic
         firewall controls, L4 network policy, and AI risk scoring can be unified under strict resource budgets. Built in
         Rust. Grounded in eBPF.</p>
-      <div class="hero-cta">
-        <a href="#beta" class="btn-primary">Request Beta Access</a>
-        <span class="cta-note">Limited early-access cohort · Linux 5.8+</span>
-      </div>
+     
       <div class="install-oneliner">
         <div class="install-head">one-line install</div>
         <div class="install-row">
-          <code>$ curl -fLs install.olopa.io | sudo sh</code>
+          <code class="install-cmd" data-cmd="curl -fLs install.olopa.io | sudo sh">$ curl -fLs install.olopa.io | sudo sh</code>
           <button class="install-copy-btn" type="button"
             data-copy="curl -fLs install.olopa.io | sudo sh">COPY</button>
         </div>
 
         <div class="install-head">with enrollment token <span class="rec">RECOMMENDED</span></div>
         <div class="install-row">
-          <code>$ curl -fLs install.olopa.io | OLOPA_TOKEN=your_token_here sudo -E sh</code>
+          <code class="install-cmd" data-cmd="curl -fLs install.olopa.io | OLOPA_TOKEN=your_token_here sudo -E sh">$ curl -fLs install.olopa.io | OLOPA_TOKEN=your_token_here sudo -E sh</code>
           <button class="install-copy-btn" type="button"
             data-copy="curl -fLs install.olopa.io | OLOPA_TOKEN=your_token_here sudo -E sh">COPY</button>
         </div>
@@ -1856,21 +1873,60 @@ rule "root_ssh_write_by_non_root_process" {
     });
 
     // Install command copy buttons
+    const escapeHtml = (value) => value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    function highlightInstallCommand(raw) {
+      const tokenized = raw
+        .replace(/\b(curl|sudo|sh)\b/g, '<span class="cmd-bin">$1</span>')
+        .replace(/\b(OLOPA_TOKEN=your_token_here)\b/g, '<span class="cmd-env">$1</span>')
+        .replace(/\b(install\.olopa\.io)\b/g, '<span class="cmd-url">$1</span>')
+        .replace(/(\|)/g, '<span class="cmd-op">$1</span>');
+      return `<span class="cmd-prompt">$</span> ${tokenized}`;
+    }
+
+    document.querySelectorAll('.install-cmd').forEach(el => {
+      const raw = (el.getAttribute('data-cmd') || '').trim();
+      if (!raw) return;
+      el.innerHTML = highlightInstallCommand(escapeHtml(raw));
+    });
+
+    async function copyTextPortable(value) {
+      const text = String(value || '');
+      if (!text) return false;
+      if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch (_) {}
+      }
+
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
+      document.body.removeChild(ta);
+      return ok;
+    }
+
     const installCopyStatus = document.getElementById('install-copy-status');
     document.querySelectorAll('.install-copy-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        const value = btn.getAttribute('data-copy') || '';
-        if (!navigator.clipboard || !navigator.clipboard.writeText) {
-          if (installCopyStatus) installCopyStatus.textContent = 'Clipboard unavailable. Copy manually.';
-          return;
-        }
-        navigator.clipboard.writeText(value)
-          .then(() => {
-            if (installCopyStatus) installCopyStatus.textContent = 'Command copied.';
-          })
-          .catch(() => {
-            if (installCopyStatus) installCopyStatus.textContent = 'Clipboard unavailable. Copy manually.';
-          });
+        const value = (btn.getAttribute('data-copy') || '').trim();
+        copyTextPortable(value).then((ok) => {
+          if (installCopyStatus) {
+            installCopyStatus.textContent = ok ? 'Command copied.' : 'Clipboard unavailable. Copy manually.';
+          }
+        });
       });
     });
 
