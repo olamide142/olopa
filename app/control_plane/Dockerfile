@@ -7,16 +7,21 @@ RUN apt-get update \
         ca-certificates \
         python3 \
         python3-pip \
+        python3-venv \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --create-home --uid 10002 olopa
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV VENV_PATH=/opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
 
 WORKDIR /opt/olopa
 
 COPY requirements.txt /tmp/requirements.txt
-RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+RUN python3 -m venv "${VENV_PATH}" \
+    && "${VENV_PATH}/bin/pip" install --no-cache-dir --upgrade pip \
+    && "${VENV_PATH}/bin/pip" install --no-cache-dir -r /tmp/requirements.txt
 
 # Control-plane source.
 COPY . ./app/control_plane
