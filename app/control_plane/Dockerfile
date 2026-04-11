@@ -29,6 +29,7 @@ RUN python3 -m venv "${VENV_PATH}" \
 COPY . ./app/control_plane
 COPY --from=caddy_runtime /usr/bin/caddy /usr/bin/caddy
 COPY Caddyfile /etc/caddy/Caddyfile
+COPY Caddyfile.landing /etc/caddy/Caddyfile.landing
 
 WORKDIR /opt/olopa/app/control_plane
 

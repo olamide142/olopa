@@ -4,5 +4,9 @@
 
 :{$PORT} {
 	encode zstd gzip
+
+	@root path /
+	redir @root /app 308
+
 	reverse_proxy 127.0.0.1:8100
 }

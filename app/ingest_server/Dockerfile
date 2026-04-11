@@ -37,4 +37,4 @@ ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8000
 ENV INGEST_PERSIST_JSONL_PATH=/var/lib/olopa/ingest/events.jsonl
 
-CMD ["sh", "-lc", ": \"${SERVER_HOST:=0.0.0.0}\"; : \"${SERVER_PORT:=${PORT:-8000}}\"; exec /usr/local/bin/olopa-ingest"]
+CMD ["sh", "-lc", "HOST_BIND=\"${SERVER_HOST:-0.0.0.0}\"; PORT_BIND=\"${PORT:-${SERVER_PORT:-8000}}\"; echo \"[ingest] boot host=${HOST_BIND} port=${PORT_BIND}\"; exec /usr/local/bin/olopa-ingest --host \"${HOST_BIND}\" --port \"${PORT_BIND}\""]
