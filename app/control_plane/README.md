@@ -35,6 +35,8 @@ uvicorn control_server.main:app --host 0.0.0.0 --port 8100
 
 ## Endpoints
 
+- `GET /` (render `template/index.html`)
+- `GET /app` (render `template/app.html`)
 - `GET /health`
 - `GET /api/v1/control/status`
 - `GET /api/v1/ingest/stats` (proxy to Rust ingest)
@@ -54,4 +56,3 @@ uvicorn control_server.main:app --host 0.0.0.0 --port 8100
 ```
 
 You can also pass `"source_path": "/abs/path/to/file.oil"` instead of inline source.
-

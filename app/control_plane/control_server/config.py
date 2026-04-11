@@ -59,4 +59,3 @@ class Settings:
             compiler_timeout_s=_env_int("COMPILER_TIMEOUT_S", 20),
             oilc_manifest_path=_env_str("OILC_MANIFEST_PATH", str(default_manifest)),
         )
-

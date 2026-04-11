@@ -14,15 +14,41 @@ import subprocess
 import tempfile
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 import httpx
 from pydantic import BaseModel, Field
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 from .config import Settings
 
 
 settings = Settings.from_env()
 app = FastAPI(title="olopa-control-plane", version="0.1.0")
+template_root = Path(__file__).resolve().parent / "template"
+templates = Jinja2Templates(directory=str(template_root))
+app.mount("/assets", StaticFiles(directory=str(template_root / "assets")), name="assets")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index_page(request: Request) -> HTMLResponse:
+    """Render the public index page from the control-server template directory."""
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={"request": request},
+    )
+
+
+@app.get("/app", response_class=HTMLResponse)
+async def app_page(request: Request) -> HTMLResponse:
+    """Render the control dashboard shell."""
+    return templates.TemplateResponse(
+        request=request,
+        name="app.html",
+        context={"request": request},
+    )
 
 
 async def proxy_rust_get(path: str, *, params: dict | None = None) -> dict:
@@ -207,4 +233,3 @@ async def compile_oil(req: CompileRequest) -> dict:
         "stderr": proc.stderr,
         "stdout_json": stdout_json,
     }
-

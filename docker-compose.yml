@@ -76,6 +76,18 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
     command: start-dev
 
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: olopa-caddy
+    depends_on:
+      - control-plane
+      - olopa-ingest
+      - keycloak
+    ports:
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+
 volumes:
   clickhouse_data:
   surreal_data:
