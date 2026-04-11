@@ -50,6 +50,16 @@ jobs:
       - name: Install bpf-linker
         run: cargo +nightly install bpf-linker --force
 
+      - name: Prebuild eBPF object for cross
+        run: |
+          cargo +nightly build --release \
+            --manifest-path agent/ebpf/Cargo.toml \
+            -Z build-std=core \
+            --target bpfel-unknown-none
+          mkdir -p agent/ebpf/prebuilt
+          cp agent/target/bpfel-unknown-none/release/olopa-ebpf-bin \
+            agent/ebpf/prebuilt/olopa-ebpf-bin
+
       - name: Resolve release version
         id: version
         shell: bash
