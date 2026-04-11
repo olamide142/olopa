@@ -39,4 +39,4 @@ USER olopa
 
 EXPOSE 8100
 
-CMD ["sh", "-c", "python3 -m uvicorn control_server.main:app --host ${CONTROL_HOST:-0.0.0.0} --port ${CONTROL_PORT:-8100}"]
+CMD ["sh", "-c", "/opt/venv/bin/python -m uvicorn control_server.main:app --host ${CONTROL_HOST:-0.0.0.0} --port ${CONTROL_PORT:-8100}"]

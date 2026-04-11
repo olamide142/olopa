@@ -3,7 +3,7 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "sh -lc 'export CONTROL_HOST=0.0.0.0; export CONTROL_PORT=${PORT:-8100}; exec python3 -m uvicorn control_server.main:app --host ${CONTROL_HOST} --port ${CONTROL_PORT}'"
+startCommand = "sh -lc 'export CONTROL_HOST=0.0.0.0; export CONTROL_PORT=${PORT:-8100}; exec /opt/venv/bin/python -m uvicorn control_server.main:app --host ${CONTROL_HOST} --port ${CONTROL_PORT}'"
 healthcheckPath = "/health"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
