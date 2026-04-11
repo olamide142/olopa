@@ -78,14 +78,14 @@ jobs:
 
       - name: Build x86_64 musl
         run: |
-          cross build --release \
+          CARGO_TARGET_DIR=agent/target-cross/x86_64 cross build --release \
             --manifest-path "${AGENT_MANIFEST_PATH}" \
             -p "${AGENT_PACKAGE}" \
             --target x86_64-unknown-linux-musl
 
       - name: Build aarch64 musl
         run: |
-          cross build --release \
+          CARGO_TARGET_DIR=agent/target-cross/aarch64 cross build --release \
             --manifest-path "${AGENT_MANIFEST_PATH}" \
             -p "${AGENT_PACKAGE}" \
             --target aarch64-unknown-linux-musl
@@ -100,9 +100,9 @@ jobs:
 
           mkdir -p "${RELEASE_DIR}" "${LATEST_DIR}"
 
-          cp "agent/target/x86_64-unknown-linux-musl/release/olopa" \
+          cp "agent/target-cross/x86_64/x86_64-unknown-linux-musl/release/olopa" \
             "${RELEASE_DIR}/olopa-agent-${VERSION}-x86_64-linux-musl"
-          cp "agent/target/aarch64-unknown-linux-musl/release/olopa" \
+          cp "agent/target-cross/aarch64/aarch64-unknown-linux-musl/release/olopa" \
             "${RELEASE_DIR}/olopa-agent-${VERSION}-aarch64-linux-musl"
 
           (cd "${RELEASE_DIR}" && sha256sum olopa-agent-* > checksums.txt)
