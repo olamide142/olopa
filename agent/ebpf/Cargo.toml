@@ -6,6 +6,8 @@ edition = "2021"
 [[bin]]
 name              = "olopa-ebpf-bin"
 path              = "src/main.rs"
+test              = false
+bench             = false
 # eBPF programs have no std entry point
 
 [dependencies]
