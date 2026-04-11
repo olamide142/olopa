@@ -1,0 +1,10 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "sh -lc 'export SERVER_HOST=0.0.0.0; export SERVER_PORT=${PORT:-8000}; exec /usr/local/bin/olopa-ingest'"
+healthcheckPath = "/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
