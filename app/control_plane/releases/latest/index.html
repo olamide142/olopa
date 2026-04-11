@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Olopa Releases</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      background: #0a1020;
+      color: #e8eef9;
+      display: grid;
+      min-height: 100vh;
+      place-items: center;
+    }
+    main {
+      width: min(820px, 92vw);
+      background: #121a2f;
+      border: 1px solid #2a3558;
+      border-radius: 14px;
+      padding: 28px;
+      box-shadow: 0 16px 50px rgba(0, 0, 0, 0.35);
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.6rem;
+    }
+    p {
+      margin: 0 0 14px;
+      color: #b6c5e6;
+    }
+    code {
+      display: block;
+      background: #0b1328;
+      border: 1px solid #2a3558;
+      border-radius: 10px;
+      padding: 12px;
+      color: #9ce8ff;
+      overflow-x: auto;
+      margin-bottom: 14px;
+    }
+    ul {
+      margin: 0;
+      padding-left: 20px;
+    }
+    a {
+      color: #9ce8ff;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Olopa Releases</h1>
+    <p>Static release endpoint for installation artifacts.</p>
+    <code>curl -fLs https://console.olopa.io/install.sh | sudo sh</code>
+    <ul>
+      <li><a href="/latest/version">/latest/version</a></li>
+      <li><a href="/latest/install.sh">/latest/install.sh</a></li>
+      <li><a href="/latest/checksums.txt">/latest/checksums.txt</a></li>
+    </ul>
+  </main>
+</body>
+</html>

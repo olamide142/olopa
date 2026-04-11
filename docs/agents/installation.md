@@ -304,14 +304,14 @@ jobs:
 
 ```bash
 # Simulate what curl does (no browser UA)
-curl -fLs install.olopa.io
+curl -fLs olopa.io/install.sh
 
 # Simulate browser visit
-curl -fLs -A "Mozilla/5.0" install.olopa.io
+curl -fLs -A "Mozilla/5.0" olopa.io/install.sh
 
 # Full install test on a throwaway VM
 multipass launch 22.04 --name test-olopa
-multipass exec test-olopa -- sudo curl -fLs install.olopa.io | sudo sh
+multipass exec test-olopa -- sudo curl -fLs olopa.io/install.sh | sudo sh
 
 # Verify binary runs
 /usr/local/bin/olopa-agent --version
@@ -326,7 +326,7 @@ systemctl status olopa-agent
 
 ```
 User runs:
-  curl -fLs install.olopa.io | sh
+  curl -fLs olopa.io/install.sh | sh
           │
           ▼
   Cloudflare Worker

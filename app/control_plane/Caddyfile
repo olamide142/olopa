@@ -10,6 +10,23 @@
 		reverse_proxy 127.0.0.1:8100
 	}
 
+	@releases_install {
+		host releases.olopa.io
+		path /install.sh /latest/install.sh
+	}
+	handle @releases_install {
+		rewrite * /install.sh
+		reverse_proxy 127.0.0.1:8100
+	}
+
+	@releases_host host releases.olopa.io
+	handle @releases_host {
+		root * /opt/olopa/app/control_plane/releases
+		@releases_root path /
+		rewrite @releases_root /latest/index.html
+		file_server
+	}
+
 	@landing_health {
 		host olopa.io www.olopa.io
 		path /health
