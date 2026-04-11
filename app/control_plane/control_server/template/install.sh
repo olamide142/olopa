@@ -9,6 +9,7 @@
 #   OLOPA_INSTALL_DIR  - Override install prefix (default: /usr/local)
 #   OLOPA_NO_SERVICE   - Set to 1 to skip systemd service installation
 #   OLOPA_BACKEND_URL  - Override backend URL (default: ingest.olopa.io:4317)
+#   OLOPA_RELEASES_URL - Override releases base URL (default: https://releases.olopa.io/olopa)
 
 set -eu
 
@@ -54,6 +55,7 @@ OLOPA_INSTALL_DIR="${OLOPA_INSTALL_DIR:-/usr/local}"
 OLOPA_BACKEND_URL="${OLOPA_BACKEND_URL:-ingest.olopa.io:4317}"
 OLOPA_NO_SERVICE="${OLOPA_NO_SERVICE:-0}"
 OLOPA_TOKEN="${OLOPA_TOKEN:-}"
+OLOPA_RELEASES_URL="${OLOPA_RELEASES_URL:-https://releases.olopa.io/olopa}"
 
 BINARY_NAME="olopa-agent"
 BINARY_DIR="${OLOPA_INSTALL_DIR}/bin"
@@ -61,7 +63,7 @@ CONFIG_DIR="/etc/olopa"
 DATA_DIR="/var/lib/olopa"
 LOG_DIR="/var/log/olopa"
 SERVICE_FILE="/etc/systemd/system/olopa-agent.service"
-RELEASES_URL="https://releases.olopa.io"
+RELEASES_URL="${OLOPA_RELEASES_URL%/}"
 
 # ─── Pre-flight checks ────────────────────────────────────────────────────────
 

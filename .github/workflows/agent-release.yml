@@ -143,12 +143,12 @@ jobs:
           name: agent-release-${{ needs.build.outputs.version }}
           path: dist
 
-      - name: Sync artifacts to S3/R2
+      - name: Sync artifacts to S3-compatible storage
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.RELEASES_AWS_ACCESS_KEY_ID || secrets.R2_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID || secrets.ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.RELEASES_AWS_SECRET_ACCESS_KEY || secrets.R2_SECRET_ACCESS_KEY || secrets.AWS_SECRET_ACCESS_KEY || secrets.SECRET_KEY }}
           AWS_SESSION_TOKEN: ${{ secrets.RELEASES_AWS_SESSION_TOKEN || secrets.AWS_SESSION_TOKEN }}
-          AWS_DEFAULT_REGION: ${{ vars.RELEASES_AWS_REGION || vars.R2_AWS_REGION || 'us-east-1' }}
+          AWS_DEFAULT_REGION: ${{ vars.RELEASES_AWS_REGION || vars.R2_AWS_REGION || 'auto' }}
           RELEASES_BUCKET: ${{ vars.RELEASES_S3_BUCKET || vars.R2_BUCKET }}
           RELEASES_ENDPOINT: ${{ vars.RELEASES_S3_ENDPOINT || vars.R2_ENDPOINT }}
           RELEASES_PREFIX: ${{ vars.RELEASES_S3_PREFIX || vars.R2_PREFIX || 'olopa' }}

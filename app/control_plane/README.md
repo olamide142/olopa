@@ -57,8 +57,7 @@ uvicorn control_server.main:app --host 0.0.0.0 --port 8100
 Deployment uses a single [`Caddyfile`](./Caddyfile) with host-based rules:
 - `console.olopa.io` proxies to the app (`/` serves `app.html`)
 - `olopa.io` / `www.olopa.io` proxies landing (`/` serves `index.html` via `/landing`)
-- `releases.olopa.io` serves static artifacts from `app/control_plane/releases` (`/` -> `/latest/index.html`)
-- `releases.olopa.io/latest/install.sh` is routed to the live `/install.sh` endpoint
+- `releases.olopa.io` is expected to be served directly by object storage/CDN (not by control-plane Caddy)
 
 ### Compile endpoint body
 
