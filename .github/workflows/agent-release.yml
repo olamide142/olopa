@@ -7,6 +7,16 @@ on:
         description: "Release version override (example: v0.1.0)"
         required: false
         type: string
+      publish_storage:
+        description: "Sync release artifacts to releases storage (S3/R2)"
+        required: true
+        default: true
+        type: boolean
+      update_latest:
+        description: "Also overwrite latest/ with this release"
+        required: true
+        default: true
+        type: boolean
   push:
     tags:
       - "v*"
@@ -120,6 +130,73 @@ jobs:
           name: agent-release-${{ steps.version.outputs.version }}
           path: dist/
           if-no-files-found: error
+
+  publish-storage:
+    name: Publish To releases.olopa.io Storage
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_storage == 'true')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-release-${{ needs.build.outputs.version }}
+          path: dist
+
+      - name: Sync artifacts to S3/R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.RELEASES_AWS_ACCESS_KEY_ID || secrets.R2_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID || secrets.ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.RELEASES_AWS_SECRET_ACCESS_KEY || secrets.R2_SECRET_ACCESS_KEY || secrets.AWS_SECRET_ACCESS_KEY || secrets.SECRET_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.RELEASES_AWS_SESSION_TOKEN || secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ vars.RELEASES_AWS_REGION || vars.R2_AWS_REGION || 'us-east-1' }}
+          RELEASES_BUCKET: ${{ vars.RELEASES_S3_BUCKET || vars.R2_BUCKET }}
+          RELEASES_ENDPOINT: ${{ vars.RELEASES_S3_ENDPOINT || vars.R2_ENDPOINT }}
+          RELEASES_PREFIX: ${{ vars.RELEASES_S3_PREFIX || vars.R2_PREFIX || 'olopa' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ needs.build.outputs.version }}"
+          SRC_DIR="dist/${VERSION}"
+          [ -d "${SRC_DIR}" ] || { echo "::error::Missing build artifact directory: ${SRC_DIR}"; exit 1; }
+
+          [ -n "${AWS_ACCESS_KEY_ID:-}" ] || { echo "::error::Missing access key secret."; exit 1; }
+          [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] || { echo "::error::Missing secret key secret."; exit 1; }
+          [ -n "${RELEASES_BUCKET:-}" ] || { echo "::error::Missing bucket variable (RELEASES_S3_BUCKET or R2_BUCKET)."; exit 1; }
+
+          PREFIX="${RELEASES_PREFIX#/}"
+          PREFIX="${PREFIX%/}"
+          if [ -n "${PREFIX}" ]; then
+            BASE_URI="s3://${RELEASES_BUCKET}/${PREFIX}"
+          else
+            BASE_URI="s3://${RELEASES_BUCKET}"
+          fi
+
+          ENDPOINT_ARGS=()
+          ENDPOINT="${RELEASES_ENDPOINT:-}"
+          if [ -n "${ENDPOINT}" ]; then
+            if [[ "${ENDPOINT}" != http://* && "${ENDPOINT}" != https://* ]]; then
+              ENDPOINT="https://${ENDPOINT}"
+            fi
+            ENDPOINT_ARGS=(--endpoint-url "${ENDPOINT}")
+            echo "Using custom S3 endpoint: ${ENDPOINT}"
+          fi
+
+          echo "Syncing versioned release to ${BASE_URI}/${VERSION}/"
+          aws "${ENDPOINT_ARGS[@]}" s3 sync "${SRC_DIR}/" "${BASE_URI}/${VERSION}/" --delete
+
+          UPDATE_LATEST="${{ github.event.inputs.update_latest }}"
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            UPDATE_LATEST="true"
+          fi
+          if [ "${UPDATE_LATEST}" = "true" ]; then
+            echo "Syncing latest release to ${BASE_URI}/latest/"
+            aws "${ENDPOINT_ARGS[@]}" s3 sync "${SRC_DIR}/" "${BASE_URI}/latest/" --delete
+          else
+            echo "Skipping latest/ sync (update_latest=false)."
+          fi
+
+          echo "Storage publish completed."
 
   publish:
     name: Publish GitHub Release Assets
