@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
+FROM caddy:2.8-alpine AS caddy_runtime
+
 FROM rust:1.94-bookworm AS runtime
 
 RUN apt-get update \
@@ -25,6 +27,8 @@ RUN python3 -m venv "${VENV_PATH}" \
 
 # Control-plane source.
 COPY . ./app/control_plane
+COPY --from=caddy_runtime /usr/bin/caddy /usr/bin/caddy
+COPY Caddyfile /etc/caddy/Caddyfile
 
 WORKDIR /opt/olopa/app/control_plane
 

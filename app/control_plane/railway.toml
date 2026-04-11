@@ -3,7 +3,7 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "sh -lc 'export CONTROL_HOST=0.0.0.0; export CONTROL_PORT=${PORT:-8100}; exec /opt/venv/bin/python -m uvicorn control_server.main:app --host ${CONTROL_HOST} --port ${CONTROL_PORT}'"
+startCommand = "sh -lc 'export CONTROL_HOST=127.0.0.1; export CONTROL_PORT=8100; /opt/venv/bin/python -m uvicorn control_server.main:app --host ${CONTROL_HOST} --port ${CONTROL_PORT} & exec /usr/bin/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile'"
 healthcheckPath = "/health"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
