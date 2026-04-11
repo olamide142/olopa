@@ -166,14 +166,17 @@ jobs:
 
           PREFIX="${RELEASES_PREFIX#/}"
           PREFIX="${PREFIX%/}"
-          if [ -n "${PREFIX}" ]; then
-            BASE_URI="s3://${RELEASES_BUCKET}/${PREFIX}"
-          else
-            BASE_URI="s3://${RELEASES_BUCKET}"
+          [ -n "${PREFIX}" ] || { echo "::error::Empty releases prefix is not allowed."; exit 1; }
+          if [[ "${PREFIX}" != "olopa" && "${PREFIX}" != olopa/* ]]; then
+            echo "::error::Unsafe releases prefix '${PREFIX}'. Must be 'olopa' or start with 'olopa/'."
+            exit 1
           fi
+          BASE_URI="s3://${RELEASES_BUCKET}/${PREFIX}"
 
           ENDPOINT_ARGS=()
           ENDPOINT="${RELEASES_ENDPOINT:-}"
+          ENDPOINT_SCHEME="https"
+          ENDPOINT_HOST=""
           if [ -n "${ENDPOINT}" ]; then
             # Normalize endpoint value from repo vars:
             # - trim whitespace/newlines
@@ -183,7 +186,6 @@ jobs:
             if [[ "${ENDPOINT}" != http://* && "${ENDPOINT}" != https://* ]]; then
               ENDPOINT="https://${ENDPOINT}"
             fi
-            ENDPOINT_SCHEME="https"
             ENDPOINT_HOST="${ENDPOINT#http://}"
             if [[ "${ENDPOINT}" == https://* ]]; then
               ENDPOINT_HOST="${ENDPOINT#https://}"
@@ -192,13 +194,22 @@ jobs:
               ENDPOINT_HOST="${ENDPOINT#http://}"
             fi
             ENDPOINT_HOST="${ENDPOINT_HOST%%/*}"
+            # If user provided bucket-host endpoint (k1ng.se-...),
+            # normalize back to region endpoint (se-...) because bucket is
+            # already encoded in s3:// URI below.
+            if [[ "${ENDPOINT_HOST}" == "${RELEASES_BUCKET}."* ]]; then
+              ENDPOINT_HOST="${ENDPOINT_HOST#${RELEASES_BUCKET}.}"
+            fi
             ENDPOINT="${ENDPOINT_SCHEME}://${ENDPOINT_HOST}"
 
             ENDPOINT_ARGS=(--endpoint-url "${ENDPOINT}" --region "${AWS_DEFAULT_REGION}")
             echo "Using custom S3 endpoint: ${ENDPOINT}"
           fi
 
-          sync_release() {
+          # Non-destructive upload:
+          # - overwrite matching keys
+          # - never delete unrelated objects already in the bucket
+          upload_release() {
             local endpoint_url="$1"
             local endpoint_region="$2"
             local endpoint_flags=()
@@ -206,29 +217,34 @@ jobs:
               endpoint_flags=(--endpoint-url "${endpoint_url}" --region "${endpoint_region}")
             fi
 
-            echo "Syncing versioned release to ${BASE_URI}/${VERSION}/"
-            aws "${endpoint_flags[@]}" s3 sync "${SRC_DIR}/" "${BASE_URI}/${VERSION}/" --delete
+            echo "Uploading versioned release to ${BASE_URI}/${VERSION}/ (non-destructive)"
+            aws "${endpoint_flags[@]}" s3 cp "${SRC_DIR}/" "${BASE_URI}/${VERSION}/" --recursive --only-show-errors
 
             UPDATE_LATEST="${{ github.event.inputs.update_latest }}"
             if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
               UPDATE_LATEST="true"
             fi
             if [ "${UPDATE_LATEST}" = "true" ]; then
-              echo "Syncing latest release to ${BASE_URI}/latest/"
-              aws "${endpoint_flags[@]}" s3 sync "${SRC_DIR}/" "${BASE_URI}/latest/" --delete
+              echo "Uploading latest release to ${BASE_URI}/latest/ (non-destructive)"
+              aws "${endpoint_flags[@]}" s3 cp "${SRC_DIR}/" "${BASE_URI}/latest/" --recursive --only-show-errors
             else
               echo "Skipping latest/ sync (update_latest=false)."
             fi
           }
 
           if [ -n "${ENDPOINT:-}" ]; then
-            if ! sync_release "${ENDPOINT}" "${AWS_DEFAULT_REGION}"; then
-              ALT_ENDPOINT="${ENDPOINT_SCHEME}://${RELEASES_BUCKET}.${ENDPOINT_HOST}"
-              echo "Primary endpoint failed; retrying with bucket-host endpoint: ${ALT_ENDPOINT}"
-              sync_release "${ALT_ENDPOINT}" "${AWS_DEFAULT_REGION}"
+            if ! upload_release "${ENDPOINT}" "${AWS_DEFAULT_REGION}"; then
+              if [[ "${ENDPOINT_HOST}" != "${RELEASES_BUCKET}."* ]]; then
+                ALT_ENDPOINT="${ENDPOINT_SCHEME}://${RELEASES_BUCKET}.${ENDPOINT_HOST}"
+                echo "Primary endpoint failed; retrying with bucket-host endpoint: ${ALT_ENDPOINT}"
+                upload_release "${ALT_ENDPOINT}" "${AWS_DEFAULT_REGION}"
+              else
+                echo "::error::Primary endpoint failed and no alternate endpoint is applicable."
+                exit 1
+              fi
             fi
           else
-            sync_release "" "${AWS_DEFAULT_REGION}"
+            upload_release "" "${AWS_DEFAULT_REGION}"
           fi
 
           echo "Storage publish completed."
