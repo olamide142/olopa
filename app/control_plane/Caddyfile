@@ -18,14 +18,11 @@
 		reverse_proxy 127.0.0.1:8100
 	}
 
-	@install_root {
-		host install.olopa.io
-		path /
-	}
-	redir @install_root /install.sh 308
-
 	@install_host host install.olopa.io
-	redir @install_host https://console.olopa.io/#install 308
+	handle @install_host {
+		rewrite * /install.sh
+		reverse_proxy 127.0.0.1:8100
+	}
 
 	@landing_health {
 		host olopa.io www.olopa.io
