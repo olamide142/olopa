@@ -34,6 +34,15 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup Rust nightly (for eBPF build.rs)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+          components: rust-src
+
+      - name: Install bpf-linker
+        run: cargo +nightly install bpf-linker --force
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
@@ -69,6 +78,15 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust nightly (for eBPF build.rs)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+          components: rust-src
+
+      - name: Install bpf-linker
+        run: cargo +nightly install bpf-linker --force
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
