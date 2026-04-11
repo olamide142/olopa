@@ -12,7 +12,7 @@
 
 	@install_downloads {
 		host install.olopa.io
-		path /downloads/* /install.sh /health
+		path /downloads/* /health
 	}
 	handle @install_downloads {
 		reverse_proxy 127.0.0.1:8100
@@ -21,7 +21,8 @@
 	@install_host host install.olopa.io
 	handle @install_host {
 		rewrite * /install.sh
-		reverse_proxy 127.0.0.1:8100
+		root * /opt/olopa/app/control_plane/control_server/template
+		file_server
 	}
 
 	@landing_health {
