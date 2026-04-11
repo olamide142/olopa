@@ -4,3 +4,4 @@ target/
 tmp/*
 __pycache__
 .codex
+.venv

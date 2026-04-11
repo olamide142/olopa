@@ -490,6 +490,7 @@ async fn main() -> anyhow::Result<()> {
         auth: Arc::new(AuthState::from_config(&cfg.auth)),
     };
     let app = Router::new()
+        .route("/", get(root_ok))
         .route("/health", get(health))
         .route("/api/v1/ingest/batches", post(ingest_batch))
         .route("/api/v1/ingest/stats", get(ingest_stats))
@@ -536,6 +537,11 @@ fn init_tracing(log_filter_override: Option<&str>) {
 /// Liveness/readiness endpoint.
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
+}
+
+/// Minimal root endpoint for simple load balancer probes.
+async fn root_ok() -> &'static str {
+    "Ok"
 }
 
 /// Ingest endpoint: accepts one normalized batch and returns ack/backpressure hints.
