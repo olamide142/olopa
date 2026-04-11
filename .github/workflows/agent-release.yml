@@ -175,25 +175,60 @@ jobs:
           ENDPOINT_ARGS=()
           ENDPOINT="${RELEASES_ENDPOINT:-}"
           if [ -n "${ENDPOINT}" ]; then
+            # Normalize endpoint value from repo vars:
+            # - trim whitespace/newlines
+            # - allow either host or full URL
+            # - strip any accidental path suffix
+            ENDPOINT="$(printf '%s' "${ENDPOINT}" | tr -d '\r\n' | xargs)"
             if [[ "${ENDPOINT}" != http://* && "${ENDPOINT}" != https://* ]]; then
               ENDPOINT="https://${ENDPOINT}"
             fi
-            ENDPOINT_ARGS=(--endpoint-url "${ENDPOINT}")
+            ENDPOINT_SCHEME="https"
+            ENDPOINT_HOST="${ENDPOINT#http://}"
+            if [[ "${ENDPOINT}" == https://* ]]; then
+              ENDPOINT_HOST="${ENDPOINT#https://}"
+            elif [[ "${ENDPOINT}" == http://* ]]; then
+              ENDPOINT_SCHEME="http"
+              ENDPOINT_HOST="${ENDPOINT#http://}"
+            fi
+            ENDPOINT_HOST="${ENDPOINT_HOST%%/*}"
+            ENDPOINT="${ENDPOINT_SCHEME}://${ENDPOINT_HOST}"
+
+            ENDPOINT_ARGS=(--endpoint-url "${ENDPOINT}" --region "${AWS_DEFAULT_REGION}")
             echo "Using custom S3 endpoint: ${ENDPOINT}"
           fi
 
-          echo "Syncing versioned release to ${BASE_URI}/${VERSION}/"
-          aws "${ENDPOINT_ARGS[@]}" s3 sync "${SRC_DIR}/" "${BASE_URI}/${VERSION}/" --delete
+          sync_release() {
+            local endpoint_url="$1"
+            local endpoint_region="$2"
+            local endpoint_flags=()
+            if [ -n "${endpoint_url}" ]; then
+              endpoint_flags=(--endpoint-url "${endpoint_url}" --region "${endpoint_region}")
+            fi
 
-          UPDATE_LATEST="${{ github.event.inputs.update_latest }}"
-          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
-            UPDATE_LATEST="true"
-          fi
-          if [ "${UPDATE_LATEST}" = "true" ]; then
-            echo "Syncing latest release to ${BASE_URI}/latest/"
-            aws "${ENDPOINT_ARGS[@]}" s3 sync "${SRC_DIR}/" "${BASE_URI}/latest/" --delete
+            echo "Syncing versioned release to ${BASE_URI}/${VERSION}/"
+            aws "${endpoint_flags[@]}" s3 sync "${SRC_DIR}/" "${BASE_URI}/${VERSION}/" --delete
+
+            UPDATE_LATEST="${{ github.event.inputs.update_latest }}"
+            if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+              UPDATE_LATEST="true"
+            fi
+            if [ "${UPDATE_LATEST}" = "true" ]; then
+              echo "Syncing latest release to ${BASE_URI}/latest/"
+              aws "${endpoint_flags[@]}" s3 sync "${SRC_DIR}/" "${BASE_URI}/latest/" --delete
+            else
+              echo "Skipping latest/ sync (update_latest=false)."
+            fi
+          }
+
+          if [ -n "${ENDPOINT:-}" ]; then
+            if ! sync_release "${ENDPOINT}" "${AWS_DEFAULT_REGION}"; then
+              ALT_ENDPOINT="${ENDPOINT_SCHEME}://${RELEASES_BUCKET}.${ENDPOINT_HOST}"
+              echo "Primary endpoint failed; retrying with bucket-host endpoint: ${ALT_ENDPOINT}"
+              sync_release "${ALT_ENDPOINT}" "${AWS_DEFAULT_REGION}"
+            fi
           else
-            echo "Skipping latest/ sync (update_latest=false)."
+            sync_release "" "${AWS_DEFAULT_REGION}"
           fi
 
           echo "Storage publish completed."
