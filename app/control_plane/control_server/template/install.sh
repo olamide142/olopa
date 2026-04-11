@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Olopa Agent Installer
-# Usage: curl -fLs https://console.olopa.io/install.sh | sh
-# Usage: curl -fLs https://console.olopa.io/install.sh | OLOPA_TOKEN=<token> sh
+# Usage: curl -fLs https://olopa.io/install.sh | sudo sh
+# Usage: curl -fLs https://olopa.io/install.sh | OLOPA_TOKEN=<token> sudo -E sh
 #
 # Environment variables:
 #   OLOPA_TOKEN        - Enrollment token (required for managed install)
@@ -10,10 +10,11 @@
 #   OLOPA_NO_SERVICE   - Set to 1 to skip systemd service installation
 #   OLOPA_BACKEND_URL  - Override backend URL (default: ingest.olopa.io:4317)
 #   OLOPA_RELEASES_URL - Override releases base URL (default: https://releases.olopa.io/olopa)
+#   OLOPA_RELEASES_FALLBACK_URL - Optional fallback releases URL
 
 set -eu
 
-# ─── Formatting ──────────────────────────────────────────────────────────────
+# --- Formatting --------------------------------------------------------------
 
 BOLD="\033[1m"
 DIM="\033[2m"
@@ -48,7 +49,7 @@ warn()    { printf "  ${YELLOW}!${RESET}  %s\n" "$1"; }
 die()     { printf "\n  ${RED}✗${RESET}  ${BOLD}%s${RESET}\n\n" "$1" >&2; exit 1; }
 step()    { printf "\n  ${BOLD}%s${RESET}\n" "$1"; }
 
-# ─── Configuration ────────────────────────────────────────────────────────────
+# --- Configuration ------------------------------------------------------------
 
 OLOPA_VERSION="${OLOPA_VERSION:-latest}"
 OLOPA_INSTALL_DIR="${OLOPA_INSTALL_DIR:-/usr/local}"
@@ -56,6 +57,7 @@ OLOPA_BACKEND_URL="${OLOPA_BACKEND_URL:-ingest.olopa.io:4317}"
 OLOPA_NO_SERVICE="${OLOPA_NO_SERVICE:-0}"
 OLOPA_TOKEN="${OLOPA_TOKEN:-}"
 OLOPA_RELEASES_URL="${OLOPA_RELEASES_URL:-https://releases.olopa.io/olopa}"
+OLOPA_RELEASES_FALLBACK_URL="${OLOPA_RELEASES_FALLBACK_URL:-https://olopa.t3.tigrisfiles.io/olopa}"
 
 BINARY_NAME="olopa-agent"
 BINARY_DIR="${OLOPA_INSTALL_DIR}/bin"
@@ -64,12 +66,14 @@ DATA_DIR="/var/lib/olopa"
 LOG_DIR="/var/log/olopa"
 SERVICE_FILE="/etc/systemd/system/olopa-agent.service"
 RELEASES_URL="${OLOPA_RELEASES_URL%/}"
+RELEASES_FALLBACK_URL="${OLOPA_RELEASES_FALLBACK_URL%/}"
+DOWNLOADED_AGENT_PATH=""
 
-# ─── Pre-flight checks ────────────────────────────────────────────────────────
+# --- Pre-flight checks --------------------------------------------------------
 
 check_root() {
   if [ "$(id -u)" -ne 0 ]; then
-    die "This installer must be run as root. Try: curl -fLs https://console.olopa.io/install.sh | sudo sh"
+    die "This installer must be run as root. Try: curl -fLs https://olopa.io/install.sh | sudo sh"
   fi
 }
 
@@ -125,19 +129,38 @@ check_deps() {
   fi
 }
 
-# ─── Version resolution ───────────────────────────────────────────────────────
+# --- Version resolution -------------------------------------------------------
+
+try_resolve_latest_from() {
+  BASE_URL="$1"
+  CANDIDATE_VERSION="$(curl -fsSL "${BASE_URL}/latest/version" 2>/dev/null || true)"
+  CANDIDATE_VERSION="$(echo "$CANDIDATE_VERSION" | tr -d '[:space:]')"
+  if [ -z "$CANDIDATE_VERSION" ]; then
+    return 1
+  fi
+  OLOPA_VERSION="$CANDIDATE_VERSION"
+  RELEASES_URL="$BASE_URL"
+  return 0
+}
 
 resolve_version() {
   if [ "$OLOPA_VERSION" = "latest" ]; then
     info "Resolving latest release..."
-    OLOPA_VERSION="$(curl -fsSL "${RELEASES_URL}/latest/version" 2>/dev/null)" \
-      || die "Failed to fetch latest version from ${RELEASES_URL}. Check your network connection."
-    OLOPA_VERSION="$(echo "$OLOPA_VERSION" | tr -d '[:space:]')"
+    if try_resolve_latest_from "$RELEASES_URL"; then
+      :
+    elif [ -n "$RELEASES_FALLBACK_URL" ] \
+      && [ "$RELEASES_FALLBACK_URL" != "$RELEASES_URL" ] \
+      && try_resolve_latest_from "$RELEASES_FALLBACK_URL"; then
+      warn "Primary releases endpoint unavailable; using fallback ${RELEASES_URL}"
+    else
+      die "Failed to fetch latest version from ${RELEASES_URL} (and fallback). Check DNS/network or set OLOPA_RELEASES_URL."
+    fi
   fi
   success "Version: ${OLOPA_VERSION}"
+  info "Release endpoint: ${RELEASES_URL}"
 }
 
-# ─── Download + verify ────────────────────────────────────────────────────────
+# --- Download + verify --------------------------------------------------------
 
 download_agent() {
   DOWNLOAD_URL="${RELEASES_URL}/${OLOPA_VERSION}/${BINARY_NAME}-${OLOPA_VERSION}-${ARCH_TAG}-linux-musl"
@@ -157,22 +180,17 @@ download_agent() {
 
   info "Verifying integrity..."
   EXPECTED_SUM="$(grep "${BINARY_NAME}-${OLOPA_VERSION}-${ARCH_TAG}-linux-musl" "$TMPSUMS" | awk '{print $1}')"
-  if [ -z "$EXPECTED_SUM" ]; then
-    die "No checksum entry found for this binary in checksums.txt"
-  fi
+  [ -n "$EXPECTED_SUM" ] || die "No checksum entry found for this binary in checksums.txt"
 
   ACTUAL_SUM="$(sha256sum "$TMPBIN" | awk '{print $1}')"
-  if [ "$EXPECTED_SUM" != "$ACTUAL_SUM" ]; then
-    rm -rf "$TMPDIR"
-    die "Checksum mismatch — binary may be corrupted or tampered with.\n  Expected: ${EXPECTED_SUM}\n  Got:      ${ACTUAL_SUM}"
-  fi
-  success "Checksum verified"
+  [ "$EXPECTED_SUM" = "$ACTUAL_SUM" ] || die "Checksum mismatch"
 
   chmod 755 "$TMPBIN"
-  echo "$TMPBIN"
+  DOWNLOADED_AGENT_PATH="$TMPBIN"
+  success "Checksum verified"
 }
 
-# ─── Install ──────────────────────────────────────────────────────────────────
+# --- Install ------------------------------------------------------------------
 
 install_binary() {
   TMPBIN="$1"
@@ -327,7 +345,7 @@ start_service() {
   fi
 }
 
-# ─── Post-install summary ─────────────────────────────────────────────────────
+# --- Post-install summary -----------------------------------------------------
 
 print_summary() {
   printf "\n"
@@ -364,7 +382,7 @@ print_summary() {
   printf "\n"
 }
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
+# --- Main ---------------------------------------------------------------------
 
 main() {
   print_banner
@@ -380,7 +398,9 @@ main() {
   resolve_version
 
   step "Downloading agent"
-  TMPBIN="$(download_agent)"
+  download_agent
+  TMPBIN="${DOWNLOADED_AGENT_PATH}"
+  [ -n "$TMPBIN" ] || die "Download failed unexpectedly: no binary path returned."
 
   step "Installing"
   install_binary "$TMPBIN"

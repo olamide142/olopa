@@ -26,6 +26,14 @@
 		reverse_proxy 127.0.0.1:8100
 	}
 
+	@landing_install_script {
+		host olopa.io www.olopa.io
+		path /install.sh
+	}
+	handle @landing_install_script {
+		reverse_proxy 127.0.0.1:8100
+	}
+
 	@landing_console {
 		host olopa.io www.olopa.io
 		path /app /app/*

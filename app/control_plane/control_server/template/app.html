@@ -1133,7 +1133,7 @@ body > *{position:relative;z-index:1}
         <div class="install-card">
           <div class="install-title">Quick Install</div>
           <p class="install-copy">Use the installer script to download and place the latest Olopa agent binary.</p>
-          <pre class="install-code" id="install-cmd">curl -fsSL https://console.olopa.io/install.sh | sh</pre>
+          <pre class="install-code" id="install-cmd">curl -fsSL https://olopa.io/install.sh | sudo sh</pre>
           <div class="install-row">
             <button class="btn btn-primary" onclick="copyInstallCommand()">Copy Command</button>
             <button class="btn" onclick="window.open('/install.sh','_blank')">Open Script</button>
@@ -1144,7 +1144,7 @@ body > *{position:relative;z-index:1}
           <div class="install-title">Artifacts</div>
           <div class="install-kv"><span class="install-k">Install Endpoint</span><span class="install-v">/install.sh</span></div>
           <div class="install-kv"><span class="install-k">Binary Endpoint</span><span class="install-v">/downloads/agent/latest</span></div>
-          <div class="install-kv"><span class="install-k">Install Endpoint</span><span class="install-v">https://console.olopa.io/install.sh</span></div>
+          <div class="install-kv"><span class="install-k">Install Endpoint</span><span class="install-v">https://olopa.io/install.sh</span></div>
           <div class="install-kv"><span class="install-k">Status</span><span class="install-v" id="install-status">checking…</span></div>
         </div>
       </div>
@@ -1191,13 +1191,13 @@ function buildInstallBaseUrl() {
 
 function configureInstallPanel() {
   const base = buildInstallBaseUrl();
-  const installScriptUrl = `${base}/install.sh`;
+  const installScriptUrl = 'https://olopa.io/install.sh';
   const downloadUrl = `${base}/downloads/agent/latest`;
 
   const cmdEl = document.getElementById('install-cmd');
   const downloadBtn = document.getElementById('install-download-btn');
   const scriptBtn = document.getElementById('install-script-btn');
-  if (cmdEl) cmdEl.textContent = `curl -fsSL ${installScriptUrl} | sh`;
+  if (cmdEl) cmdEl.textContent = `curl -fsSL ${installScriptUrl} | sudo sh`;
   if (downloadBtn) downloadBtn.href = downloadUrl;
   if (scriptBtn) scriptBtn.href = installScriptUrl;
 

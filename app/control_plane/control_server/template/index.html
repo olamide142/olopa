@@ -1379,26 +1379,25 @@
       <p class="hero-sub">Olopa is a kernel-native security research project exploring how runtime telemetry, agentic
         firewall controls, L4 network policy, and AI risk scoring can be unified under strict resource budgets. Built in
         Rust. Grounded in eBPF.</p>
-<!--      
       <div class="install-oneliner">
         <div class="install-head">one-line install</div>
         <div class="install-row">
-          <code class="install-cmd" data-cmd="curl -fLs https://console.olopa.io/install.sh | sudo sh">$ curl -fLs https://console.olopa.io/install.sh | sudo sh</code>
+          <code class="install-cmd" data-cmd="curl -fLs https://olopa.io/install.sh | sudo sh">$ curl -fLs https://olopa.io/install.sh | sudo sh</code>
           <button class="install-copy-btn" type="button"
-            data-copy="curl -fLs https://console.olopa.io/install.sh | sudo sh">COPY</button>
+            data-copy="curl -fLs https://olopa.io/install.sh | sudo sh">COPY</button>
         </div>
 
         <div class="install-head">with enrollment token <span class="rec">RECOMMENDED</span></div>
         <div class="install-row">
-          <code class="install-cmd" data-cmd="curl -fLs https://console.olopa.io/install.sh | OLOPA_TOKEN=your_token_here sudo -E sh">$ curl -fLs https://console.olopa.io/install.sh | OLOPA_TOKEN=your_token_here sudo -E sh</code>
+          <code class="install-cmd" data-cmd="curl -fLs https://olopa.io/install.sh | OLOPA_TOKEN=your_token_here sudo -E sh">$ curl -fLs https://olopa.io/install.sh | OLOPA_TOKEN=your_token_here sudo -E sh</code>
           <button class="install-copy-btn" type="button"
-            data-copy="curl -fLs https://console.olopa.io/install.sh | OLOPA_TOKEN=your_token_here sudo -E sh">COPY</button>
+            data-copy="curl -fLs https://olopa.io/install.sh | OLOPA_TOKEN=your_token_here sudo -E sh">COPY</button>
         </div>
 
         <p class="install-footnote">
           Requires Linux ≥ 5.4 and root. The script installs the binary, writes
           <code>/etc/olopa/config.toml</code>, and registers a systemd service.
-          <a href="https://console.olopa.io/install.sh" target="_blank" rel="noopener noreferrer">View install script source</a>
+          <a href="https://olopa.io/install.sh" target="_blank" rel="noopener noreferrer">View install script source</a>
           ·
           <a href="#security-notes">Security notes</a>
         </p>
@@ -1406,7 +1405,7 @@
           Security notes: review script contents before execution and run only on trusted hosts.
         </p>
         <p class="install-copy-status" id="install-copy-status">Click COPY to copy command.</p>
-      </div> -->
+      </div>
     </div>
 
     <div class="hero-terminal fade-in">
@@ -1882,7 +1881,7 @@ rule "root_ssh_write_by_non_root_process" {
       const tokenized = raw
         .replace(/\b(curl|sudo|sh)\b/g, '<span class="cmd-bin">$1</span>')
         .replace(/\b(OLOPA_TOKEN=your_token_here)\b/g, '<span class="cmd-env">$1</span>')
-        .replace(/\b(install\.olopa\.io)\b/g, '<span class="cmd-url">$1</span>')
+        .replace(/(https:\/\/(?:olopa\.io|console\.olopa\.io)\/install\.sh)/g, '<span class="cmd-url">$1</span>')
         .replace(/(\|)/g, '<span class="cmd-op">$1</span>');
       return `<span class="cmd-prompt">$</span> ${tokenized}`;
     }
