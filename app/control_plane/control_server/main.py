@@ -17,7 +17,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 import httpx
 from pydantic import BaseModel, Field
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -64,16 +64,16 @@ async def install_page_redirect() -> RedirectResponse:
 
 
 @app.get("/install.sh")
-async def install_script() -> FileResponse:
+async def install_script() -> PlainTextResponse:
     """Return the checked-in installer script from template/install.sh."""
     script_path = template_root / "install.sh"
     if not script_path.exists() or not script_path.is_file():
         raise HTTPException(status_code=404, detail="install script not found")
-    return FileResponse(
-        path=str(script_path),
-        media_type="text/x-shellscript",
-        filename="install.sh",
-    )
+    try:
+        script_text = script_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"failed to read install script: {exc}") from exc
+    return PlainTextResponse(content=script_text)
 
 
 @app.get("/downloads/agent/latest", response_model=None)
