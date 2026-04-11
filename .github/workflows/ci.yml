@@ -38,7 +38,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run agent tests
-        run: cargo test --manifest-path agent/Cargo.toml -p olopa-agent
+        run: cargo test --manifest-path agent/Cargo.toml -p olopa
 
   ingest-server-tests:
     name: ingest server tests
@@ -74,4 +74,4 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run ignored e2e integration test
-        run: cargo test --manifest-path agent/Cargo.toml -p olopa-agent agent::tests::e2e_rule_to_runtime_to_sender_to_ingest_runtime -- --ignored --exact
+        run: cargo test --manifest-path agent/Cargo.toml -p olopa agent::tests::e2e_rule_to_runtime_to_sender_to_ingest_runtime -- --ignored --exact
