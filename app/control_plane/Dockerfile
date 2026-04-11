@@ -15,19 +15,19 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /opt/olopa
 
-COPY app/control_plane/requirements.txt /tmp/requirements.txt
+COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
 
-# Control-plane source plus oilc (used by compile endpoint).
-COPY app/control_plane ./app/control_plane
-COPY oilc ./oilc
+# Control-plane source.
+COPY . ./app/control_plane
 
 WORKDIR /opt/olopa/app/control_plane
 
 ENV CONTROL_HOST=0.0.0.0
 ENV CONTROL_PORT=8100
 ENV RUST_INGEST_BASE_URL=http://olopa-ingest:8000
-ENV OILC_MANIFEST_PATH=/opt/olopa/oilc/Cargo.toml
+# oilc source is not present in this deployment context by default.
+ENV OILC_MANIFEST_PATH=/opt/olopa/app/control_plane/oilc/Cargo.toml
 
 RUN chown -R olopa:olopa /opt/olopa
 USER olopa

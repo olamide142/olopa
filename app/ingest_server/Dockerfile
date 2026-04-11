@@ -5,14 +5,14 @@ FROM rust:1.94-bookworm AS builder
 WORKDIR /build
 
 # Prime dependency cache.
-COPY app/ingest_server/Cargo.toml app/ingest_server/Cargo.lock ./
+COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src \
     && printf 'fn main() {}\n' > src/main.rs \
     && cargo build --release \
     && rm -rf src
 
 # Build real binary.
-COPY app/ingest_server/src ./src
+COPY src ./src
 RUN cargo build --release
 
 FROM debian:bookworm-slim AS runtime
