@@ -37,4 +37,4 @@ ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8000
 ENV INGEST_PERSIST_JSONL_PATH=/var/lib/olopa/ingest/events.jsonl
 
-ENTRYPOINT ["/usr/local/bin/olopa-ingest"]
+CMD ["sh", "-lc", ": \"${SERVER_HOST:=0.0.0.0}\"; : \"${SERVER_PORT:=${PORT:-8000}}\"; exec /usr/local/bin/olopa-ingest"]
