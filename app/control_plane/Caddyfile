@@ -10,6 +10,34 @@
 		reverse_proxy 127.0.0.1:8100
 	}
 
+
+	@docs_root {
+		host docs.olopa.io
+		path /
+	}
+	redir @docs_root /quickstart 308
+
+	@docs_pages {
+		host docs.olopa.io
+		path /quickstart /quickstart/* /agent/config /agent/config/*
+	}
+	handle @docs_pages {
+		reverse_proxy 127.0.0.1:8100
+	}
+
+	@docs_assets {
+		host docs.olopa.io
+		path /assets/*
+	}
+	handle @docs_assets {
+		reverse_proxy 127.0.0.1:8100
+	}
+
+	@docs_other host docs.olopa.io
+	handle @docs_other {
+		redir /quickstart 308
+	}
+
 	@landing_health {
 		host olopa.io www.olopa.io
 		path /health

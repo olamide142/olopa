@@ -4,6 +4,8 @@ This document is a code-accurate walkthrough of the `oilc` compiler as implement
 
 It is written for code-freeze review: what is actually on the execution path, what data flows between stages, and what is still partial or legacy.
 
+For authoring and operational rollout, see `docs/oilc/rules-authoring-and-rollout.md`.
+
 ## 1) Mental Model
 
 `oilc` is a multi-stage compiler for OIL rules:

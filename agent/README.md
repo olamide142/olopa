@@ -136,7 +136,7 @@ Run these commands from `olopa/agent`.
     APPROVE 1
     ```
 - Override runtime-ir or ingest target directly via CLI:
-  - `cargo run --manifest-path Cargo.toml -p olopa -- --runtime-ir /etc/olopa/runtime-ir.json --ingest-url http://127.0.0.1:8000/api/v1/ingest/batches`
+  - `cargo run --manifest-path Cargo.toml -p olopa -- r /etc/olopa/runtime-ir.json --ingest-url http://127.--runtime-i0.0.1:8000/api/v1/ingest/batches`
 - Provide ingest auth when ingest API tokens are enabled:
   - `cargo run --manifest-path Cargo.toml -p olopa -- --ingest-api-token <token>`
   - `cargo run --manifest-path Cargo.toml -p olopa -- --ingest-api-key <key>`

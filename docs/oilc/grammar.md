@@ -8,6 +8,8 @@ This document describes the grammar currently accepted by the Rust parser in:
 
 It is intentionally the **implemented subset**, not the broader language vision.
 
+For end-to-end usage (write -> compile -> agent rollout), see `docs/oilc/rules-authoring-and-rollout.md`.
+
 ## Lexical Notes
 
 - Identifiers: `foo`, `process`, `network.flow`, `user_id`

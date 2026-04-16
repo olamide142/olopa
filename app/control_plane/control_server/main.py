@@ -50,6 +50,26 @@ async def landing_page(request: Request) -> HTMLResponse:
         context={"request": request},
     )
 
+@app.get("/quickstart", response_class=HTMLResponse)
+@app.get("/quickstart/", response_class=HTMLResponse)
+async def docs_quickstart_page(request: Request) -> HTMLResponse:
+    """Render docs quickstart page."""
+    return templates.TemplateResponse(
+        request=request,
+        name="docs_quickstart.html",
+        context={"request": request},
+    )
+
+
+@app.get("/agent/config", response_class=HTMLResponse)
+@app.get("/agent/config/", response_class=HTMLResponse)
+async def docs_agent_config_page(request: Request) -> HTMLResponse:
+    """Render docs page for agent configuration."""
+    return templates.TemplateResponse(
+        request=request,
+        name="docs_agent_config.html",
+        context={"request": request},
+    )
 
 @app.get("/app")
 async def legacy_app_route() -> RedirectResponse:

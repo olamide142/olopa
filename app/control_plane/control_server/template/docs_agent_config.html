@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Olopa Docs - Agent Configuration</title>
+  <style>
+    :root {
+      --bg: #0b0f1d;
+      --panel: #131a2c;
+      --text: #eef2fb;
+      --muted: #a7b2cf;
+      --line: #2c3651;
+      --accent: #63d3ff;
+      --code-bg: #0a1224;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      background: linear-gradient(170deg, #0f1730 0%, var(--bg) 55%);
+      color: var(--text);
+      line-height: 1.55;
+    }
+    .wrap {
+      width: min(1040px, 92vw);
+      margin: 0 auto;
+      padding: 40px 0 72px;
+    }
+    .top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 18px;
+    }
+    .brand { font-weight: 700; }
+    .brand span { color: var(--accent); }
+    .nav a {
+      color: var(--muted);
+      text-decoration: none;
+      margin-left: 14px;
+    }
+    .nav a:hover { color: var(--text); }
+    h1 {
+      margin: 8px 0 4px;
+      font-size: clamp(1.8rem, 3vw, 2.4rem);
+      line-height: 1.15;
+    }
+    .lead {
+      margin: 0 0 22px;
+      color: var(--muted);
+      max-width: 75ch;
+    }
+    .card {
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+      border-radius: 14px;
+      padding: 20px;
+      margin-top: 14px;
+      overflow: hidden;
+    }
+    h2 { margin-top: 0; font-size: 1.15rem; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+      background: rgba(255,255,255,0.08);
+      padding: 2px 6px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    pre {
+      margin: 10px 0 0;
+      background: var(--code-bg);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: auto;
+      padding: 14px;
+    }
+    pre code {
+      background: transparent;
+      padding: 0;
+      white-space: pre;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 0.96rem;
+      min-width: 720px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      padding: 10px 8px;
+      vertical-align: top;
+    }
+    th { color: #d8e0f4; }
+    .table-wrap { overflow: auto; }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="top">
+      <div class="brand">Olopa <span>Docs</span></div>
+      <nav class="nav">
+        <a href="/quickstart">Quickstart</a>
+        <a href="/agent/config">Agent Config</a>
+      </nav>
+    </div>
+
+    <h1>Agent Configuration</h1>
+    <p class="lead">Runtime IR, ingest endpoint, tenant identity, and auth configuration for the <code>olopa</code> agent.</p>
+
+    <section class="card">
+      <h2>Defaults</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Setting</th>
+              <th>Default</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>OLOPA_RUNTIME_IR</code></td>
+              <td><code>/etc/olopa/runtime-ir.json</code></td>
+              <td>Path to compiler-emitted runtime IR artifact loaded at startup.</td>
+            </tr>
+            <tr>
+              <td><code>OLOPA_INGEST_URL</code></td>
+              <td><code>http://127.0.0.1:8000/api/v1/ingest/batches</code></td>
+              <td>HTTP endpoint used for ingest batch POSTs.</td>
+            </tr>
+            <tr>
+              <td><code>OLOPA_INGEST_TENANT_ID</code></td>
+              <td><code>default</code></td>
+              <td>Tenant id included in outgoing ingest payloads.</td>
+            </tr>
+            <tr>
+              <td><code>OLOPA_INGEST_HOST_ID</code></td>
+              <td><code>agent-local</code> (or host name)</td>
+              <td>Host identity included in ingest payloads.</td>
+            </tr>
+            <tr>
+              <td><code>OLOPA_STATUS_PATH</code></td>
+              <td><code>/tmp/olopa/agent/status.json</code></td>
+              <td>Location of runtime status snapshot used by <code>olopa status</code>.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Auth options</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Env / Flag</th>
+              <th>Header sent to ingest</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>OLOPA_INGEST_API_TOKEN</code> / <code>--ingest-api-token</code></td>
+              <td><code>Authorization: Bearer &lt;token&gt;</code></td>
+              <td>Preferred option when ingest is configured with API tokens.</td>
+            </tr>
+            <tr>
+              <td><code>OLOPA_INGEST_API_KEY</code> / <code>--ingest-api-key</code></td>
+              <td><code>x-api-key: &lt;key&gt;</code></td>
+              <td>Alternative auth header supported by ingest server.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Recommended environment block</h2>
+      <pre><code>export OLOPA_RUNTIME_IR=/etc/olopa/runtime-ir.json
+export OLOPA_INGEST_URL=http://127.0.0.1:8000/api/v1/ingest/batches
+export OLOPA_INGEST_TENANT_ID=acme
+export OLOPA_INGEST_HOST_ID=host-01
+export OLOPA_INGEST_API_TOKEN=agent-acme-token
+export OLOPA_STATUS_PATH=/tmp/olopa/agent/status.json</code></pre>
+    </section>
+
+    <section class="card">
+      <h2>CLI override example</h2>
+      <pre><code>cargo run --manifest-path agent/Cargo.toml -p olopa -- \
+  --iface eth0 \
+  --runtime-ir /etc/olopa/runtime-ir.json \
+  --ingest-url http://127.0.0.1:8000/api/v1/ingest/batches \
+  --ingest-tenant-id acme \
+  --ingest-host-id host-01 \
+  --ingest-api-token agent-acme-token</code></pre>
+    </section>
+
+    <section class="card">
+      <h2>Fallback behavior</h2>
+      <p>If runtime IR fails to load, agent startup fails by default. Set <code>OLOPA_ALLOW_SIMPLE_RULE_FALLBACK=1</code> (or <code>--allow-simple-rule-fallback</code>) only for temporary recovery scenarios.</p>
+    </section>
+  </main>
+</body>
+</html>

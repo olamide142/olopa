@@ -1,0 +1,1664 @@
+{
+  "fields": [
+    {
+      "aliases": [
+        "added",
+        "capabilities.added"
+      ],
+      "canonical": "container.capabilities.added",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [],
+      "canonical": "container.container_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "exists"
+      ],
+      "canonical": "container.exists",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "image.id"
+      ],
+      "canonical": "container.image.id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "image.repo",
+        "repo"
+      ],
+      "canonical": "container.image.repo",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "image.tag",
+        "tag"
+      ],
+      "canonical": "container.image.tag",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "initiator.user_id"
+      ],
+      "canonical": "container.initiator.user_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "labels.environment"
+      ],
+      "canonical": "container.labels.environment",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "host_ipc",
+        "namespaces.host_ipc"
+      ],
+      "canonical": "container.namespaces.host_ipc",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "host_network",
+        "namespaces.host_network"
+      ],
+      "canonical": "container.namespaces.host_network",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "host_pid",
+        "namespaces.host_pid"
+      ],
+      "canonical": "container.namespaces.host_pid",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "orchestrator"
+      ],
+      "canonical": "container.orchestrator",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "container.pod_uid",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "privileged",
+        "security.privileged"
+      ],
+      "canonical": "container.security.privileged",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "tags"
+      ],
+      "canonical": "container.tags",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [
+        "compliant"
+      ],
+      "canonical": "device.compliant",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [],
+      "canonical": "device.hostname",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "device.id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "managed"
+      ],
+      "canonical": "device.managed",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "agent_healthy",
+        "posture.agent_healthy"
+      ],
+      "canonical": "device.posture.agent_healthy",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "disk_encryption",
+        "posture.disk_encryption"
+      ],
+      "canonical": "device.posture.disk_encryption",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "edr_present",
+        "posture.edr_present"
+      ],
+      "canonical": "device.posture.edr_present",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "firewall_enabled",
+        "posture.firewall_enabled"
+      ],
+      "canonical": "device.posture.firewall_enabled",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "kernel_sensor",
+        "posture.kernel_sensor"
+      ],
+      "canonical": "device.posture.kernel_sensor",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "last_seen_age",
+        "posture.last_seen_age"
+      ],
+      "canonical": "device.posture.last_seen_age",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "os_supported",
+        "posture.os_supported"
+      ],
+      "canonical": "device.posture.os_supported",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "posture.risk_score"
+      ],
+      "canonical": "device.posture.risk_score",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "posture.screen_lock",
+        "screen_lock"
+      ],
+      "canonical": "device.posture.screen_lock",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "serial"
+      ],
+      "canonical": "device.serial",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "device.trust_score",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "domain.entropy",
+        "entropy"
+      ],
+      "canonical": "dns.domain.entropy",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "domain.value",
+        "value"
+      ],
+      "canonical": "dns.domain.value",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "comm_id",
+        "process.comm_id"
+      ],
+      "canonical": "event.comm_id",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "dst_vertex_id"
+      ],
+      "canonical": "event.dst_vertex_id",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "event.type",
+        "event_type"
+      ],
+      "canonical": "event.event_type",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "risk_score",
+        "score"
+      ],
+      "canonical": "event.risk_score",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "ts_ns"
+      ],
+      "canonical": "event.ts_ns",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "event.src_vertex_id",
+        "vertex_id"
+      ],
+      "canonical": "event.vertex_id",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "inode"
+      ],
+      "canonical": "file.inode",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "last_modified"
+      ],
+      "canonical": "file.last_modified",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "file.mode",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "file.path",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "file.process_id",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "sensitivity_label"
+      ],
+      "canonical": "file.sensitivity_label",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "baseline.domains",
+        "domains"
+      ],
+      "canonical": "host.baseline.domains",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [
+        "baseline.ips",
+        "ips"
+      ],
+      "canonical": "host.baseline.ips",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [
+        "baseline.processes",
+        "processes"
+      ],
+      "canonical": "host.baseline.processes",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [
+        "baseline.users",
+        "users"
+      ],
+      "canonical": "host.baseline.users",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [],
+      "canonical": "host.device_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "host.hostname",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "host.id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "host.risk_score",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "secure_connect_enabled"
+      ],
+      "canonical": "host.secure_connect_enabled",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "bytes_in"
+      ],
+      "canonical": "network.bytes_in",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "bytes_out"
+      ],
+      "canonical": "network.bytes_out",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "asn",
+        "dest.asn"
+      ],
+      "canonical": "network.dest.asn",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "dest.domain",
+        "domain"
+      ],
+      "canonical": "network.dest.domain",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "dest.geo_country",
+        "geo_country"
+      ],
+      "canonical": "network.dest.geo_country",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "dest.ip",
+        "dst_ip",
+        "ip"
+      ],
+      "canonical": "network.dest.ip",
+      "is_time_context": false,
+      "value_type": "ip"
+    },
+    {
+      "aliases": [
+        "dest.is_internal",
+        "is_internal"
+      ],
+      "canonical": "network.dest.is_internal",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "dest.is_secure_connect_gateway",
+        "is_secure_connect_gateway"
+      ],
+      "canonical": "network.dest.is_secure_connect_gateway",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "dest.port",
+        "dst_port",
+        "port"
+      ],
+      "canonical": "network.dest.port",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "dest.proto",
+        "proto"
+      ],
+      "canonical": "network.dest.proto",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "dest.reputation",
+        "reputation"
+      ],
+      "canonical": "network.dest.reputation",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "dest.service_class",
+        "service_class"
+      ],
+      "canonical": "network.dest.service_class",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "dest.threat_score",
+        "threat_score"
+      ],
+      "canonical": "network.dest.threat_score",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "direction"
+      ],
+      "canonical": "network.direction",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "network.process_id",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "network.secure_connect_session_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "network.session_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "tunneled"
+      ],
+      "canonical": "network.tunneled",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.binary.filename",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.binary.hash",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.binary.path",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.binary.signed",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.command_line",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.container_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.elevated",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.gid",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.host_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.id",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "comm",
+        "name",
+        "process.comm"
+      ],
+      "canonical": "process.name",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "parent.binary.filename"
+      ],
+      "canonical": "process.parent.binary.filename",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "parent.binary.hash"
+      ],
+      "canonical": "process.parent.binary.hash",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "parent.binary.path"
+      ],
+      "canonical": "process.parent.binary.path",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "parent.binary.signed"
+      ],
+      "canonical": "process.parent.binary.signed",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "parent.command_line"
+      ],
+      "canonical": "process.parent.command_line",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "parent.container_id"
+      ],
+      "canonical": "process.parent.container_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "parent.elevated"
+      ],
+      "canonical": "process.parent.elevated",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "parent.gid"
+      ],
+      "canonical": "process.parent.gid",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "parent.host_id"
+      ],
+      "canonical": "process.parent.host_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "parent.id"
+      ],
+      "canonical": "process.parent.id",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "parent.name"
+      ],
+      "canonical": "process.parent.name",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "parent.pid"
+      ],
+      "canonical": "process.parent.pid",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "parent.ppid"
+      ],
+      "canonical": "process.parent.ppid",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "parent.secure_connect_session_id"
+      ],
+      "canonical": "process.parent.secure_connect_session_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "parent.session_id"
+      ],
+      "canonical": "process.parent.session_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "parent.tty"
+      ],
+      "canonical": "process.parent.tty",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "parent.uid"
+      ],
+      "canonical": "process.parent.uid",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "parent.user.baseline.countries"
+      ],
+      "canonical": "process.parent.user.baseline.countries",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [
+        "parent.user.baseline.geos"
+      ],
+      "canonical": "process.parent.user.baseline.geos",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [
+        "parent.user.baseline.hosts"
+      ],
+      "canonical": "process.parent.user.baseline.hosts",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [
+        "parent.user.baseline.login_hours"
+      ],
+      "canonical": "process.parent.user.baseline.login_hours",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [
+        "parent.user.groups"
+      ],
+      "canonical": "process.parent.user.groups",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [
+        "parent.user.id"
+      ],
+      "canonical": "process.parent.user.id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "parent.user.last_known_device"
+      ],
+      "canonical": "process.parent.user.last_known_device",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "parent.user.name"
+      ],
+      "canonical": "process.parent.user.name",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "parent.user.secure_connect_groups"
+      ],
+      "canonical": "process.parent.user.secure_connect_groups",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [
+        "parent.user.trust_score"
+      ],
+      "canonical": "process.parent.user.trust_score",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "parent.user.uid"
+      ],
+      "canonical": "process.parent.user.uid",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "pid",
+        "process.id",
+        "process_id"
+      ],
+      "canonical": "process.pid",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.ppid",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.secure_connect_session_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.session_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.tty",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "uid",
+        "user.uid"
+      ],
+      "canonical": "process.uid",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.user.baseline.countries",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.user.baseline.geos",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.user.baseline.hosts",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.user.baseline.login_hours",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.user.groups",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.user.id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.user.last_known_device",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.user.name",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.user.secure_connect_groups",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.user.trust_score",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "process.user.uid",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "sc_gateway.environment",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "healthy"
+      ],
+      "canonical": "sc_gateway.healthy",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [],
+      "canonical": "sc_gateway.hostname",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "sc_gateway.id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "internal_ip"
+      ],
+      "canonical": "sc_gateway.internal_ip",
+      "is_time_context": false,
+      "value_type": "ip"
+    },
+    {
+      "aliases": [],
+      "canonical": "sc_gateway.name",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "sc_gateway.port",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "public_ip"
+      ],
+      "canonical": "sc_gateway.public_ip",
+      "is_time_context": false,
+      "value_type": "ip"
+    },
+    {
+      "aliases": [
+        "region"
+      ],
+      "canonical": "sc_gateway.region",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "endpoint_ip"
+      ],
+      "canonical": "sc_peer.endpoint_ip",
+      "is_time_context": false,
+      "value_type": "ip"
+    },
+    {
+      "aliases": [
+        "endpoint_port"
+      ],
+      "canonical": "sc_peer.endpoint_port",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "sc_peer.id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "latest_handshake_age"
+      ],
+      "canonical": "sc_peer.latest_handshake_age",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "public_key"
+      ],
+      "canonical": "sc_peer.public_key",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "rx_bytes"
+      ],
+      "canonical": "sc_peer.rx_bytes",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "tx_bytes"
+      ],
+      "canonical": "sc_peer.tx_bytes",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "allow_cidrs"
+      ],
+      "canonical": "sc_profile.allow_cidrs",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [
+        "allow_domains"
+      ],
+      "canonical": "sc_profile.allow_domains",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [
+        "allow_ports"
+      ],
+      "canonical": "sc_profile.allow_ports",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [
+        "dns_servers"
+      ],
+      "canonical": "sc_profile.dns_servers",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [],
+      "canonical": "sc_profile.id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "max_session_age"
+      ],
+      "canonical": "sc_profile.max_session_age",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "sc_profile.mode",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "sc_profile.name",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "require_compliant_device"
+      ],
+      "canonical": "sc_profile.require_compliant_device",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "require_managed_device"
+      ],
+      "canonical": "sc_profile.require_managed_device",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "require_mfa"
+      ],
+      "canonical": "sc_profile.require_mfa",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "scope"
+      ],
+      "canonical": "sc_profile.scope",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "secure_connect.active",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [],
+      "canonical": "secure_connect.age",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "client_ip"
+      ],
+      "canonical": "secure_connect.client_ip",
+      "is_time_context": false,
+      "value_type": "ip"
+    },
+    {
+      "aliases": [],
+      "canonical": "secure_connect.country",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "declared_scope"
+      ],
+      "canonical": "secure_connect.declared_scope",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "secure_connect.device_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "dns_mode"
+      ],
+      "canonical": "secure_connect.dns_mode",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "established"
+      ],
+      "canonical": "secure_connect.established",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "gateway_id"
+      ],
+      "canonical": "secure_connect.gateway_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "secure_connect.geo",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "secure_connect.host_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "secure_connect.id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "mfa_bound"
+      ],
+      "canonical": "secure_connect.mfa_bound",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "peer_id"
+      ],
+      "canonical": "secure_connect.peer_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "profile_id"
+      ],
+      "canonical": "secure_connect.profile_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "secure_connect.risk_score",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "route_mode"
+      ],
+      "canonical": "secure_connect.route_mode",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "state"
+      ],
+      "canonical": "secure_connect.state",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "tunnel_ip"
+      ],
+      "canonical": "secure_connect.tunnel_ip",
+      "is_time_context": false,
+      "value_type": "ip"
+    },
+    {
+      "aliases": [],
+      "canonical": "secure_connect.user_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "session.active",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [],
+      "canonical": "session.age",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "auth_method"
+      ],
+      "canonical": "session.auth_method",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "session.country",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "session.device_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "session.geo",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "session.id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "mfa_present"
+      ],
+      "canonical": "session.mfa_present",
+      "is_time_context": false,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [],
+      "canonical": "session.trust_score",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "session.user_id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "hour"
+      ],
+      "canonical": "time.hour",
+      "is_time_context": true,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "business_hours",
+        "is_business_hour",
+        "time.business_hours"
+      ],
+      "canonical": "time.is_business_hour",
+      "is_time_context": true,
+      "value_type": "bool"
+    },
+    {
+      "aliases": [
+        "minute"
+      ],
+      "canonical": "time.minute",
+      "is_time_context": true,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "day_of_week",
+        "time.day_of_week",
+        "weekday"
+      ],
+      "canonical": "time.weekday",
+      "is_time_context": true,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "user.baseline.countries",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [],
+      "canonical": "user.baseline.geos",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [],
+      "canonical": "user.baseline.hosts",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [],
+      "canonical": "user.baseline.login_hours",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [],
+      "canonical": "user.groups",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [],
+      "canonical": "user.id",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "user.last_known_device",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "user.name",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "user.secure_connect_groups",
+      "is_time_context": false,
+      "value_type": "list"
+    },
+    {
+      "aliases": [],
+      "canonical": "user.trust_score",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "user.uid",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "workload.name",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "namespace"
+      ],
+      "canonical": "workload.namespace",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "workload.pod_uid",
+      "is_time_context": false,
+      "value_type": "string"
+    }
+  ],
+  "rules": [
+    {
+      "class": "temporal",
+      "emit": [],
+      "id": "rule:0:outbound_to_specific_website_business_hours",
+      "joins": [
+        {
+          "left_alias": "p",
+          "on": {
+            "lhs": {
+              "op": "field",
+              "path": "n.process_id"
+            },
+            "op": "eq",
+            "rhs": {
+              "op": "field",
+              "path": "p.id"
+            }
+          },
+          "right_alias": "n"
+        }
+      ],
+      "lets": [],
+      "name": "outbound_to_specific_website_business_hours",
+      "predicates": [
+        {
+          "lhs": {
+            "lhs": {
+              "lhs": {
+                "lhs": {
+                  "lhs": {
+                    "op": "field",
+                    "path": "n.direction"
+                  },
+                  "op": "eq",
+                  "rhs": {
+                    "op": "str",
+                    "value": "outbound"
+                  }
+                },
+                "op": "and",
+                "rhs": {
+                  "lhs": {
+                    "op": "field",
+                    "path": "n.dest.domain"
+                  },
+                  "op": "in",
+                  "rhs": [
+                    {
+                      "op": "str",
+                      "value": "apple.com"
+                    }
+                  ]
+                }
+              },
+              "op": "and",
+              "rhs": {
+                "lhs": {
+                  "op": "field",
+                  "path": "time.weekday"
+                },
+                "op": "eq",
+                "rhs": {
+                  "op": "str",
+                  "value": "saturday"
+                }
+              }
+            },
+            "op": "and",
+            "rhs": {
+              "lhs": {
+                "op": "field",
+                "path": "time.hour"
+              },
+              "op": "ge",
+              "rhs": {
+                "op": "int",
+                "value": 9
+              }
+            }
+          },
+          "op": "and",
+          "rhs": {
+            "lhs": {
+              "op": "field",
+              "path": "time.hour"
+            },
+            "op": "lt",
+            "rhs": {
+              "op": "int",
+              "value": 23
+            }
+          }
+        }
+      ],
+      "require": [],
+      "respond": {
+        "branches": [
+          {
+            "actions": [
+              {
+                "action": "alert",
+                "message": null,
+                "severity": "critical"
+              },
+              {
+                "action": "block_egress",
+                "target": "n.dest.domain"
+              },
+              {
+                "action": "snapshot",
+                "snapshot_kind": "entities",
+                "targets": [
+                  "p",
+                  "n"
+                ]
+              },
+              {
+                "action": "open_case",
+                "title": "Blocked outbound to protected website during business hours"
+              }
+            ],
+            "condition": null
+          }
+        ]
+      },
+      "score": {
+        "base": 0,
+        "modifiers": []
+      },
+      "sources": [
+        {
+          "alias": null,
+          "domain": "endpoint",
+          "event": "process"
+        },
+        {
+          "alias": null,
+          "domain": "network",
+          "event": "flow"
+        }
+      ],
+      "verify": [],
+      "window": null
+    }
+  ],
+  "version": 1
+}

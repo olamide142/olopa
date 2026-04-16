@@ -7,10 +7,10 @@ rule "outbound_to_specific_website_business_hours" {
 
   where
     n.direction == "outbound"
-    and n.dest.domain in ["linkedin.com"]
-    and time.weekday == "tuesday"
+    and n.dest.domain in ["apple.com"]
+    and time.weekday == "saturday"
     and time.hour >= 9
-    and time.hour < 17
+    and time.hour < 23
     // Replace with your org's developer UID Or GID set.
     // and p.uid in [1000, 1001, 1002] or p.gid in [...]
 
