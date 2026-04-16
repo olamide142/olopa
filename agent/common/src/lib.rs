@@ -50,6 +50,8 @@ pub struct NetEvent {
 }
 
 /// SQL query event (uprobe on PQexec / mysql_real_query)
+///
+/// Size: 48 bytes (unique — avoids ring-buffer size collision with NetEvent/SslEvent).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SqlEvent {
@@ -61,9 +63,12 @@ pub struct SqlEvent {
     pub query_class: u8,    // 0=other 1=select 2=dml 3=ddl 4=admin
     pub db_port: u16,       // 5432 (postgres) or 3306 (mysql); 0 if unknown
     pub _pad: u8,
+    pub _ext: [u8; 8],      // reserved — keeps struct size unique (48 bytes)
 }
 
 /// TLS/OpenSSL encryption event (uprobe on EVP_EncryptUpdate / EVP_DecryptUpdate)
+///
+/// Size: 44 bytes (unique — avoids ring-buffer size collision with NetEvent/SqlEvent).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SslEvent {
@@ -73,7 +78,27 @@ pub struct SslEvent {
     pub comm: [u8; 16],    // TASK_COMM_LEN
     pub data_len: u32,     // input bytes processed in this call
     pub operation: u8,     // 0=encrypt 1=decrypt
-    pub _pad: [u8; 3],
+    pub _pad: [u8; 7],     // extended to 7 bytes to reach 44-byte unique size
+}
+
+/// DNS name resolution event (uprobe on libc getaddrinfo).
+///
+/// Fires on the process that initiated the lookup, capturing the hostname
+/// before the kernel resolver runs.  Useful for detecting C2 callback domains,
+/// DGA patterns, and data-exfiltration via DNS.
+///
+/// Size: 104 bytes (unique).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DnsEvent {
+    pub ts_ns: u64,
+    pub pid: u32,
+    pub uid: u32,
+    pub comm: [u8; 16],    // TASK_COMM_LEN
+    pub query: [u8; 64],   // NUL-terminated queried hostname (truncated to 63 chars)
+    pub query_hash: u32,   // FNV-1a hash of `query` up to NUL
+    pub query_len: u16,    // byte length of query string (capped at 63)
+    pub _pad: [u8; 2],
 }
 
 /// XDP packet verdict counters — stored in a BPF array map, index = action
@@ -143,3 +168,5 @@ unsafe impl aya::Pod for XdpStats {}
 unsafe impl aya::Pod for SqlEvent {}
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for SslEvent {}
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for DnsEvent {}

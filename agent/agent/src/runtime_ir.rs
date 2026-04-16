@@ -15,6 +15,7 @@ use log::{debug, log_enabled, Level};
 use serde::Deserialize;
 
 use crate::agent::{IngestEvent, RuleMatch};
+use crate::intel_store;
 
 const DNS_CACHE_TTL: Duration = Duration::from_secs(60);
 /// Cached DNS lookup map: domain -> (fetch_time, resolved_ipv4s).
@@ -480,6 +481,19 @@ const FALLBACK_FIELD_METADATA: &[FallbackFieldMetadata] = &[
         aliases: &["ssl_operation"],
         is_time_context: false,
     },
+    // DNS resolution event fields (event_type == 6)
+    FallbackFieldMetadata {
+        canonical: "dns.domain.value",
+        value_type: FieldType::String,
+        aliases: &["dns_query", "dns.query", "dns.name"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "dns.query_hash",
+        value_type: FieldType::Number,
+        aliases: &["dns_query_hash"],
+        is_time_context: false,
+    },
 ];
 
 fn build_field_specs(program: &RuntimeProgram) -> Vec<FieldSpec> {
@@ -587,6 +601,9 @@ fn lookup_field_extractor(canonical: &str) -> Option<fn(&IngestEvent) -> Value> 
         // SSL event fields
         "ssl.data_len" => Some(field_ssl_data_len),
         "ssl.operation" => Some(field_ssl_operation),
+        // DNS event fields
+        "dns.domain.value" => Some(field_dns_domain_value),
+        "dns.query_hash" => Some(field_dns_query_hash),
         _ => None,
     }
 }
@@ -899,6 +916,14 @@ fn eval_eq(
 }
 
 /// Evaluate membership predicate (`lhs in rhs_list`).
+///
+/// Two evaluation paths:
+/// 1. **External set reference** — when `rhs` is a single `Field` whose path
+///    starts with `org.` or `intel.`, look the LHS value up in the global
+///    `IntelStore` via O(1) `HashSet` lookup.  This is how rules like
+///    `q.domain.value in org.threat_intel.c2_domains` work at runtime.
+/// 2. **Inline list** — iterate over evaluated RHS items and compare pairwise
+///    (existing behaviour for static literal lists).
 fn eval_in(
     lhs: &RuntimeExpr,
     rhs: &[RuntimeExpr],
@@ -906,11 +931,48 @@ fn eval_in(
     field_specs: &[FieldSpec],
     callable_state: &Mutex<CallableEvalState>,
 ) -> bool {
+    // --- Path 1: external intel-store set reference --------------------------
+    if let [RuntimeExpr::Field { path: set_name }] = rhs {
+        if is_external_set_ref(set_name) {
+            let lhs_value = eval_value(lhs, event, field_specs, callable_state);
+            return intel_store_contains(set_name, &lhs_value);
+        }
+    }
+
+    // --- Path 2: inline literal list -----------------------------------------
     let lhs_value = eval_value(lhs, event, field_specs, callable_state);
     rhs.iter().any(|item| {
         let rhs_value = eval_value(item, event, field_specs, callable_state);
         values_equal(&lhs_value, &rhs_value)
     })
+}
+
+/// Return `true` when `path` names an external threat-intelligence set.
+///
+/// Convention: paths starting with `org.` or `intel.` are external set
+/// references populated by the intel-sync feed service, not event field paths.
+#[inline]
+fn is_external_set_ref(path: &str) -> bool {
+    path.starts_with("org.") || path.starts_with("intel.")
+}
+
+/// Look up a runtime `Value` in the named intel-store set.
+///
+/// - `String` values are looked up in string sets (domains, hashes).
+/// - `Ip` values are looked up in IP sets (malicious IPs).
+/// - All other types return `false`.
+#[inline]
+fn intel_store_contains(set_name: &str, value: &Value) -> bool {
+    match value {
+        Value::String(s) => intel_store::contains_str(set_name, &s.to_lowercase()),
+        Value::Ip(ip) => intel_store::contains_ip(set_name, *ip),
+        Value::Number(n) => {
+            // Allow matching numeric IPs stored as integers (e.g. from net events).
+            let ip = *n as u32;
+            intel_store::contains_ip(set_name, ip)
+        }
+        _ => false,
+    }
 }
 
 // Core value equality with typed adapters.
@@ -1678,6 +1740,30 @@ fn field_ssl_data_len(event: &IngestEvent) -> Value {
 fn field_ssl_operation(event: &IngestEvent) -> Value {
     if event.event_type == 5 {
         Value::Number(event.ssl_operation as f64)
+    } else {
+        Value::Null
+    }
+}
+
+// DNS field extractors — only meaningful when event_type == 6.
+
+fn field_dns_domain_value(event: &IngestEvent) -> Value {
+    if event.event_type == 6 {
+        // Decode the NUL-terminated hostname from the fixed-size buffer.
+        let buf = &event.dns_query;
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        match std::str::from_utf8(&buf[..end]) {
+            Ok(s) => Value::String(s.to_string()),
+            Err(_) => Value::Null,
+        }
+    } else {
+        Value::Null
+    }
+}
+
+fn field_dns_query_hash(event: &IngestEvent) -> Value {
+    if event.event_type == 6 {
+        Value::Number(event.dns_query_hash as f64)
     } else {
         Value::Null
     }

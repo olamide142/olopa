@@ -1,0 +1,182 @@
+// DNS resolution security rules.
+//
+// These rules fire on DnsEvent telemetry produced by the getaddrinfo uprobe
+// on libc.  The uprobe fires before the kernel resolver runs, capturing the
+// hostname as supplied by the calling process.
+//
+// Key detection patterns:
+//   - C2 callback domains (known-malicious allowlist check)
+//   - Long subdomain labels / DNS tunnelling
+//   - DGA (Domain Generation Algorithm) queries from non-browser processes
+//   - DNS resolution from database server processes (unusual / exfil signal)
+
+// --- C2 callback domain resolution -------------------------------------------
+// Any process resolving a known C2 / malware callback domain is a high-
+// confidence indicator of compromise.  The domain set is managed via threat
+// intel feeds and updated without recompiling rules.
+
+rule "dns_c2_domain_lookup" {
+  from dns.query, endpoint.process
+
+  correlate
+    dns.query as q
+    with process.spawn as p on p.pid == q.pid
+
+  where
+    q.domain.value in org.threat_intel.c2_domains
+
+  let
+    root_proc    = p.uid == 0
+    unusual_proc = p.name not in host(p.host_id).baseline.processes
+
+  score
+    85
+    +10 if root_proc
+    +5  if unusual_proc
+
+  respond
+    if score >= 90 {
+      alert critical
+      snapshot p, q
+      open case "Process resolved known C2 domain"
+    } else {
+      alert high
+      snapshot p, q
+    }
+}
+
+// --- DNS tunnelling detection -------------------------------------------------
+// DNS tunnelling encodes data in subdomain labels.  Legitimate labels are
+// rarely longer than 20 characters; labels > 40 characters indicate tunnelling
+// or domain-fronting abuse.  Correlated with non-browser processes to reduce
+// noise from CDN / tracking domains.
+
+rule "dns_long_label_tunnelling" {
+  from dns.query, endpoint.process
+
+  correlate
+    dns.query as q
+    with process.spawn as p on p.pid == q.pid
+
+  where
+    q.domain.value != ""
+    and len(q.domain.value) > 40
+    and p.name not in ["curl", "wget", "chrome", "firefox", "chromium", "safari"]
+
+  let
+    root_proc    = p.uid == 0
+    unusual_proc = p.name not in host(p.host_id).baseline.processes
+
+  score
+    65
+    +10 if root_proc
+    +15 if unusual_proc
+
+  respond
+    alert high
+}
+
+// --- DNS resolution from DB server process ------------------------------------
+// A database server (postgres, mysqld, mongod) resolving external hostnames is
+// anomalous.  DB processes should not initiate outbound name lookups in
+// production; this pattern is seen in:
+//   - SQL injection → DNS exfiltration (XXE / OOB techniques)
+//   - Compromised DB extensions calling home
+//   - Ransomware pivoting through the DB process
+
+rule "dns_db_server_lookup" {
+  from dns.query, endpoint.process
+
+  correlate
+    dns.query as q
+    with process.spawn as p on p.pid == q.pid
+
+  where
+    q.domain.value != ""
+    and p.name in ["postgres", "mysqld", "mongod", "redis-server", "mariadbd"]
+
+  let
+    external_domain = q.domain.value not in host(p.host_id).baseline.domains
+
+  score
+    70
+    +15 if external_domain
+
+  emit
+    fact host.db_dns_exfil(host.id) expires 2h
+
+  respond
+    if score >= 80 {
+      alert critical
+      snapshot p, q
+      open case "Database server process resolved external hostname"
+    } else {
+      alert high
+    }
+}
+
+// --- DNS lookup from process not in host baseline ----------------------------
+// An unknown/unlisted process resolving DNS for the first time is a signal for
+// a dropper or backdoor making its first C2 contact.  The baseline captures
+// processes that regularly run on a host; novelty here is suspicious regardless
+// of the domain name.
+
+rule "dns_lookup_from_unknown_process" {
+  from dns.query, endpoint.process
+
+  correlate
+    dns.query as q
+    with process.spawn as p on p.pid == q.pid
+
+  where
+    q.domain.value != ""
+    and p.name not in host(p.host_id).baseline.processes
+
+  score
+    55
+
+  respond
+    alert medium
+}
+
+// --- DNS resolution immediately before network egress (exfil staging) --------
+// A process that resolves a hostname and then opens an outbound connection
+// within a short window is the canonical exfiltration staging pattern.
+// This correlates two separate event streams (dns + network) on the same PID.
+
+rule "dns_lookup_then_egress" {
+  from dns.query, endpoint.process, network.flow
+
+  correlate
+    dns.query as q
+    with process.spawn as p on p.pid == q.pid
+    with network.connect as n on n.process_id == p.id
+
+  where
+    q.domain.value != ""
+    and n.direction == "outbound"
+    and n.dest.is_internal == false
+
+  within 30s
+
+  let
+    bad_rep    = n.dest.reputation in ["suspicious", "malicious"]
+    high_exfil = n.bytes_out > 1000000
+
+  score
+    60
+    +20 if bad_rep
+    +15 if high_exfil
+
+  emit
+    fact host.dns_exfil_staging(host.id) expires 1h
+
+  respond
+    if score >= 85 {
+      alert critical
+      snapshot p, q, n
+      open case "DNS lookup followed by suspicious egress — exfil pattern"
+    } else {
+      alert high
+    }
+}

@@ -100,6 +100,7 @@ unsafe fn try_sql_query(ctx: &ProbeContext, query_arg: usize, default_port: u16)
     (*event).query_class = classify_query(&buf);
     (*event).db_port = default_port;
     (*event)._pad = 0;
+    (*event)._ext = [0u8; 8];
 
     entry.submit(0);
     0

@@ -87,7 +87,7 @@ unsafe fn try_ssl_event(ctx: &ProbeContext, operation: u8) -> u32 {
     };
     (*event).data_len = if inl > 0 { inl as u32 } else { 0 };
     (*event).operation = operation;
-    (*event)._pad = [0u8; 3];
+    (*event)._pad = [0u8; 7];
 
     entry.submit(0);
     0

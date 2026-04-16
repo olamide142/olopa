@@ -9,6 +9,7 @@
 mod agent;
 mod budget_tracker;
 mod data;
+mod intel_store;
 mod probe_manager;
 mod runtime_ir;
 mod transport;
@@ -46,6 +47,7 @@ use crate::runtime_ir::RuntimeIrRuleEngine;
 use crate::transport::http_sender::HttpIngestSender;
 
 const DEFAULT_RUNTIME_IR_PATH: &str = "/etc/olopa/runtime-ir.json";
+const DEFAULT_INTEL_PATH: &str = "/etc/olopa/intel.json";
 const DEFAULT_INGEST_URL: &str = "http://127.0.0.1:8000/api/v1/ingest/batches";
 const DEFAULT_INGEST_TENANT_ID: &str = "default";
 const DEFAULT_INGEST_HOST_ID: &str = "agent-local";
@@ -60,6 +62,9 @@ enum ProbeEventArg {
     Net,
     Xdp,
     Tc,
+    Sql,
+    Ssl,
+    Dns,
 }
 
 impl ProbeEventArg {
@@ -72,6 +77,9 @@ impl ProbeEventArg {
             ProbeEventArg::Net => ProbeSelection::Net,
             ProbeEventArg::Xdp => ProbeSelection::Xdp,
             ProbeEventArg::Tc => ProbeSelection::Tc,
+            ProbeEventArg::Sql => ProbeSelection::Sql,
+            ProbeEventArg::Ssl => ProbeSelection::Ssl,
+            ProbeEventArg::Dns => ProbeSelection::Dns,
         }
     }
 }
@@ -201,6 +209,13 @@ async fn main() -> Result<()> {
     }
 
     info!("olopa starting | iface={}", iface);
+
+    // 0) Initialise threat-intelligence store (non-fatal if file absent).
+    let intel_path = std::env::var("OLOPA_INTEL_PATH")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_INTEL_PATH.to_string());
+    intel_store::init(std::path::Path::new(&intel_path));
 
     // 1) Load eBPF object and attach selected probes.
     let mut agent = OlopaAgent::new()?;
@@ -1630,6 +1645,9 @@ fn event_type_name(event_type: u8) -> &'static str {
         1 => "exec",
         2 => "file",
         3 => "net",
+        4 => "sql",
+        5 => "ssl",
+        6 => "dns",
         _ => "unknown",
     }
 }
@@ -1673,6 +1691,7 @@ fn probe_selection_name(selection: ProbeSelection) -> &'static str {
         ProbeSelection::Tc => "tc",
         ProbeSelection::Sql => "sql",
         ProbeSelection::Ssl => "ssl",
+        ProbeSelection::Dns => "dns",
     }
 }
 
@@ -1700,6 +1719,7 @@ fn expand_probe_status_tokens(selections: &[ProbeSelection]) -> Vec<&'static str
                 out.push("evp_encrypt_update");
                 out.push("evp_decrypt_update");
             }
+            ProbeSelection::Dns => out.push("getaddrinfo"),
         }
     }
     out

@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use aya::{include_bytes_aligned, maps::RingBuf, Ebpf};
 use aya_log::EbpfLogger;
 use log::{debug, info, warn};
-use olopa_common::{ExecEvent, FileEvent, NetEvent, SqlEvent, SslEvent};
+use olopa_common::{DnsEvent, ExecEvent, FileEvent, NetEvent, SqlEvent, SslEvent};
 use serde::Serialize;
 use tokio::signal;
 
@@ -29,7 +29,7 @@ pub struct IngestEvent {
     pub ts_ns: u64,
     pub pid: u32,
     pub uid: u32,
-    pub event_type: u8, // 1=exec, 2=file, 3=net, 4=sql, 5=ssl
+    pub event_type: u8, // 1=exec, 2=file, 3=net, 4=sql, 5=ssl, 6=dns
     pub vertex_id: u32,
     pub dst_vertex_id: u32,
     // Host-endian IPv4 destination and destination port for net events.
@@ -46,6 +46,9 @@ pub struct IngestEvent {
     pub ssl_data_len: u32,    // bytes processed in this EVP_Encrypt/DecryptUpdate call
     pub ssl_operation: u8,    // 0=encrypt 1=decrypt
     pub _pad_aux: [u8; 2],
+    // DNS event fields (event_type == 6); zeroed for other event types.
+    pub dns_query_hash: u32,  // FNV-1a hash of queried hostname
+    pub dns_query: [u8; 64],  // NUL-terminated queried hostname
 }
 
 // Minimal sender state queried by housekeeping to decide spool replay behavior.
@@ -598,6 +601,8 @@ impl OlopaAgent {
                     ssl_data_len: 0,
                     ssl_operation: 0,
                     _pad_aux: [0; 2],
+                    dns_query_hash: 0,
+                    dns_query: [0; 64],
                 }
             } else if bytes.len() == size_of::<FileEvent>() {
                 // SAFETY: ring item length is exactly FileEvent size.
@@ -621,6 +626,8 @@ impl OlopaAgent {
                     ssl_data_len: 0,
                     ssl_operation: 0,
                     _pad_aux: [0; 2],
+                    dns_query_hash: 0,
+                    dns_query: [0; 64],
                 }
             } else if bytes.len() == size_of::<NetEvent>() {
                 // SAFETY: ring item length is exactly NetEvent size.
@@ -646,6 +653,8 @@ impl OlopaAgent {
                     ssl_data_len: 0,
                     ssl_operation: 0,
                     _pad_aux: [0; 2],
+                    dns_query_hash: 0,
+                    dns_query: [0; 64],
                 }
             } else if bytes.len() == size_of::<SqlEvent>() {
                 // SAFETY: ring item length is exactly SqlEvent size.
@@ -672,6 +681,8 @@ impl OlopaAgent {
                     ssl_data_len: 0,
                     ssl_operation: 0,
                     _pad_aux: [0; 2],
+                    dns_query_hash: 0,
+                    dns_query: [0; 64],
                 }
             } else if bytes.len() == size_of::<SslEvent>() {
                 // SAFETY: ring item length is exactly SslEvent size.
@@ -696,6 +707,35 @@ impl OlopaAgent {
                     ssl_data_len: raw.data_len,
                     ssl_operation: raw.operation,
                     _pad_aux: [0; 2],
+                    dns_query_hash: 0,
+                    dns_query: [0; 64],
+                }
+            } else if bytes.len() == size_of::<DnsEvent>() {
+                // SAFETY: ring item length is exactly DnsEvent size.
+                let raw = unsafe { &*(bytes.as_ptr() as *const DnsEvent) };
+                IngestEvent {
+                    ts_ns: raw.ts_ns,
+                    pid: raw.pid,
+                    uid: raw.uid,
+                    event_type: 6,
+                    vertex_id: raw.pid,
+                    // dst_vertex_id encodes the query hash for graph edge uniqueness.
+                    dst_vertex_id: raw.query_hash,
+                    net_dst_ip: 0,
+                    net_dst_port: 0,
+                    comm: raw.comm,
+                    comm_id: fnv1a_32(&raw.comm),
+                    // Elevated base risk: any DNS query deserves inspection.
+                    // Long names (likely tunnelling/DGA) score higher.
+                    risk_score: if raw.query_len > 40 { 0.70 } else { 0.45 },
+                    sql_query_hash: 0,
+                    sql_query_class: 0,
+                    sql_db_port: 0,
+                    ssl_data_len: 0,
+                    ssl_operation: 0,
+                    _pad_aux: [0; 2],
+                    dns_query_hash: raw.query_hash,
+                    dns_query: raw.query,
                 }
             } else {
                 // Unknown payload size: skip for hot-path resilience.
@@ -1152,6 +1192,8 @@ mod tests {
             ssl_data_len: 0,
             ssl_operation: 0,
             _pad_aux: [0; 2],
+            dns_query_hash: 0,
+            dns_query: [0; 64],
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -1276,6 +1318,8 @@ mod tests {
             ssl_data_len: 0,
             ssl_operation: 0,
             _pad_aux: [0; 2],
+            dns_query_hash: 0,
+            dns_query: [0; 64],
         };
 
         let mut scorer = NoopScorer;
@@ -1377,6 +1421,8 @@ rule "critical_pid_4242" {
             ssl_data_len: 0,
             ssl_operation: 0,
             _pad_aux: [0; 2],
+            dns_query_hash: 0,
+            dns_query: [0; 64],
         };
         OlopaAgent::process_event(
             event,
@@ -1532,6 +1578,8 @@ rule "critical_pid_4242" {
             ssl_data_len: 0,
             ssl_operation: 0,
             _pad_aux: [0; 2],
+            dns_query_hash: 0,
+            dns_query: [0; 64],
         };
         OlopaAgent::process_event(
             event,

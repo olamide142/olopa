@@ -14,10 +14,12 @@
 //!   uprobe_mysql_query      — uprobe: libmysqlclient mysql_real_query
 //!   uprobe_evp_encrypt_update — uprobe: libssl EVP_EncryptUpdate
 //!   uprobe_evp_decrypt_update — uprobe: libssl EVP_DecryptUpdate
+//!   uprobe_getaddrinfo      — uprobe: libc getaddrinfo (DNS resolution)
 
 #![no_std]
 #![no_main]
 
+mod dns_probe;
 mod exec_probe;
 mod file_probe;
 mod net_probe;

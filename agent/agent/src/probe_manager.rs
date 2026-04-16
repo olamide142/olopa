@@ -32,6 +32,8 @@ pub enum ProbeSelection {
     Sql,
     /// Uprobes on libssl (EVP_EncryptUpdate / EVP_DecryptUpdate).
     Ssl,
+    /// Uprobe on libc getaddrinfo (DNS name resolution).
+    Dns,
 }
 
 /// Logical probe kinds used for userspace attachment bookkeeping.
@@ -53,6 +55,8 @@ pub enum ProbeKind {
     SqlUprobe,
     /// Uprobe(s) on OpenSSL libssl (EVP_EncryptUpdate / EVP_DecryptUpdate).
     SslUprobe,
+    /// Uprobe on libc getaddrinfo (DNS resolution entry point).
+    DnsUprobe,
 }
 
 /// Probe manager state.
@@ -115,6 +119,7 @@ impl ProbeManager {
                 ProbeSelection::Tc => self.attach_tc(bpf, iface)?,
                 ProbeSelection::Sql => self.attach_sql_uprobes(bpf)?,
                 ProbeSelection::Ssl => self.attach_ssl_uprobes(bpf)?,
+                ProbeSelection::Dns => self.attach_dns_uprobes(bpf)?,
             }
         }
 
@@ -243,6 +248,39 @@ impl ProbeManager {
         match self.attach_uprobe(bpf, "uprobe_evp_decrypt_update", &lib, "EVP_DecryptUpdate", None) {
             Ok(()) => self.record(ProbeKind::SslUprobe, &format!("EVP_DecryptUpdate:{lib}")),
             Err(e) => warn!("skipping EVP_DecryptUpdate uprobe on {lib}: {e}"),
+        }
+
+        Ok(())
+    }
+
+    /// Attach DNS resolution uprobe on libc `getaddrinfo`.
+    ///
+    /// `getaddrinfo` is called by virtually every userspace resolver — C, C++,
+    /// Python, Go (cgo), and others all bottom out here.  Hooking it gives us
+    /// DNS query telemetry without requiring a separate XDP/TC packet parser.
+    pub fn attach_dns_uprobes(&mut self, bpf: &mut Ebpf) -> Result<()> {
+        // libc.so.6 canonical paths across major Linux distributions.
+        const LIBC_CANDIDATES: &[&str] = &[
+            "/lib/x86_64-linux-gnu/libc.so.6",
+            "/lib/aarch64-linux-gnu/libc.so.6",
+            "/lib64/libc.so.6",
+            "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "/usr/lib/aarch64-linux-gnu/libc.so.6",
+            "/usr/lib64/libc.so.6",
+            "/lib/libc.so.6",
+        ];
+
+        let lib = match find_lib(LIBC_CANDIDATES) {
+            Some(l) => l,
+            None => {
+                warn!("libc.so.6 not found on this host — DNS uprobes skipped");
+                return Ok(());
+            }
+        };
+
+        match self.attach_uprobe(bpf, "uprobe_getaddrinfo", &lib, "getaddrinfo", None) {
+            Ok(()) => self.record(ProbeKind::DnsUprobe, &format!("getaddrinfo:{lib}")),
+            Err(e) => warn!("skipping getaddrinfo uprobe on {lib}: {e}"),
         }
 
         Ok(())
