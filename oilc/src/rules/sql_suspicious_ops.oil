@@ -1,0 +1,138 @@
+// SQL database security rules.
+//
+// These rules fire on SqlEvent telemetry produced by the PQexec / mysql_real_query
+// uprobes.  query_class constants:
+//   1 = SELECT   2 = DML (INSERT/UPDATE/DELETE)
+//   3 = DDL (CREATE/DROP/ALTER/TRUNCATE)   4 = ADMIN (GRANT/REVOKE/SET)
+
+// ─── DDL outside business hours ──────────────────────────────────────────────
+// Schema-destructive operations (DROP TABLE, ALTER, TRUNCATE) issued when the
+// security team is offline are a strong signal for insider threat or compromised
+// service account.
+
+rule "sql_ddl_outside_business_hours" {
+  from db.query, endpoint.process
+
+  correlate
+    db.query as q
+    with process.spawn as p on p.pid == q.pid
+
+  where
+    q.query_class == 3
+    and not time.is_business_hour
+
+  let
+    root_proc     = p.uid == 0
+    interactive   = p.tty == true
+    unusual_proc  = p.name not in host(p.host_id).baseline.processes
+
+  score
+    70
+    +10 if root_proc
+    +10 if interactive
+    +10 if unusual_proc
+
+  respond
+    if score >= 85 {
+      alert critical
+      snapshot p, q
+      open case "DDL operation outside business hours"
+    } else {
+      alert high
+    }
+}
+
+// ─── Admin privilege grant from unprivileged process ─────────────────────────
+// GRANT / REVOKE / SET issued by a non-root, non-DBA process is suspicious;
+// this pattern covers privilege escalation via direct DB API calls rather than
+// interactive psql/mysql sessions.
+
+rule "sql_privilege_grant_from_unprivileged_proc" {
+  from db.query, endpoint.process
+
+  correlate
+    db.query as q
+    with process.spawn as p on p.pid == q.pid
+
+  where
+    q.query_class == 4
+    and p.uid != 0
+    and p.name not in ["psql", "mysql", "mysqladmin", "pgadmin"]
+
+  score
+    75
+
+  emit
+    fact host.sql_priv_escalation(host.id) expires 1h
+
+  respond
+    alert high
+}
+
+// ─── DDL immediately followed by network egress ───────────────────────────────
+// Schema destruction (DDL) on the same process that subsequently connects out
+// is a data-destruction-then-exfil pattern seen in ransomware and data-wiper
+// malware targeting databases.
+
+rule "sql_ddl_then_egress" {
+  from db.query, endpoint.process, network.flow
+
+  correlate
+    db.query as q
+    with process.spawn as p on p.pid == q.pid
+    with network.connect as n on n.process_id == p.id
+
+  where
+    q.query_class == 3
+    and n.direction == "outbound"
+
+  within 5m
+
+  let
+    public_dest   = n.dest.is_internal == false
+    bad_rep       = n.dest.reputation in ["suspicious", "malicious"]
+    high_exfil    = n.bytes_out > 500000
+
+  score
+    75
+    +10 if public_dest
+    +10 if bad_rep
+    +15 if high_exfil
+
+  emit
+    fact host.sql_destroy_exfil(host.id) expires 4h
+
+  respond
+    if score >= 90 {
+      alert critical
+      isolate host
+      snapshot p, q, n
+      open case "SQL schema destruction followed by egress"
+    } else {
+      alert high
+      snapshot p, q, n
+    }
+}
+
+// ─── DML bulk write from interactive elevated session ─────────────────────────
+// An operator running INSERT/UPDATE directly from an interactive elevated shell
+// on a production host is a common misconfiguration or insider threat vector.
+
+rule "sql_bulk_dml_interactive_session" {
+  from db.query, endpoint.process
+
+  correlate
+    db.query as q
+    with process.spawn as p on p.pid == q.pid
+
+  where
+    q.query_class == 2
+    and p.tty == true
+    and p.elevated == true
+
+  score
+    55
+
+  respond
+    alert medium
+}

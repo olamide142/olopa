@@ -38,14 +38,14 @@ const QUERY_BUF_LEN: usize = 128;
 /// Signature: PQexec(PGconn *conn, const char *query) -> PGresult *
 #[uprobe]
 pub fn uprobe_pqexec(ctx: ProbeContext) -> u32 {
-    unsafe { try_sql_query(&ctx, 1, 5432) }
+    unsafe { try_sql_query(&ctx, 1_usize, 5432) }
 }
 
 /// Uprobe on libmysqlclient `mysql_real_query`.
 /// Signature: mysql_real_query(MYSQL *mysql, const char *stmt_str, unsigned long length) -> int
 #[uprobe]
 pub fn uprobe_mysql_query(ctx: ProbeContext) -> u32 {
-    unsafe { try_sql_query(&ctx, 1, 3306) }
+    unsafe { try_sql_query(&ctx, 1_usize, 3306) }
 }
 
 /// Common handler for both SQL client uprobes.
@@ -53,7 +53,7 @@ pub fn uprobe_mysql_query(ctx: ProbeContext) -> u32 {
 /// # Arguments
 /// * `query_arg` — zero-based index of the `const char *query` argument.
 /// * `default_port` — well-known port for the DB type (used as `db_port`).
-unsafe fn try_sql_query(ctx: &ProbeContext, query_arg: u32, default_port: u16) -> u32 {
+unsafe fn try_sql_query(ctx: &ProbeContext, query_arg: usize, default_port: u16) -> u32 {
     let mut entry = match EVENTS.reserve::<SqlEvent>(0) {
         Some(e) => e,
         None => return 1,

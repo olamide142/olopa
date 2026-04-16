@@ -787,6 +787,8 @@ fn map_source_to_entity(domain: &str, event: &str) -> Option<&'static str> {
         ("secure_connect", "profile") => Some("SecureConnectProfile"),
         ("secure_connect", "gateway") => Some("SecureConnectGateway"),
         ("secure_connect", "peer") => Some("SecureConnectPeer"),
+        ("db", "query") => Some("SqlEvent"),
+        ("ssl", "event") => Some("SslEvent"),
         _ => None,
     }
 }
@@ -805,6 +807,8 @@ fn map_event_to_entity(domain: &str, _kind: &str) -> Option<&'static str> {
             "workload" => Some("WorkloadInfo"),
             "session" => Some("Session"),
             "dns" => Some("DnsQuery"),
+            "db" => Some("SqlEvent"),
+            "ssl" => Some("SslEvent"),
             _ => None,
         },
     }

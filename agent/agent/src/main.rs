@@ -1671,6 +1671,8 @@ fn probe_selection_name(selection: ProbeSelection) -> &'static str {
         ProbeSelection::Net => "net",
         ProbeSelection::Xdp => "xdp",
         ProbeSelection::Tc => "tc",
+        ProbeSelection::Sql => "sql",
+        ProbeSelection::Ssl => "ssl",
     }
 }
 
@@ -1690,6 +1692,14 @@ fn expand_probe_status_tokens(selections: &[ProbeSelection]) -> Vec<&'static str
             }
             ProbeSelection::Xdp => out.push("xdp"),
             ProbeSelection::Tc => out.push("tc"),
+            ProbeSelection::Sql => {
+                out.push("pqexec");
+                out.push("mysql_real_query");
+            }
+            ProbeSelection::Ssl => {
+                out.push("evp_encrypt_update");
+                out.push("evp_decrypt_update");
+            }
         }
     }
     out

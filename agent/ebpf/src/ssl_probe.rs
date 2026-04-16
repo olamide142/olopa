@@ -78,7 +78,7 @@ unsafe fn try_ssl_event(ctx: &ProbeContext, operation: u8) -> u32 {
 
     // EVP_{Encrypt,Decrypt}Update arg 4 = `int inl` (input byte count).
     // Cast through i32 first to respect C int signedness, then to u32.
-    let inl: i32 = match ctx.arg(4) {
+    let inl: i32 = match ctx.arg(4_usize) {
         Some(v) => v,
         None => {
             entry.discard(0);

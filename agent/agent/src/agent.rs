@@ -1270,6 +1270,12 @@ mod tests {
             comm: [0; 16],
             comm_id: 9,
             risk_score: 0.8,
+            sql_query_hash: 0,
+            sql_query_class: 0,
+            sql_db_port: 0,
+            ssl_data_len: 0,
+            ssl_operation: 0,
+            _pad_aux: [0; 2],
         };
 
         let mut scorer = NoopScorer;
@@ -1365,6 +1371,12 @@ rule "critical_pid_4242" {
             comm: [0; 16],
             comm_id: 7,
             risk_score: 0.85,
+            sql_query_hash: 0,
+            sql_query_class: 0,
+            sql_db_port: 0,
+            ssl_data_len: 0,
+            ssl_operation: 0,
+            _pad_aux: [0; 2],
         };
         OlopaAgent::process_event(
             event,
@@ -1514,6 +1526,12 @@ rule "critical_pid_4242" {
             comm: [0; 16],
             comm_id: 7,
             risk_score: 0.85,
+            sql_query_hash: 0,
+            sql_query_class: 0,
+            sql_db_port: 0,
+            ssl_data_len: 0,
+            ssl_operation: 0,
+            _pad_aux: [0; 2],
         };
         OlopaAgent::process_event(
             event,

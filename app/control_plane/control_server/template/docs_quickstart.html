@@ -40,7 +40,7 @@
       font-size: 15px;
     }
 
-    /* ── Layout ─────────────────────────────────────────── */
+    /* -- Layout ------------------------------------------- */
 
     .layout {
       display: grid;
@@ -48,7 +48,7 @@
       min-height: 100vh;
     }
 
-    /* ── Sidebar ────────────────────────────────────────── */
+    /* -- Sidebar ------------------------------------------ */
 
     .sidebar {
       position: sticky;
@@ -148,7 +148,7 @@
       background: rgba(213,164,59,0.06);
     }
 
-    /* ── Main ───────────────────────────────────────────── */
+    /* -- Main --------------------------------------------- */
 
     .main {
       padding: 52px 64px 96px;
@@ -187,7 +187,7 @@
       line-height: 1.65;
     }
 
-    /* ── Sections ───────────────────────────────────────── */
+    /* -- Sections ----------------------------------------- */
 
     .section { margin-bottom: 10px; }
 
@@ -205,7 +205,7 @@
       max-width: 72ch;
     }
 
-    /* ── Step cards ─────────────────────────────────────── */
+    /* -- Step cards --------------------------------------- */
 
     .step {
       border: 1px solid var(--border);
@@ -237,7 +237,7 @@
       flex-shrink: 0;
     }
 
-    /* ── Code blocks ────────────────────────────────────── */
+    /* -- Code blocks -------------------------------------- */
 
     pre {
       background: var(--code-bg);
@@ -265,7 +265,7 @@
       border-radius: 4px;
     }
 
-    /* ── Callouts ───────────────────────────────────────── */
+    /* -- Callouts ----------------------------------------- */
 
     .callout {
       border-radius: 8px;
@@ -289,7 +289,7 @@
 
     .callout strong { font-weight: 600; margin-right: 4px; }
 
-    /* ── Footer link ────────────────────────────────────── */
+    /* -- Footer link -------------------------------------- */
 
     .footer-nav {
       margin-top: 40px;
@@ -328,7 +328,7 @@
 <body>
 <div class="layout">
 
-  <!-- ── Sidebar ─────────────────────────────────────── -->
+  <!-- -- Sidebar --------------------------------------- -->
   <nav class="sidebar" aria-label="Docs navigation">
     <div class="sidebar-logo">
       <div class="brand">
@@ -343,7 +343,7 @@
       <div class="nav-label">Docs</div>
       <a class="nav-item global-active" href="/quickstart">Quickstart</a>
       <a class="nav-item" href="/agent/config">Agent Config</a>
-      <a class="nav-item" href="/docs/oil">OIL Reference</a>
+      <a class="nav-item" href="/oil">OIL Reference</a>
     </div>
 
     <div class="nav-divider"></div>
@@ -358,7 +358,7 @@
     </div>
   </nav>
 
-  <!-- ── Main content ────────────────────────────────── -->
+  <!-- -- Main content ---------------------------------- -->
   <main class="main">
 
     <div class="page-header">
@@ -395,7 +395,7 @@
   --emit-runtime-ir /tmp/runtime-ir.json \
   --diagnostics-format json</code></pre>
         <div class="callout tip">
-          <strong>Tip:</strong> Run <code>--mode check</code> first for fast validation without emitting output. Use <code>--mode ast</code> or <code>--mode mir</code> to inspect intermediate stages. See the <a href="/docs/oil#toolchain" style="color:var(--accent)">OIL compiler reference</a> for all modes.
+          <strong>Tip:</strong> Run <code>--mode check</code> first for fast validation without emitting output. Use <code>--mode ast</code> or <code>--mode mir</code> to inspect intermediate stages. See the <a href="/oil#toolchain" style="color:var(--accent)">OIL compiler reference</a> for all modes.
         </div>
       </div>
     </section>
@@ -461,7 +461,7 @@ cargo run --manifest-path agent/Cargo.toml -p olopa -- status</code></pre>
         <span class="dir">Next</span>
         Agent Configuration →
       </a>
-      <a href="/docs/oil">
+      <a href="/oil">
         <span class="dir">Reference</span>
         OIL Language Reference →
       </a>

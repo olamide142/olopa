@@ -1,0 +1,174 @@
+// SSL/TLS encryption security rules.
+//
+// These rules fire on SslEvent telemetry produced by the EVP_EncryptUpdate /
+// EVP_DecryptUpdate uprobes on libssl.  operation constants:
+//   0 = encrypt (EVP_EncryptUpdate)   1 = decrypt (EVP_DecryptUpdate)
+//
+// Ransomware detection strategy:
+//   A benign process encrypting data (TLS, backup) does so in measured bursts
+//   tied to network sends.  Ransomware bulk-encrypts local files without any
+//   corresponding network pattern — look for high encryption volume correlated
+//   with file writes but without sustained outbound network bytes.
+
+// ─── Large single-call encryption from unknown process ────────────────────────
+// A single EVP_EncryptUpdate call processing > 4 MiB is unusual for TLS
+// (which chunks at ~16 KB).  This size is consistent with in-place file
+// encryption used by ransomware families like LockBit and BlackCat/ALPHV.
+
+rule "ssl_large_single_encrypt_call" {
+  from ssl.event, endpoint.process
+
+  correlate
+    ssl.event as s
+    with process.spawn as p on p.pid == s.pid
+
+  where
+    s.operation == 0
+    and s.data_len > 4194304
+
+  let
+    root_proc    = p.uid == 0
+    unusual_proc = p.name not in host(p.host_id).baseline.processes
+    interactive  = p.tty == true
+
+  score
+    70
+    +10 if root_proc
+    +15 if unusual_proc
+    +5  if interactive
+
+  respond
+    if score >= 85 {
+      alert critical
+      snapshot p, s
+      open case "Unusually large single encryption call — possible ransomware"
+    } else {
+      alert high
+    }
+}
+
+// ─── Mass encryption correlated with file writes (ransomware pattern) ─────────
+// Process encrypting large volumes AND writing files within a short window.
+// This is the canonical ransomware loop: read plaintext → encrypt → write
+// ciphertext → delete original.
+
+rule "ssl_mass_encrypt_with_file_writes" {
+  from ssl.event, endpoint.process, endpoint.file
+
+  correlate
+    ssl.event as s
+    with process.spawn as p on p.pid == s.pid
+    with file.open as f on f.process_id == p.id
+
+  where
+    s.operation == 0
+    and s.data_len > 1048576
+    and f.mode in ["write", "read_write"]
+
+  within 2m
+
+  let
+    root_proc    = p.uid == 0
+    unusual_proc = p.name not in host(p.host_id).baseline.processes
+
+  score
+    80
+    +10 if root_proc
+    +10 if unusual_proc
+
+  emit
+    fact host.possible_ransomware(host.id) expires 2h
+
+  respond
+    if score >= 85 {
+      alert critical
+      isolate host
+      snapshot p, s, f
+      open case "Mass file encryption with concurrent writes — ransomware suspected"
+    } else {
+      alert high
+      snapshot p, s, f
+    }
+}
+
+// ─── Encryption from process not in host baseline ─────────────────────────────
+// A process that is not part of the host's normal process baseline starting
+// to encrypt data is a high-confidence signal regardless of volume — could be
+// a dropper or second-stage payload running its first encryption cycle.
+
+rule "ssl_encrypt_from_unknown_process" {
+  from ssl.event, endpoint.process
+
+  correlate
+    ssl.event as s
+    with process.spawn as p on p.pid == s.pid
+
+  where
+    s.operation == 0
+    and p.name not in host(p.host_id).baseline.processes
+
+  score
+    65
+
+  respond
+    alert high
+}
+
+// ─── Decryption after SQL privilege manipulation (wiper cross-signal) ─────────
+// A process that issued admin-class SQL (tracked via emitted fact from
+// sql_suspicious_ops.oil) and is now decrypting data may be unpacking a
+// second-stage wiper or ransomware payload.
+
+rule "ssl_decrypt_after_sql_admin" {
+  from ssl.event, endpoint.process
+
+  correlate
+    ssl.event as s
+    with process.spawn as p on p.pid == s.pid
+
+  where
+    s.operation == 1
+    and host.sql_priv_escalation(p.host_id)
+
+  score
+    80
+
+  respond
+    alert critical
+    snapshot p, s
+    open case "Decryption activity following SQL privilege manipulation"
+}
+
+// ─── Encryption by database server process ────────────────────────────────────
+// A database server process (postgres, mysqld) performing bulk encryption
+// outside of known TLS handshake sizes suggests the DB itself is being used
+// as a ransomware staging point or the process has been compromised.
+
+rule "ssl_encrypt_from_db_server_process" {
+  from ssl.event, endpoint.process
+
+  correlate
+    ssl.event as s
+    with process.spawn as p on p.pid == s.pid
+
+  where
+    s.operation == 0
+    and p.name in ["postgres", "mysqld", "mongod", "redis-server"]
+    and s.data_len > 65536
+
+  let
+    elevated = p.elevated == true
+
+  score
+    70
+    +15 if elevated
+
+  respond
+    if score >= 80 {
+      alert critical
+      snapshot p, s
+      open case "Database server process performing bulk encryption"
+    } else {
+      alert high
+    }
+}

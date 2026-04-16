@@ -448,6 +448,38 @@ const FALLBACK_FIELD_METADATA: &[FallbackFieldMetadata] = &[
         aliases: &["file.process_id", "file.proc_id"],
         is_time_context: false,
     },
+    // SQL event fields (event_type == 4)
+    FallbackFieldMetadata {
+        canonical: "sql.query_hash",
+        value_type: FieldType::Number,
+        aliases: &["sql_query_hash"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "sql.query_class",
+        value_type: FieldType::Number,
+        aliases: &["sql_query_class", "sql.class"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "sql.db_port",
+        value_type: FieldType::Number,
+        aliases: &["sql_db_port"],
+        is_time_context: false,
+    },
+    // SSL/TLS event fields (event_type == 5)
+    FallbackFieldMetadata {
+        canonical: "ssl.data_len",
+        value_type: FieldType::Number,
+        aliases: &["ssl_data_len", "ssl.bytes"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "ssl.operation",
+        value_type: FieldType::Number,
+        aliases: &["ssl_operation"],
+        is_time_context: false,
+    },
 ];
 
 fn build_field_specs(program: &RuntimeProgram) -> Vec<FieldSpec> {
@@ -548,6 +580,13 @@ fn lookup_field_extractor(canonical: &str) -> Option<fn(&IngestEvent) -> Value> 
         "network.dest.port" => Some(field_network_dest_port),
         "network.dest.is_internal" => Some(field_network_dest_is_internal),
         "file.process_id" => Some(field_file_process_id),
+        // SQL event fields
+        "sql.query_hash" => Some(field_sql_query_hash),
+        "sql.query_class" => Some(field_sql_query_class),
+        "sql.db_port" => Some(field_sql_db_port),
+        // SSL event fields
+        "ssl.data_len" => Some(field_ssl_data_len),
+        "ssl.operation" => Some(field_ssl_operation),
         _ => None,
     }
 }
@@ -1595,6 +1634,50 @@ fn field_network_dest_is_internal(event: &IngestEvent) -> Value {
 fn field_file_process_id(event: &IngestEvent) -> Value {
     if event.event_type == 2 {
         Value::Number(event.pid as f64)
+    } else {
+        Value::Null
+    }
+}
+
+// SQL field extractors — only meaningful when event_type == 4.
+
+fn field_sql_query_hash(event: &IngestEvent) -> Value {
+    if event.event_type == 4 {
+        Value::Number(event.sql_query_hash as f64)
+    } else {
+        Value::Null
+    }
+}
+
+fn field_sql_query_class(event: &IngestEvent) -> Value {
+    if event.event_type == 4 {
+        Value::Number(event.sql_query_class as f64)
+    } else {
+        Value::Null
+    }
+}
+
+fn field_sql_db_port(event: &IngestEvent) -> Value {
+    if event.event_type == 4 {
+        Value::Number(event.sql_db_port as f64)
+    } else {
+        Value::Null
+    }
+}
+
+// SSL field extractors — only meaningful when event_type == 5.
+
+fn field_ssl_data_len(event: &IngestEvent) -> Value {
+    if event.event_type == 5 {
+        Value::Number(event.ssl_data_len as f64)
+    } else {
+        Value::Null
+    }
+}
+
+fn field_ssl_operation(event: &IngestEvent) -> Value {
+    if event.event_type == 5 {
+        Value::Number(event.ssl_operation as f64)
     } else {
         Value::Null
     }

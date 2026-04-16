@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use aya::{
     programs::{
         tc::{SchedClassifier, TcAttachType},
-        TracePoint, Xdp, XdpFlags,
+        TracePoint, UProbe, Xdp, XdpFlags,
     },
     Ebpf,
 };
@@ -28,6 +28,10 @@ pub enum ProbeSelection {
     Net,
     Xdp,
     Tc,
+    /// Uprobes on libpq (PQexec) and libmysqlclient (mysql_real_query).
+    Sql,
+    /// Uprobes on libssl (EVP_EncryptUpdate / EVP_DecryptUpdate).
+    Ssl,
 }
 
 /// Logical probe kinds used for userspace attachment bookkeeping.
@@ -45,6 +49,10 @@ pub enum ProbeKind {
     ExecTracepoint,
     /// Tracepoint for openat syscall.
     FileTracepoint,
+    /// Uprobe(s) on SQL client libraries (libpq, libmysqlclient).
+    SqlUprobe,
+    /// Uprobe(s) on OpenSSL libssl (EVP_EncryptUpdate / EVP_DecryptUpdate).
+    SslUprobe,
 }
 
 /// Probe manager state.
@@ -105,6 +113,8 @@ impl ProbeManager {
                 ProbeSelection::Net => self.attach_net_tracepoints(bpf)?,
                 ProbeSelection::Xdp => self.attach_xdp(bpf, iface)?,
                 ProbeSelection::Tc => self.attach_tc(bpf, iface)?,
+                ProbeSelection::Sql => self.attach_sql_uprobes(bpf)?,
+                ProbeSelection::Ssl => self.attach_ssl_uprobes(bpf)?,
             }
         }
 
@@ -157,6 +167,114 @@ impl ProbeManager {
     fn attach_net_tracepoints(&mut self, bpf: &mut Ebpf) -> Result<()> {
         self.attach_tracepoint(bpf, "on_connect", "syscalls", "sys_enter_connect")?;
         self.record(ProbeKind::NetTracepoint, "syscalls:sys_enter_connect");
+        Ok(())
+    }
+
+    /// Attach SQL uprobes on libpq and libmysqlclient (if present).
+    ///
+    /// Searches standard shared-library paths for each database client.
+    /// Missing libraries are skipped with a warning rather than hard-failing —
+    /// an agent running on a host with only PostgreSQL should still work.
+    pub fn attach_sql_uprobes(&mut self, bpf: &mut Ebpf) -> Result<()> {
+        // PostgreSQL client library candidates (Debian/Ubuntu, RHEL/Fedora, Alpine).
+        const LIBPQ_CANDIDATES: &[&str] = &[
+            "/usr/lib/x86_64-linux-gnu/libpq.so.5",
+            "/usr/lib/aarch64-linux-gnu/libpq.so.5",
+            "/usr/lib64/libpq.so.5",
+            "/usr/lib/libpq.so.5",
+        ];
+
+        // MySQL/MariaDB client library candidates.
+        const LIBMYSQL_CANDIDATES: &[&str] = &[
+            "/usr/lib/x86_64-linux-gnu/libmysqlclient.so.21",
+            "/usr/lib/x86_64-linux-gnu/libmysqlclient.so.20",
+            "/usr/lib/aarch64-linux-gnu/libmysqlclient.so.21",
+            "/usr/lib64/mysql/libmysqlclient.so.21",
+            "/usr/lib/libmysqlclient.so.21",
+        ];
+
+        if let Some(lib) = find_lib(LIBPQ_CANDIDATES) {
+            match self.attach_uprobe(bpf, "uprobe_pqexec", &lib, "PQexec", None) {
+                Ok(()) => self.record(ProbeKind::SqlUprobe, &format!("pqexec:{lib}")),
+                Err(e) => warn!("skipping PQexec uprobe on {lib}: {e}"),
+            }
+        } else {
+            warn!("libpq not found on this host — SQL/PostgreSQL uprobes skipped");
+        }
+
+        if let Some(lib) = find_lib(LIBMYSQL_CANDIDATES) {
+            match self.attach_uprobe(bpf, "uprobe_mysql_query", &lib, "mysql_real_query", None) {
+                Ok(()) => self.record(ProbeKind::SqlUprobe, &format!("mysql_real_query:{lib}")),
+                Err(e) => warn!("skipping mysql_real_query uprobe on {lib}: {e}"),
+            }
+        } else {
+            warn!("libmysqlclient not found on this host — SQL/MySQL uprobes skipped");
+        }
+
+        Ok(())
+    }
+
+    /// Attach SSL uprobes on libssl (EVP_EncryptUpdate + EVP_DecryptUpdate).
+    pub fn attach_ssl_uprobes(&mut self, bpf: &mut Ebpf) -> Result<()> {
+        // OpenSSL shared library candidates.
+        const LIBSSL_CANDIDATES: &[&str] = &[
+            "/usr/lib/x86_64-linux-gnu/libssl.so.3",
+            "/usr/lib/aarch64-linux-gnu/libssl.so.3",
+            "/usr/lib64/libssl.so.3",
+            "/usr/lib/libssl.so.3",
+            "/usr/lib/x86_64-linux-gnu/libssl.so.1.1",
+            "/usr/lib/aarch64-linux-gnu/libssl.so.1.1",
+            "/usr/lib64/libssl.so.1.1",
+        ];
+
+        let lib = match find_lib(LIBSSL_CANDIDATES) {
+            Some(l) => l,
+            None => {
+                warn!("libssl not found on this host — SSL uprobes skipped");
+                return Ok(());
+            }
+        };
+
+        match self.attach_uprobe(bpf, "uprobe_evp_encrypt_update", &lib, "EVP_EncryptUpdate", None) {
+            Ok(()) => self.record(ProbeKind::SslUprobe, &format!("EVP_EncryptUpdate:{lib}")),
+            Err(e) => warn!("skipping EVP_EncryptUpdate uprobe on {lib}: {e}"),
+        }
+
+        match self.attach_uprobe(bpf, "uprobe_evp_decrypt_update", &lib, "EVP_DecryptUpdate", None) {
+            Ok(()) => self.record(ProbeKind::SslUprobe, &format!("EVP_DecryptUpdate:{lib}")),
+            Err(e) => warn!("skipping EVP_DecryptUpdate uprobe on {lib}: {e}"),
+        }
+
+        Ok(())
+    }
+
+    /// Attach a userspace probe (uprobe) to a symbol in a shared library.
+    ///
+    /// # Arguments
+    /// * `fn_name`  — name of the eBPF program section (must match `#[uprobe]` function name).
+    /// * `lib`      — absolute path to the target shared library.
+    /// * `sym`      — symbol name to hook (resolved via ELF symbol table).
+    /// * `pid`      — optional PID filter; `None` hooks all processes.
+    fn attach_uprobe(
+        &mut self,
+        bpf: &mut Ebpf,
+        fn_name: &str,
+        lib: &str,
+        sym: &str,
+        pid: Option<i32>,
+    ) -> Result<()> {
+        let prog: &mut UProbe = bpf
+            .program_mut(fn_name)
+            .with_context(|| format!("uprobe program '{}' not found in eBPF object", fn_name))?
+            .try_into()?;
+
+        prog.load()
+            .with_context(|| format!("failed to load uprobe '{}'", fn_name))?;
+
+        prog.attach(Some(sym), 0, lib, pid)
+            .with_context(|| format!("failed to attach uprobe '{}' -> {}:{}", fn_name, lib, sym))?;
+
+        info!("uprobe attached: {} -> {}:{}", fn_name, lib, sym);
         Ok(())
     }
 
@@ -290,6 +408,18 @@ fn handle_net(e: &NetEvent) {
         "[NET]  pid={} uid={} comm={} -> {}:{}",
         e.pid, e.uid, comm, ip, port
     );
+}
+
+/// Search a list of candidate paths and return the first one that exists on disk.
+///
+/// Used to locate shared libraries across distros without hard-coding a single path.
+fn find_lib(candidates: &[&str]) -> Option<String> {
+    for path in candidates {
+        if std::path::Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+    }
+    None
 }
 
 /// Convert fixed-size NUL-terminated bytes to UTF-8 string safely.
