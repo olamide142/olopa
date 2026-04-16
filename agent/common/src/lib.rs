@@ -49,6 +49,33 @@ pub struct NetEvent {
     pub comm: [u8; 16],
 }
 
+/// SQL query event (uprobe on PQexec / mysql_real_query)
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SqlEvent {
+    pub ts_ns: u64,
+    pub pid: u32,
+    pub uid: u32,
+    pub comm: [u8; 16],     // TASK_COMM_LEN
+    pub query_hash: u32,    // FNV-1a hash of first 128 bytes of query text
+    pub query_class: u8,    // 0=other 1=select 2=dml 3=ddl 4=admin
+    pub db_port: u16,       // 5432 (postgres) or 3306 (mysql); 0 if unknown
+    pub _pad: u8,
+}
+
+/// TLS/OpenSSL encryption event (uprobe on EVP_EncryptUpdate / EVP_DecryptUpdate)
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SslEvent {
+    pub ts_ns: u64,
+    pub pid: u32,
+    pub uid: u32,
+    pub comm: [u8; 16],    // TASK_COMM_LEN
+    pub data_len: u32,     // input bytes processed in this call
+    pub operation: u8,     // 0=encrypt 1=decrypt
+    pub _pad: [u8; 3],
+}
+
 /// XDP packet verdict counters — stored in a BPF array map, index = action
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -112,3 +139,7 @@ unsafe impl aya::Pod for TcEvent {}
 unsafe impl aya::Pod for TcEgressPolicyKey {}
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for XdpStats {}
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for SqlEvent {}
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for SslEvent {}

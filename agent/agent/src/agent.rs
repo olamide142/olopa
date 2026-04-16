@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use aya::{include_bytes_aligned, maps::RingBuf, Ebpf};
 use aya_log::EbpfLogger;
 use log::{debug, info, warn};
-use olopa_common::{ExecEvent, FileEvent, NetEvent};
+use olopa_common::{ExecEvent, FileEvent, NetEvent, SqlEvent, SslEvent};
 use serde::Serialize;
 use tokio::signal;
 
@@ -29,7 +29,7 @@ pub struct IngestEvent {
     pub ts_ns: u64,
     pub pid: u32,
     pub uid: u32,
-    pub event_type: u8, // 1=exec, 2=file, 3=net
+    pub event_type: u8, // 1=exec, 2=file, 3=net, 4=sql, 5=ssl
     pub vertex_id: u32,
     pub dst_vertex_id: u32,
     // Host-endian IPv4 destination and destination port for net events.
@@ -38,6 +38,14 @@ pub struct IngestEvent {
     pub comm: [u8; 16],
     pub comm_id: u32,
     pub risk_score: f32,
+    // SQL event fields (event_type == 4); zeroed for other event types.
+    pub sql_query_hash: u32,  // FNV-1a hash of query text
+    pub sql_query_class: u8,  // 0=other 1=select 2=dml 3=ddl 4=admin
+    pub sql_db_port: u16,     // 5432 or 3306
+    // SSL event fields (event_type == 5); zeroed for other event types.
+    pub ssl_data_len: u32,    // bytes processed in this EVP_Encrypt/DecryptUpdate call
+    pub ssl_operation: u8,    // 0=encrypt 1=decrypt
+    pub _pad_aux: [u8; 2],
 }
 
 // Minimal sender state queried by housekeeping to decide spool replay behavior.
@@ -584,6 +592,12 @@ impl OlopaAgent {
                     comm: raw.comm,
                     comm_id: fnv1a_32(&raw.comm),
                     risk_score: 0.5,
+                    sql_query_hash: 0,
+                    sql_query_class: 0,
+                    sql_db_port: 0,
+                    ssl_data_len: 0,
+                    ssl_operation: 0,
+                    _pad_aux: [0; 2],
                 }
             } else if bytes.len() == size_of::<FileEvent>() {
                 // SAFETY: ring item length is exactly FileEvent size.
@@ -601,6 +615,12 @@ impl OlopaAgent {
                     comm: raw.comm,
                     comm_id: fnv1a_32(&raw.comm),
                     risk_score: if raw.flags & 0x3 == 0 { 0.35 } else { 0.60 },
+                    sql_query_hash: 0,
+                    sql_query_class: 0,
+                    sql_db_port: 0,
+                    ssl_data_len: 0,
+                    ssl_operation: 0,
+                    _pad_aux: [0; 2],
                 }
             } else if bytes.len() == size_of::<NetEvent>() {
                 // SAFETY: ring item length is exactly NetEvent size.
@@ -620,6 +640,62 @@ impl OlopaAgent {
                     comm: raw.comm,
                     comm_id: fnv1a_32(&raw.comm),
                     risk_score: 0.7,
+                    sql_query_hash: 0,
+                    sql_query_class: 0,
+                    sql_db_port: 0,
+                    ssl_data_len: 0,
+                    ssl_operation: 0,
+                    _pad_aux: [0; 2],
+                }
+            } else if bytes.len() == size_of::<SqlEvent>() {
+                // SAFETY: ring item length is exactly SqlEvent size.
+                let raw = unsafe { &*(bytes.as_ptr() as *const SqlEvent) };
+                IngestEvent {
+                    ts_ns: raw.ts_ns,
+                    pid: raw.pid,
+                    uid: raw.uid,
+                    event_type: 4,
+                    vertex_id: raw.pid,
+                    dst_vertex_id: raw.query_hash,
+                    net_dst_ip: 0,
+                    net_dst_port: 0,
+                    comm: raw.comm,
+                    comm_id: fnv1a_32(&raw.comm),
+                    risk_score: match raw.query_class {
+                        3 => 0.85, // DDL
+                        4 => 0.90, // admin
+                        _ => 0.40,
+                    },
+                    sql_query_hash: raw.query_hash,
+                    sql_query_class: raw.query_class,
+                    sql_db_port: raw.db_port,
+                    ssl_data_len: 0,
+                    ssl_operation: 0,
+                    _pad_aux: [0; 2],
+                }
+            } else if bytes.len() == size_of::<SslEvent>() {
+                // SAFETY: ring item length is exactly SslEvent size.
+                let raw = unsafe { &*(bytes.as_ptr() as *const SslEvent) };
+                IngestEvent {
+                    ts_ns: raw.ts_ns,
+                    pid: raw.pid,
+                    uid: raw.uid,
+                    event_type: 5,
+                    vertex_id: raw.pid,
+                    dst_vertex_id: raw.data_len,
+                    net_dst_ip: 0,
+                    net_dst_port: 0,
+                    comm: raw.comm,
+                    comm_id: fnv1a_32(&raw.comm),
+                    // High risk when a single call encrypts > 1 MiB —
+                    // consistent with ransomware bulk-encrypt patterns.
+                    risk_score: if raw.data_len > 1_048_576 { 0.85 } else { 0.55 },
+                    sql_query_hash: 0,
+                    sql_query_class: 0,
+                    sql_db_port: 0,
+                    ssl_data_len: raw.data_len,
+                    ssl_operation: raw.operation,
+                    _pad_aux: [0; 2],
                 }
             } else {
                 // Unknown payload size: skip for hot-path resilience.
@@ -1070,6 +1146,12 @@ mod tests {
             comm: [0; 16],
             comm_id: 123,
             risk_score: 0.9,
+            sql_query_hash: 0,
+            sql_query_class: 0,
+            sql_db_port: 0,
+            ssl_data_len: 0,
+            ssl_operation: 0,
+            _pad_aux: [0; 2],
         };
 
         let matches = engine.evaluate_matches(&event);

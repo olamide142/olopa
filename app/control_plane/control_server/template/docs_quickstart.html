@@ -3,160 +3,493 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Olopa Docs - Quickstart</title>
+  <title>Quickstart — Olopa Docs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --bg: #0b1020;
-      --panel: #11182e;
-      --text: #e7eefc;
-      --muted: #9fb0d2;
-      --line: #283453;
-      --accent: #5cc8ff;
-      --ok: #3ddc97;
-      --warn: #ffd166;
-      --code-bg: #0b1326;
+      --bg:        #081427;
+      --bg2:       #0e1d35;
+      --bg3:       #132744;
+      --border:    #253a5c;
+      --border2:   #34507c;
+      --text:      #d7e3f7;
+      --text-dim:  #a8bad8;
+      --text-hi:   #f4f8ff;
+      --accent:    #58a0ff;
+      --accent2:   #2f78e6;
+      --warn:      #d5a43b;
+      --ok:        #39c975;
+      --red:       #ff6b73;
+      --code-bg:   #050d1e;
+      --pill-bg:   #0d1e3d;
+      --pill-text: #58a0ff;
+      --stripe-y:  #d0a13a;
+      --stripe-b:  #0f2c55;
     }
-    * { box-sizing: border-box; }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
     body {
-      margin: 0;
-      font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-      background: radial-gradient(circle at 10% 0%, #142042 0, var(--bg) 45%);
+      font-family: 'IBM Plex Sans', sans-serif;
+      background: var(--bg);
       color: var(--text);
-      line-height: 1.55;
+      line-height: 1.6;
+      font-size: 15px;
     }
-    .wrap {
-      width: min(980px, 92vw);
-      margin: 0 auto;
-      padding: 40px 0 72px;
+
+    /* ── Layout ─────────────────────────────────────────── */
+
+    .layout {
+      display: grid;
+      grid-template-columns: 248px 1fr;
+      min-height: 100vh;
     }
-    .top {
+
+    /* ── Sidebar ────────────────────────────────────────── */
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      border-right: 1px solid var(--border);
+      background: var(--bg2);
+      padding: 0 0 48px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border2) transparent;
+    }
+
+    .sidebar-logo {
+      padding: 24px 22px 0;
+    }
+
+    .sidebar-logo .brand {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+      font-size: 1rem;
+      letter-spacing: 0.03em;
+      color: var(--text-hi);
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      gap: 14px;
-      flex-wrap: wrap;
-      margin-bottom: 18px;
+      gap: 8px;
     }
-    .brand {
-      font-weight: 700;
-      letter-spacing: 0.02em;
+
+    .sidebar-logo .brand span { color: var(--accent); }
+
+    .brand-mascot {
+      width: 26px;
+      height: 26px;
+      object-fit: contain;
+      display: block;
+      opacity: 0.95;
+      filter: drop-shadow(0 1px 3px rgba(0,0,0,0.4));
     }
-    .brand span { color: var(--accent); }
-    .nav a {
-      color: var(--muted);
+
+    .sidebar-logo .sub {
+      font-size: 0.67rem;
+      color: var(--border2);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-top: 3px;
+    }
+
+    .police-stripe {
+      height: 4px;
+      margin: 16px 0 0;
+      background: repeating-linear-gradient(90deg,
+        var(--stripe-y) 0 18px,
+        var(--stripe-b) 18px 30px);
+    }
+
+    .nav-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 14px 0;
+    }
+
+    .nav-group { margin-top: 18px; }
+
+    .nav-label {
+      font-size: 0.64rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--border2);
+      padding: 0 22px 5px;
+    }
+
+    .nav-item {
+      display: block;
+      padding: 5px 22px;
+      font-size: 0.83rem;
+      color: var(--text-dim);
       text-decoration: none;
-      margin-left: 14px;
+      border-left: 2px solid transparent;
+      transition: color 0.12s, border-color 0.12s, background 0.12s;
     }
-    .nav a:hover { color: var(--text); }
+
+    .nav-item:hover {
+      color: var(--text);
+      background: rgba(88,160,255,0.05);
+    }
+
+    .nav-item.active {
+      color: var(--accent);
+      border-left-color: var(--accent);
+      background: rgba(88,160,255,0.07);
+    }
+
+    .nav-item.global-active {
+      color: var(--warn);
+      border-left-color: var(--warn);
+      background: rgba(213,164,59,0.06);
+    }
+
+    /* ── Main ───────────────────────────────────────────── */
+
+    .main {
+      padding: 52px 64px 96px;
+      max-width: 860px;
+    }
+
+    .page-header {
+      margin-bottom: 44px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .page-label {
+      font-size: 0.67rem;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--warn);
+      margin-bottom: 10px;
+    }
+
     h1 {
-      margin: 8px 0 4px;
-      font-size: clamp(1.8rem, 3.2vw, 2.6rem);
-      line-height: 1.15;
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+      font-size: clamp(1.6rem, 2.8vw, 2.2rem);
+      line-height: 1.18;
+      letter-spacing: -0.01em;
+      color: var(--text-hi);
+      margin-bottom: 12px;
     }
+
     .lead {
-      margin: 0 0 24px;
-      color: var(--muted);
-      max-width: 70ch;
+      font-size: 1rem;
+      color: var(--text-dim);
+      max-width: 68ch;
+      line-height: 1.65;
     }
-    .card {
-      border: 1px solid var(--line);
-      background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
-      border-radius: 14px;
-      padding: 20px;
-      margin-top: 14px;
-    }
-    h2 { margin-top: 0; font-size: 1.2rem; }
-    code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
-      background: rgba(255,255,255,0.07);
-      padding: 2px 6px;
-      border-radius: 6px;
-    }
-    pre {
-      margin: 10px 0 0;
-      background: var(--code-bg);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      overflow: auto;
-      padding: 14px;
-    }
-    pre code { background: transparent; padding: 0; }
-    ul { margin: 8px 0; }
-    li { margin: 6px 0; }
-    .tip {
-      border-left: 4px solid var(--ok);
-      padding-left: 10px;
-      color: var(--muted);
-      margin-top: 10px;
-    }
-    .note {
-      border-left: 4px solid var(--warn);
-      padding-left: 10px;
-      color: var(--muted);
-      margin-top: 10px;
-    }
-    .footer {
-      margin-top: 28px;
-      color: var(--muted);
+
+    /* ── Sections ───────────────────────────────────────── */
+
+    .section { margin-bottom: 10px; }
+
+    h2 {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 500;
       font-size: 0.95rem;
+      color: var(--text-hi);
+      scroll-margin-top: 24px;
+    }
+
+    p {
+      color: var(--text-dim);
+      margin-bottom: 10px;
+      max-width: 72ch;
+    }
+
+    /* ── Step cards ─────────────────────────────────────── */
+
+    .step {
+      border: 1px solid var(--border);
+      background: var(--bg2);
+      border-radius: 10px;
+      padding: 20px 22px;
+      margin-bottom: 14px;
+    }
+
+    .step-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .step-num {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      background: rgba(88,160,255,0.14);
+      color: var(--accent);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.78rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    /* ── Code blocks ────────────────────────────────────── */
+
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      margin: 10px 0 0;
+    }
+
+    pre code {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.82rem;
+      line-height: 1.75;
+      color: #c4d4f0;
+      background: none;
+    }
+
+    code {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.82em;
+      background: var(--pill-bg);
+      color: var(--pill-text);
+      padding: 2px 7px;
+      border-radius: 4px;
+    }
+
+    /* ── Callouts ───────────────────────────────────────── */
+
+    .callout {
+      border-radius: 8px;
+      padding: 11px 15px;
+      margin: 12px 0 0;
+      font-size: 0.875rem;
+      border-left: 3px solid;
+    }
+
+    .callout.tip {
+      background: rgba(57,201,117,0.06);
+      border-color: var(--ok);
+      color: #7de0ae;
+    }
+
+    .callout.note {
+      background: rgba(213,164,59,0.07);
+      border-color: var(--warn);
+      color: #d5a43b;
+    }
+
+    .callout strong { font-weight: 600; margin-right: 4px; }
+
+    /* ── Footer link ────────────────────────────────────── */
+
+    .footer-nav {
+      margin-top: 40px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    .footer-nav a {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .footer-nav a:hover { color: var(--text-hi); }
+
+    .footer-nav .dir {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    @media (max-width: 780px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .main { padding: 28px 20px 64px; }
     }
   </style>
 </head>
 <body>
-  <main class="wrap">
-    <div class="top">
-      <div class="brand">Olopa <span>Docs</span></div>
-      <nav class="nav">
-        <a href="/quickstart">Quickstart</a>
-        <a href="/agent/config">Agent Config</a>
-      </nav>
+<div class="layout">
+
+  <!-- ── Sidebar ─────────────────────────────────────── -->
+  <nav class="sidebar" aria-label="Docs navigation">
+    <div class="sidebar-logo">
+      <div class="brand">
+        <img src="/assets/mascot.png" alt="Olopa" class="brand-mascot" />
+        <span>OLOPA</span>
+      </div>
+      <div class="sub">Documentation</div>
+    </div>
+    <div class="police-stripe"></div>
+
+    <div class="nav-group">
+      <div class="nav-label">Docs</div>
+      <a class="nav-item global-active" href="/quickstart">Quickstart</a>
+      <a class="nav-item" href="/agent/config">Agent Config</a>
+      <a class="nav-item" href="/docs/oil">OIL Reference</a>
     </div>
 
-    <h1>Quickstart</h1>
-    <p class="lead">Run ingest + control plane, compile an OIL rule pack to runtime IR, then run an agent with token-authenticated ingest.</p>
+    <div class="nav-divider"></div>
 
-    <section class="card">
-      <h2>1. Start the stack</h2>
-      <pre><code>docker compose up --build</code></pre>
-      <p class="tip">This starts <code>olopa-ingest</code>, <code>control-plane</code>, and supporting services from your <code>docker-compose.yml</code>.</p>
+    <div class="nav-group">
+      <div class="nav-label">On this page</div>
+      <a class="nav-item active" href="#stack">1. Start the stack</a>
+      <a class="nav-item" href="#compile">2. Compile OIL rules</a>
+      <a class="nav-item" href="#token-auth">3. Token auth</a>
+      <a class="nav-item" href="#run-agent">4. Run the agent</a>
+      <a class="nav-item" href="#verify">5. Verify telemetry</a>
+    </div>
+  </nav>
+
+  <!-- ── Main content ────────────────────────────────── -->
+  <main class="main">
+
+    <div class="page-header">
+      <div class="page-label">Getting Started</div>
+      <h1>Quickstart</h1>
+      <p class="lead">Start the stack, compile an OIL rule pack to runtime IR with <code>oilc</code>, then run the <code>olopa</code> agent with token-authenticated ingest.</p>
+    </div>
+
+    <!-- STEP 1 -->
+    <section class="section" id="stack">
+      <div class="step">
+        <div class="step-head">
+          <div class="step-num">1</div>
+          <h2>Start the stack</h2>
+        </div>
+        <pre><code>docker compose up --build</code></pre>
+        <div class="callout tip">
+          <strong>Tip:</strong> This starts <code>olopa-ingest</code>, <code>control-plane</code>, and supporting services from your <code>docker-compose.yml</code>.
+        </div>
+      </div>
     </section>
 
-    <section class="card">
-      <h2>2. Compile OIL to runtime IR</h2>
-      <pre><code>cargo run --manifest-path oilc/Cargo.toml -- \
+    <!-- STEP 2 -->
+    <section class="section" id="compile">
+      <div class="step">
+        <div class="step-head">
+          <div class="step-num">2</div>
+          <h2>Compile OIL rules to runtime IR</h2>
+        </div>
+        <p>Use <code>oilc</code> with <code>--mode runtime-ir</code> to compile your <code>.oil</code> rule files into a runtime IR artifact the agent can load.</p>
+        <pre><code>cargo run --manifest-path oilc/Cargo.toml -- \
   --source oilc/src/rules \
   --mode runtime-ir \
   --emit-runtime-ir /tmp/runtime-ir.json \
   --diagnostics-format json</code></pre>
-      <p class="tip">Use <code>/tmp/runtime-ir.json</code> for local testing, then distribute the artifact to agents.</p>
+        <div class="callout tip">
+          <strong>Tip:</strong> Run <code>--mode check</code> first for fast validation without emitting output. Use <code>--mode ast</code> or <code>--mode mir</code> to inspect intermediate stages. See the <a href="/docs/oil#toolchain" style="color:var(--accent)">OIL compiler reference</a> for all modes.
+        </div>
+      </div>
     </section>
 
-    <section class="card">
-      <h2>3. Enable ingest API token auth</h2>
-      <pre><code>export INGEST_API_TOKENS="ops-global-token,agent-acme-token:acme"</code></pre>
-      <p class="note">Token format supports global and tenant-scoped tokens (<code>token</code>, <code>token:tenant</code>, <code>token:tenant-a|tenant-b</code>, <code>token:*</code>).</p>
+    <!-- STEP 3 -->
+    <section class="section" id="token-auth">
+      <div class="step">
+        <div class="step-head">
+          <div class="step-num">3</div>
+          <h2>Enable ingest API token auth</h2>
+        </div>
+        <pre><code>export INGEST_API_TOKENS="ops-global-token,agent-acme-token:acme"</code></pre>
+        <div class="callout note">
+          <strong>Token format:</strong> supports global and tenant-scoped tokens.
+          <code>token</code> — global &nbsp;|&nbsp; <code>token:tenant</code> — single tenant &nbsp;|&nbsp;
+          <code>token:tenant-a|tenant-b</code> — multi-tenant &nbsp;|&nbsp; <code>token:*</code> — all tenants.
+        </div>
+      </div>
     </section>
 
-    <section class="card">
-      <h2>4. Run an agent against ingest</h2>
-      <pre><code>OLOPA_RUNTIME_IR=/tmp/runtime-ir.json \
-OLOPA_INGEST_URL=http://127.0.0.1:8000/api/v1/ingest/batches \
+    <!-- STEP 4 -->
+    <section class="section" id="run-agent">
+      <div class="step">
+        <div class="step-head">
+          <div class="step-num">4</div>
+          <h2>Run the agent against ingest</h2>
+        </div>
+        <p>Set the runtime IR path, ingest endpoint, tenant, and auth token, then launch the agent against a network interface.</p>
+        <pre><code>OLOPA_RUNTIME_IR=/tmp/runtime-ir.json \
+OLOPA_INGEST_URL=http://ingest.olopa.io/api/v1/ingest/batches \
 OLOPA_INGEST_TENANT_ID=acme \
 OLOPA_INGEST_API_TOKEN=agent-acme-token \
 cargo run --manifest-path agent/Cargo.toml -p olopa -- --iface lo</code></pre>
-      <p class="tip">By default the agent expects runtime IR at <code>/etc/olopa/runtime-ir.json</code> if <code>OLOPA_RUNTIME_IR</code> is not set.</p>
+        <div class="callout tip">
+          <strong>Tip:</strong> By default the agent expects runtime IR at <code>/etc/olopa/runtime-ir.json</code> if <code>OLOPA_RUNTIME_IR</code> is not set. Default active probes: <code>fork,exec,file,net</code>. Add <code>--probe-events tc</code> to enable <code>block egress</code> enforcement via TC firewall rules.
+        </div>
+      </div>
     </section>
 
-    <section class="card">
-      <h2>5. Verify ingest is receiving telemetry</h2>
-      <pre><code>curl -sS -H "Authorization: Bearer ops-global-token" \
+    <!-- STEP 5 -->
+    <section class="section" id="verify">
+      <div class="step">
+        <div class="step-head">
+          <div class="step-num">5</div>
+          <h2>Verify ingest is receiving telemetry</h2>
+        </div>
+        <pre><code># Check ingest stats (global token)
+curl -sS -H "Authorization: Bearer ops-global-token" \
   http://127.0.0.1:8000/api/v1/ingest/stats
 
+# View recent events for a tenant
 curl -sS -H "Authorization: Bearer agent-acme-token" \
-  "http://127.0.0.1:8000/api/v1/ingest/recent?tenant_id=acme&amp;limit=20"</code></pre>
+  "http://127.0.0.1:8000/api/v1/ingest/recent?tenant_id=acme&amp;limit=20"
+
+# Check agent runtime status
+cargo run --manifest-path agent/Cargo.toml -p olopa -- status</code></pre>
+      </div>
     </section>
 
-    <p class="footer">Next: configure runtime, paths, probe options, and auth headers in <a href="/agent/config" style="color:var(--accent)">Agent Configuration</a>.</p>
+    <!-- Footer nav -->
+    <div class="footer-nav">
+      <a href="/agent/config">
+        <span class="dir">Next</span>
+        Agent Configuration →
+      </a>
+      <a href="/docs/oil">
+        <span class="dir">Reference</span>
+        OIL Language Reference →
+      </a>
+    </div>
+
   </main>
+</div>
+
+<script>
+  const sections = Array.from(document.querySelectorAll('section[id]'));
+  const sectionLinks = Array.from(document.querySelectorAll('.nav-item[href^="#"]'));
+  const visible = new Set();
+
+  function setActive() {
+    const active = sections.find(s => visible.has(s.id));
+    sectionLinks.forEach(link => {
+      link.classList.toggle('active', !!active && link.getAttribute('href') === '#' + active.id);
+    });
+  }
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      entry.isIntersecting ? visible.add(entry.target.id) : visible.delete(entry.target.id);
+    });
+    setActive();
+  }, { rootMargin: '-5% 0px -55% 0px' });
+
+  sections.forEach(s => observer.observe(s));
+</script>
 </body>
 </html>

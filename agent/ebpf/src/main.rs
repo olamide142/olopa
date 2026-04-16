@@ -3,13 +3,17 @@
 //! Single ELF containing all probes. Userspace agent loads and attaches each.
 //!
 //! Programs:
-//!   xdp_filter  — XDP hook: drop/pass at NIC driver level
-//!   tc_egress   — TC hook:  egress (has PID context, unlike XDP)
-//!   on_execve   — tracepoint: process execution
-//!   on_execveat — tracepoint: process execution via execveat
-//!   on_openat   — tracepoint: file open
-//!   on_openat2  — tracepoint: file open via openat2
-//!   on_connect  — tracepoint: outbound network connect
+//!   xdp_filter              — XDP hook: drop/pass at NIC driver level
+//!   tc_egress               — TC hook:  egress (has PID context, unlike XDP)
+//!   on_execve               — tracepoint: process execution
+//!   on_execveat             — tracepoint: process execution via execveat
+//!   on_openat               — tracepoint: file open
+//!   on_openat2              — tracepoint: file open via openat2
+//!   on_connect              — tracepoint: outbound network connect
+//!   uprobe_pqexec           — uprobe: libpq PQexec (PostgreSQL queries)
+//!   uprobe_mysql_query      — uprobe: libmysqlclient mysql_real_query
+//!   uprobe_evp_encrypt_update — uprobe: libssl EVP_EncryptUpdate
+//!   uprobe_evp_decrypt_update — uprobe: libssl EVP_DecryptUpdate
 
 #![no_std]
 #![no_main]
@@ -17,6 +21,8 @@
 mod exec_probe;
 mod file_probe;
 mod net_probe;
+mod sql_probe;
+mod ssl_probe;
 mod tc;
 mod xdp;
 

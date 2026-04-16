@@ -71,6 +71,17 @@ async def docs_agent_config_page(request: Request) -> HTMLResponse:
         context={"request": request},
     )
 
+
+@app.get("/oil", response_class=HTMLResponse)
+@app.get("/oil/", response_class=HTMLResponse)
+async def docs_oil_page(request: Request) -> HTMLResponse:
+    """Render OIL language reference docs page."""
+    return templates.TemplateResponse(
+        request=request,
+        name="docs_oil.html",
+        context={"request": request},
+    )
+
 @app.get("/app")
 async def legacy_app_route() -> RedirectResponse:
     """Backwards-compatible redirect from /app to /."""

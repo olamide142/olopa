@@ -1,0 +1,1305 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OIL Language Reference — Olopa Docs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:        #081427;
+      --bg2:       #0e1d35;
+      --bg3:       #132744;
+      --border:    #253a5c;
+      --border2:   #34507c;
+      --text:      #d7e3f7;
+      --text-dim:  #a8bad8;
+      --text-hi:   #f4f8ff;
+      --accent:    #58a0ff;
+      --accent2:   #2f78e6;
+      --warn:      #d5a43b;
+      --ok:        #39c975;
+      --red:       #ff6b73;
+      --code-bg:   #050d1e;
+      --pill-bg:   #0d1e3d;
+      --pill-text: #58a0ff;
+      --stripe-y:  #d0a13a;
+      --stripe-b:  #0f2c55;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'IBM Plex Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      font-size: 15px;
+    }
+
+    /* ── Layout ─────────────────────────────────────────── */
+
+    .layout {
+      display: grid;
+      grid-template-columns: 248px 1fr;
+      min-height: 100vh;
+    }
+
+    /* ── Sidebar ────────────────────────────────────────── */
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      border-right: 1px solid var(--border);
+      background: var(--bg2);
+      padding: 0 0 48px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border2) transparent;
+    }
+
+    .sidebar-logo {
+      padding: 24px 22px 0;
+    }
+
+    .sidebar-logo .brand {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+      font-size: 1rem;
+      letter-spacing: 0.03em;
+      color: var(--text-hi);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .sidebar-logo .brand span { color: var(--accent); }
+
+    .brand-mascot {
+      width: 26px;
+      height: 26px;
+      object-fit: contain;
+      display: block;
+      opacity: 0.95;
+      filter: drop-shadow(0 1px 3px rgba(0,0,0,0.4));
+    }
+
+    .sidebar-logo .sub {
+      font-size: 0.67rem;
+      color: var(--border2);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-top: 3px;
+    }
+
+    .police-stripe {
+      height: 4px;
+      margin: 16px 0 0;
+      background: repeating-linear-gradient(90deg,
+        var(--stripe-y) 0 18px,
+        var(--stripe-b) 18px 30px);
+    }
+
+    .nav-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 14px 0;
+    }
+
+    .nav-group { margin-top: 18px; }
+
+    .nav-label {
+      font-size: 0.64rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--border2);
+      padding: 0 22px 5px;
+    }
+
+    .nav-item {
+      display: block;
+      padding: 5px 22px;
+      font-size: 0.83rem;
+      color: var(--text-dim);
+      text-decoration: none;
+      border-left: 2px solid transparent;
+      transition: color 0.12s, border-color 0.12s, background 0.12s;
+    }
+
+    .nav-item:hover {
+      color: var(--text);
+      background: rgba(88,160,255,0.05);
+    }
+
+    .nav-item.active {
+      color: var(--accent);
+      border-left-color: var(--accent);
+      background: rgba(88,160,255,0.07);
+    }
+
+    .nav-item.global-active {
+      color: var(--warn);
+      border-left-color: var(--warn);
+      background: rgba(213,164,59,0.06);
+    }
+
+    /* ── Main ───────────────────────────────────────────── */
+
+    .main {
+      padding: 52px 64px 96px;
+      max-width: 900px;
+    }
+
+    .page-header {
+      margin-bottom: 52px;
+      padding-bottom: 28px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .page-label {
+      font-size: 0.67rem;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--warn);
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+      font-size: clamp(1.8rem, 3vw, 2.4rem);
+      line-height: 1.15;
+      letter-spacing: -0.01em;
+      color: var(--text-hi);
+      margin-bottom: 14px;
+    }
+
+    .lead {
+      font-size: 1rem;
+      color: var(--text-dim);
+      max-width: 68ch;
+      line-height: 1.65;
+    }
+
+    /* ── Sections ───────────────────────────────────────── */
+
+    .section { margin-bottom: 60px; }
+
+    .section[id] { scroll-margin-top: 20px; }
+
+    h2 {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+      font-size: 1.2rem;
+      color: var(--text-hi);
+      margin-bottom: 16px;
+    }
+
+    h3 {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-weight: 600;
+      font-size: 0.93rem;
+      color: var(--ok);
+      margin: 24px 0 10px;
+      letter-spacing: 0.01em;
+    }
+
+    p {
+      color: var(--text-dim);
+      margin-bottom: 12px;
+      max-width: 72ch;
+    }
+
+    /* ── Code blocks ────────────────────────────────────── */
+
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 18px;
+      overflow-x: auto;
+      margin: 14px 0;
+      position: relative;
+    }
+
+    pre code {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.82rem;
+      line-height: 1.75;
+      color: #c4d4f0;
+      background: none;
+    }
+
+    code {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.82em;
+      background: var(--pill-bg);
+      color: var(--pill-text);
+      padding: 2px 7px;
+      border-radius: 4px;
+    }
+
+    /* Syntax colours */
+    .kw  { color: #58a0ff; }                        /* keywords: police blue */
+    .kw2 { color: #39c975; }                        /* secondary kw */
+    .str { color: #d5a43b; }                        /* strings: police yellow */
+    .num { color: #f0975a; }                        /* numbers */
+    .cmt { color: #2d4870; font-style: italic; }    /* comments */
+    .fn  { color: #a78bfa; }                        /* callables/predicates */
+    .ent { color: #39c975; }                        /* entities/types */
+    .op  { color: #7eb8ff; }                        /* operators */
+    .lit { color: #f0975a; }                        /* durations/literals */
+
+    /* ── Callout cards ──────────────────────────────────── */
+
+    .callout {
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin: 16px 0;
+      font-size: 0.875rem;
+      border-left: 3px solid;
+    }
+
+    .callout.tip {
+      background: rgba(57,201,117,0.06);
+      border-color: var(--ok);
+      color: #7de0ae;
+    }
+
+    .callout.note {
+      background: rgba(213,164,59,0.07);
+      border-color: var(--warn);
+      color: #d5a43b;
+    }
+
+    .callout.danger {
+      background: rgba(255,107,115,0.07);
+      border-color: var(--red);
+      color: #ff9097;
+    }
+
+    .callout strong {
+      font-weight: 600;
+      margin-right: 4px;
+    }
+
+    /* ── Tables ─────────────────────────────────────────── */
+
+    .table-wrap { overflow-x: auto; margin: 14px 0; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+
+    th {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 500;
+      font-size: 0.7rem;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: var(--border2);
+      text-align: left;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-dim);
+      vertical-align: top;
+    }
+
+    td code { font-size: 0.8em; }
+
+    tr:last-child td { border-bottom: none; }
+
+    tr:hover td { background: rgba(255,255,255,0.013); }
+
+    /* ── Pill badges ────────────────────────────────────── */
+
+    .badge {
+      display: inline-block;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.68rem;
+      padding: 2px 7px;
+      border-radius: 3px;
+      margin-left: 6px;
+      vertical-align: middle;
+      letter-spacing: 0.04em;
+    }
+
+    .badge-blue   { background: rgba(88,160,255,0.14); color: #58a0ff; }
+    .badge-green  { background: rgba(57,201,117,0.14); color: #39c975; }
+    .badge-yellow { background: rgba(213,164,59,0.14);  color: #d5a43b; }
+
+    /* ── Section divider ────────────────────────────────── */
+
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 48px 0;
+    }
+
+    /* ── Two-column grid ────────────────────────────────── */
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 14px 0;
+    }
+
+    .mini-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 18px;
+    }
+
+    .mini-card .title {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 500;
+      font-size: 0.85rem;
+      color: var(--text-hi);
+      margin-bottom: 6px;
+    }
+
+    .mini-card p {
+      font-size: 0.82rem;
+      margin: 0;
+    }
+
+    /* ── Pipeline diagram ───────────────────────────────── */
+
+    .pipeline {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      margin: 20px 0;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .pipe-step {
+      background: var(--bg3);
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      padding: 8px 14px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.78rem;
+      color: var(--text-hi);
+      white-space: nowrap;
+    }
+
+    .pipe-step .pipe-label {
+      font-size: 0.62rem;
+      color: var(--border2);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .pipe-arrow {
+      color: var(--border2);
+      font-size: 1.1rem;
+      padding: 0 2px;
+    }
+
+    @media (max-width: 780px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .main { padding: 28px 20px 64px; }
+      .grid-2 { grid-template-columns: 1fr; }
+      .pipeline { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ── Sidebar ─────────────────────────────────────── -->
+  <nav class="sidebar" aria-label="Docs navigation">
+    <div class="sidebar-logo">
+      <div class="brand">
+        <img src="/assets/mascot.png" alt="Olopa" class="brand-mascot" />
+        <span>OLOPA</span>
+      </div>
+      <div class="sub">Documentation</div>
+    </div>
+    <div class="police-stripe"></div>
+
+    <div class="nav-group">
+      <div class="nav-label">Docs</div>
+      <a class="nav-item" href="/quickstart">Quickstart</a>
+      <a class="nav-item" href="/agent/config">Agent Config</a>
+      <a class="nav-item global-active" href="/docs/oil">OIL Reference</a>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-group">
+      <div class="nav-label">Overview</div>
+      <a class="nav-item active" href="#overview">Introduction</a>
+      <a class="nav-item" href="#structure">File Structure</a>
+      <a class="nav-item" href="#toolchain">Compiler Pipeline</a>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">Primitives</div>
+      <a class="nav-item" href="#types">Type System</a>
+      <a class="nav-item" href="#sets">Sets</a>
+      <a class="nav-item" href="#entities">Entities &amp; Roots</a>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">Declarations</div>
+      <a class="nav-item" href="#predicates">Predicates</a>
+      <a class="nav-item" href="#callables">Callables</a>
+      <a class="nav-item" href="#facts">Facts</a>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">Rules</div>
+      <a class="nav-item" href="#rule-anatomy">Rule Anatomy</a>
+      <a class="nav-item" href="#from">from</a>
+      <a class="nav-item" href="#correlate">correlate</a>
+      <a class="nav-item" href="#where">where</a>
+      <a class="nav-item" href="#let">let</a>
+      <a class="nav-item" href="#score">score</a>
+      <a class="nav-item" href="#emit">emit</a>
+      <a class="nav-item" href="#respond">respond</a>
+      <a class="nav-item" href="#require">require</a>
+      <a class="nav-item" href="#within">within</a>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">Advanced</div>
+      <a class="nav-item" href="#around">around</a>
+      <a class="nav-item" href="#graph">graph</a>
+      <a class="nav-item" href="#operators">Operators</a>
+      <a class="nav-item" href="#builtins">Built-in Sets</a>
+      <a class="nav-item" href="#stdlib-preds">Built-in Predicates</a>
+      <a class="nav-item" href="#stdlib-callables">Built-in Callables</a>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">Examples</div>
+      <a class="nav-item" href="#examples">Rule Gallery</a>
+    </div>
+  </nav>
+
+  <!-- ── Main content ────────────────────────────────── -->
+  <main class="main">
+
+    <div class="page-header">
+      <div class="page-label">Language Reference</div>
+      <h1>OIL</h1>
+      <p class="lead">The Olopa Intent Language — a declarative, event-driven detection language for writing security rules that correlate streams, score risk, emit facts, and trigger responses.</p>
+    </div>
+
+    <!-- OVERVIEW -->
+    <section class="section" id="overview">
+      <h2>Introduction</h2>
+      <p>OIL rules describe <em>what to look for</em> across live event streams — processes, network flows, file events, container activity, DNS queries, and more. Rules are compiled by <code>oilc</code> to a runtime IR artifact that the <code>olopa</code> agent loads and evaluates continuously against kernel-level telemetry.</p>
+      <p>A rule declares which event sources it cares about (<code>from</code>), how events join together (<code>correlate</code>), the conditions that trigger it (<code>where</code>), an optional risk score (<code>score</code>), side-effects (<code>emit</code> / <code>respond</code>), and an optional gate (<code>require</code>). All other constructs — <code>set</code>, <code>predicate</code>, <code>callable</code>, <code>fact</code>, <code>entity</code>, <code>root</code> — are the vocabulary that rules draw from.</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <div class="title">Declarative</div>
+          <p>Describe detections at the semantic level. The runtime handles joining, windowing, and evaluation.</p>
+        </div>
+        <div class="mini-card">
+          <div class="title">Composable</div>
+          <p>Share reusable predicates, callable lookups, and named facts across many rules.</p>
+        </div>
+        <div class="mini-card">
+          <div class="title">Risk-aware</div>
+          <p>Inline <code>score</code> blocks accumulate evidence and gate response severity dynamically.</p>
+        </div>
+        <div class="mini-card">
+          <div class="title">Stateful</div>
+          <p><code>emit fact</code> publishes named state that other rules can consume within a TTL.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- FILE STRUCTURE -->
+    <section class="section" id="structure">
+      <h2>File Structure</h2>
+      <p>An OIL file is a sequence of top-level declarations in any order. <code>use</code> imports bring external callables or sets into scope.</p>
+
+      <pre><code><span class="cmt">// Optional: import external symbols</span>
+<span class="kw">use</span> intel.malicious_domains
+<span class="kw">use</span> baseline.workload_profiles
+
+<span class="cmt">// Named constant sets</span>
+<span class="kw">set</span> <span class="ent">shells</span> = [<span class="str">"bash"</span>, <span class="str">"sh"</span>, <span class="str">"zsh"</span>]
+
+<span class="cmt">// Reusable predicate</span>
+<span class="kw">predicate</span> <span class="fn">is_shell</span>(p) =
+  p.name <span class="op">in</span> shells
+
+<span class="cmt">// Fact template</span>
+<span class="kw">fact</span> host.root_ssh_write(host_id) <span class="kw">expires</span> <span class="lit">6h</span>
+
+<span class="cmt">// Detection rule</span>
+<span class="kw">rule</span> <span class="str">"my_detection"</span> {
+  <span class="cmt">// ... clauses ...</span>
+}</code></pre>
+
+      <div class="callout tip">
+        <strong>Tip:</strong> Built-in sets, predicates, and callables from the stdlib are available globally — no <code>use</code> needed.
+      </div>
+    </section>
+
+    <!-- COMPILER PIPELINE -->
+    <section class="section" id="toolchain">
+      <h2>Compiler Pipeline</h2>
+      <p>OIL source is compiled by <code>oilc</code> into a runtime IR artifact (JSON), which the <code>olopa</code> agent loads at startup. The agent evaluates the IR continuously against live kernel telemetry.</p>
+
+      <div class="pipeline">
+        <div class="pipe-step"><span class="pipe-label">source</span>.oil rules</div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-step"><span class="pipe-label">compiler</span>oilc</div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-step"><span class="pipe-label">artifact</span>runtime-ir.json</div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-step"><span class="pipe-label">runtime</span>olopa agent</div>
+      </div>
+
+      <h3>Compiler modes</h3>
+      <p>Pass <code>--mode &lt;mode&gt;</code> to <code>oilc</code> to control what is emitted. The default mode is <code>check</code>.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Mode</th><th>Output</th><th>Use case</th></tr></thead>
+          <tbody>
+            <tr><td><code>check</code></td><td>Diagnostics only</td><td>Validate OIL syntax and types without emitting anything — fast CI check</td></tr>
+            <tr><td><code>ast</code></td><td>Abstract syntax tree</td><td>Debug parsing; inspect how OIL source is structured</td></tr>
+            <tr><td><code>mir</code></td><td>Middle IR</td><td>Inspect after type-checking and semantic lowering</td></tr>
+            <tr><td><code>runtime-ir</code></td><td>Runtime IR JSON</td><td>Production artifact loaded by the agent; use with <code>--emit-runtime-ir &lt;path&gt;</code></td></tr>
+            <tr><td><code>cypher</code></td><td>Cypher queries</td><td>Graph-query translation for inspection or external execution</td></tr>
+            <tr><td><code>codegen</code></td><td>Full codegen output</td><td>Debug code generation stages</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Compile OIL to runtime IR</h3>
+      <pre><code>cargo run --manifest-path oilc/Cargo.toml -- \
+  --source oilc/src/rules \
+  --mode runtime-ir \
+  --emit-runtime-ir /tmp/runtime-ir.json \
+  --diagnostics-format json</code></pre>
+
+      <h3>Other useful flags</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Flag</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>--source &lt;path&gt;</code></td><td>One or more <code>.oil</code> files or directories (repeatable)</td></tr>
+            <tr><td><code>--emit-runtime-ir &lt;path&gt;</code></td><td>Write runtime IR artifact to file (use with <code>--mode runtime-ir</code>)</td></tr>
+            <tr><td><code>--diagnostics-format json|text</code></td><td>Machine-readable or human-readable diagnostic output (default: <code>text</code>)</td></tr>
+            <tr><td><code>--dump-tokens</code></td><td>Debug: print tokenized output</td></tr>
+            <tr><td><code>--dump-ast</code></td><td>Debug: print parsed AST</td></tr>
+            <tr><td><code>--suppress-warnings</code></td><td>Silence non-fatal warnings</td></tr>
+            <tr><td><code>--no-typecheck</code></td><td>Skip type-checking stage</td></tr>
+            <tr><td><code>--fail-on-type-warning</code></td><td>Promote type warnings to errors</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout note">
+        <strong>Note:</strong> The agent expects the runtime IR at <code>/etc/olopa/runtime-ir.json</code> by default. Override with <code>OLOPA_RUNTIME_IR=&lt;path&gt;</code> or <code>--runtime-ir &lt;path&gt;</code>.
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- TYPES -->
+    <section class="section" id="types">
+      <h2>Type System</h2>
+      <p>OIL is statically typed. The compiler resolves field access chains against entity definitions and rejects unknown fields or type mismatches.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Type</th><th>Description</th><th>Example literal</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>Str</code></td><td>UTF-8 string</td><td><code>"outbound"</code></td></tr>
+            <tr><td><code>Int</code></td><td>64-bit integer</td><td><code>443</code></td></tr>
+            <tr><td><code>Float</code></td><td>64-bit float</td><td><code>0.95</code></td></tr>
+            <tr><td><code>Bool</code></td><td>Boolean</td><td><code>true</code> / <code>false</code></td></tr>
+            <tr><td><code>Path</code></td><td>Filesystem path (supports <code>under</code>)</td><td><code>"/etc/shadow"</code></td></tr>
+            <tr><td><code>IpAddr</code></td><td>IPv4 or IPv6 address</td><td>—</td></tr>
+            <tr><td><code>Duration</code></td><td>Time span</td><td><code>15m</code>, <code>24h</code>, <code>30s</code></td></tr>
+            <tr><td><code>Set&lt;T&gt;</code></td><td>Unordered collection</td><td><code>Set&lt;Str&gt;</code></td></tr>
+            <tr><td><code>T?</code></td><td>Nullable field</td><td>—</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Duration literals</h3>
+      <p>Duration values are suffixed with a time unit: <code>30s</code>, <code>5m</code>, <code>2h</code>, <code>24h</code>. Used in <code>within</code>, <code>around</code>, <code>expires</code>, and callable arguments.</p>
+    </section>
+
+    <!-- SETS -->
+    <section class="section" id="sets">
+      <h2>Sets</h2>
+      <p>Named, typed collections of literals. Sets are referenced in <code>in</code> / <code>not_in</code> expressions and passed to predicates or callables.</p>
+
+      <pre><code><span class="kw">set</span> <span class="ent">c2_ports</span>      = [<span class="num">4444</span>, <span class="num">1337</span>, <span class="num">31337</span>, <span class="num">9001</span>]
+<span class="kw">set</span> <span class="ent">credential_paths</span> = [
+    <span class="str">"/etc/shadow"</span>, <span class="str">"/etc/passwd"</span>, <span class="str">"/etc/sudoers"</span>,
+    <span class="str">"~/.aws/credentials"</span>, <span class="str">"~/.ssh/id_rsa"</span>
+]</code></pre>
+
+      <p>Inline arrays work directly in <code>where</code> expressions too:</p>
+      <pre><code><span class="kw">where</span>
+  p.name <span class="op">in</span> [<span class="str">"bash"</span>, <span class="str">"sh"</span>, <span class="str">"zsh"</span>]
+  <span class="op">and</span> f.path <span class="op">matches</span> [<span class="str">"/etc/shadow"</span>, <span class="str">"~/.aws/credentials"</span>]</code></pre>
+
+      <div class="callout tip">
+        <strong>Tip:</strong> Use <code>matches</code> for glob-style path matching (e.g. <code>"/home/*/.ssh/id_rsa"</code>). Use <code>in</code> for exact set membership.
+      </div>
+    </section>
+
+    <!-- ENTITIES & ROOTS -->
+    <section class="section" id="entities">
+      <h2>Entities &amp; Roots</h2>
+      <p>Entities are named field schemas. Roots are globally available, pre-declared bindings to entity instances that rules can reference directly.</p>
+
+      <pre><code><span class="cmt">// Defining a custom entity</span>
+<span class="kw">entity</span> <span class="ent">TimeContext</span> {
+    weekday: <span class="ent">Str</span>,
+    hour:    <span class="ent">Int</span>,
+    minute:  <span class="ent">Int</span>,
+    is_business_hour: <span class="ent">Bool</span>,
+}
+
+<span class="cmt">// Declaring a root binding</span>
+<span class="kw">root</span> time: <span class="ent">TimeContext</span></code></pre>
+
+      <h3>Built-in roots</h3>
+      <p>These are available without declaration in any rule:</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Root</th><th>Type</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>host</code></td><td><code>Host</code></td><td>Host identity and baseline</td></tr>
+            <tr><td><code>process</code></td><td><code>Process</code></td><td>Process tree with parent, user, binary</td></tr>
+            <tr><td><code>user</code></td><td><code>User</code></td><td>User identity, groups, baseline</td></tr>
+            <tr><td><code>session</code></td><td><code>Session</code></td><td>Auth session context</td></tr>
+            <tr><td><code>device</code></td><td><code>Device</code></td><td>Device posture and compliance</td></tr>
+            <tr><td><code>network</code></td><td><code>NetworkFlow</code></td><td>Network flow with dest endpoint</td></tr>
+            <tr><td><code>file</code></td><td><code>FileEvent</code></td><td>File path, mode, sensitivity</td></tr>
+            <tr><td><code>dns</code></td><td><code>DnsQuery</code></td><td>DNS domain and entropy</td></tr>
+            <tr><td><code>container</code></td><td><code>ContainerContext</code></td><td>Container security and namespaces</td></tr>
+            <tr><td><code>workload</code></td><td><code>WorkloadInfo</code></td><td>Kubernetes pod/namespace info</td></tr>
+            <tr><td><code>time</code></td><td><code>TimeContext</code></td><td>Wall-clock context (weekday, hour)</td></tr>
+            <tr><td><code>secure_connect</code></td><td><code>SecureConnectSession</code></td><td>ZTNA session state</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Fields marked <code>T?</code> in the schema are nullable — access is guarded at runtime and a null check <code>!= null</code> can be used in <code>where</code>.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- PREDICATES -->
+    <section class="section" id="predicates">
+      <h2>Predicates</h2>
+      <p>Predicates are named boolean functions over one or more arguments. They are evaluated inline wherever they are called — there is no separate invocation overhead.</p>
+
+      <pre><code><span class="kw">predicate</span> <span class="fn">is_shell</span>(p) =
+  p.name <span class="op">in</span> shells
+
+<span class="kw">predicate</span> <span class="fn">unusual_country</span>(user, country) =
+  country <span class="op">not_in</span> user.baseline.countries
+
+<span class="kw">predicate</span> <span class="fn">external_c2</span>(endpoint) =
+  endpoint.is_internal == <span class="kw2">false</span>
+  <span class="op">and</span> (endpoint.port <span class="op">in</span> c2_ports <span class="op">or</span> endpoint.reputation <span class="op">in</span> malicious_reputation)</code></pre>
+
+      <p>Predicates can call other predicates and reference any in-scope set or callable. They are used in <code>where</code> expressions, <code>let</code> bindings, and other predicates.</p>
+
+      <pre><code><span class="cmt">// Calling a predicate inside another</span>
+<span class="kw">predicate</span> <span class="fn">unsigned_from_tmp</span>(proc) =
+  <span class="fn">from_tmp</span>(proc) <span class="op">and</span> proc.signed == <span class="kw2">false</span></code></pre>
+    </section>
+
+    <!-- CALLABLES -->
+    <section class="section" id="callables">
+      <h2>Callables</h2>
+      <p>Callables declare external functions resolved by the runtime engine — they are not defined inline. They may return scalar values, Booleans, or structured types like <code>BaselineProfile</code> or <code>Set&lt;Str&gt;</code>.</p>
+
+      <pre><code><span class="cmt">// Declare the signature (in builtins or a module)</span>
+<span class="kw">callable</span> <span class="fn">baseline.workload</span>(namespace: <span class="ent">Str</span>, name: <span class="ent">Str</span>) -> <span class="ent">BaselineProfile</span>
+<span class="kw">callable</span> <span class="fn">intel.domains</span>(feed: <span class="ent">Str</span>) -> <span class="ent">Set</span>&lt;<span class="ent">Str</span>&gt;
+<span class="kw">callable</span> <span class="fn">rare</span>(value: <span class="ent">Str</span>) -> <span class="ent">Bool</span>
+<span class="kw">callable</span> <span class="fn">rate</span>(value: <span class="ent">Str</span>, window: <span class="ent">Duration</span>) -> <span class="ent">Int</span>
+
+<span class="cmt">// Using a callable in a rule's where clause</span>
+<span class="kw">where</span>
+  p.name <span class="op">not_in</span> <span class="fn">baseline.workload</span>(w.namespace, w.name).allowed_processes
+  <span class="op">and</span> <span class="fn">rate</span>(n.dest.domain, <span class="lit">1m</span>) >= <span class="num">8</span></code></pre>
+
+      <h3>Statistical callables</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Callable</th><th>Returns</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>rare(value)</code></td><td><code>Bool</code></td><td>True if value is statistically rare for this entity</td></tr>
+            <tr><td><code>unusual_for(value, entity)</code></td><td><code>Bool</code></td><td>Anomalous relative to entity's historical baseline</td></tr>
+            <tr><td><code>rate(value, window)</code></td><td><code>Int</code></td><td>Event count for value in the given time window</td></tr>
+            <tr><td><code>count(list)</code></td><td><code>Int</code></td><td>Number of elements in a set or inline list</td></tr>
+            <tr><td><code>avg(values)</code></td><td><code>Float</code></td><td>Average of an integer set</td></tr>
+            <tr><td><code>sum(values)</code></td><td><code>Int</code></td><td>Sum of an integer set</td></tr>
+            <tr><td><code>distinct(values)</code></td><td><code>Set&lt;Str&gt;</code></td><td>Deduplicated string set</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- FACTS -->
+    <section class="section" id="facts">
+      <h2>Facts</h2>
+      <p>Facts are named, parameterized state with a TTL. A fact template is declared at the top level; rules emit and consume instances. Other rules can reference emitted facts in their <code>where</code> clause.</p>
+
+      <pre><code><span class="cmt">// Declare a fact template with a default TTL</span>
+<span class="kw">fact</span> host.root_ssh_write(host_id) <span class="kw">expires</span> <span class="lit">6h</span>
+<span class="kw">fact</span> host.binary_tamper(host_id)  <span class="kw">expires</span> <span class="lit">24h</span>
+<span class="kw">fact</span> container.high_risk(container_id) <span class="kw">expires</span> <span class="lit">24h</span>
+
+<span class="cmt">// Emit a fact instance inside a rule</span>
+<span class="kw">emit</span>
+  <span class="kw">fact</span> host.root_ssh_write(host.id) <span class="kw">expires</span> <span class="lit">6h</span></code></pre>
+
+      <div class="callout note">
+        <strong>Note:</strong> Facts enable chained detections — rule A emits a fact that lowers the score threshold in rule B, allowing multi-stage attack sequences to trigger higher-severity responses.
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- RULE ANATOMY -->
+    <section class="section" id="rule-anatomy">
+      <h2>Rule Anatomy</h2>
+      <p>A rule is a named block containing ordered clauses. Only <code>from</code>, <code>correlate</code>, <code>where</code>, and <code>respond</code> are required for a minimal rule — the rest are optional enrichments.</p>
+
+      <pre><code><span class="kw">rule</span> <span class="str">"rule_name"</span> {
+  <span class="kw">from</span>      <span class="cmt">// event sources to subscribe to</span>
+  <span class="kw">correlate</span> <span class="cmt">// join event streams on shared keys</span>
+  <span class="kw">where</span>     <span class="cmt">// boolean filter predicate</span>
+  <span class="kw">within</span>    <span class="cmt">// optional time window for correlation</span>
+  <span class="kw">let</span>       <span class="cmt">// named boolean/value bindings</span>
+  <span class="kw">score</span>     <span class="cmt">// base score + conditional adjustments</span>
+  <span class="kw">require</span>   <span class="cmt">// gate: rule only fires if condition met</span>
+  <span class="kw">emit</span>      <span class="cmt">// publish facts for other rules</span>
+  <span class="kw">respond</span>   <span class="cmt">// actions: alert, block, snapshot, etc.</span>
+}</code></pre>
+    </section>
+
+    <!-- FROM -->
+    <section class="section" id="from">
+      <h2><code>from</code></h2>
+      <p>Declares which telemetry sources the rule subscribes to. Use dot-notation: <code>source.stream</code>. The agent must have the corresponding probe enabled for the source to receive events.</p>
+
+      <pre><code><span class="kw">from</span> endpoint.process, network.flow
+<span class="kw">from</span> endpoint.file, endpoint.process
+<span class="kw">from</span> container.runtime, k8s.admission, identity.session
+<span class="kw">from</span> endpoint.process, network.flow, container.runtime, k8s.workload</code></pre>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Source</th><th>Events</th><th>Agent probe</th></tr></thead>
+          <tbody>
+            <tr><td><code>endpoint.process</code></td><td>Process spawn events</td><td><code>fork</code>, <code>exec</code></td></tr>
+            <tr><td><code>endpoint.file</code></td><td>File open/write events</td><td><code>file</code></td></tr>
+            <tr><td><code>network.flow</code></td><td>Network connection events</td><td><code>net</code></td></tr>
+            <tr><td><code>container.runtime</code></td><td>Container start/stop events</td><td><code>fork</code> + namespace tracking</td></tr>
+            <tr><td><code>k8s.workload</code></td><td>Kubernetes workload metadata</td><td>k8s informer</td></tr>
+            <tr><td><code>k8s.admission</code></td><td>Kubernetes admission events</td><td>k8s webhook</td></tr>
+            <tr><td><code>identity.session</code></td><td>Auth session events</td><td>PAM / session hooks</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout tip">
+        <strong>Tip:</strong> The agent's active probes are controlled by <code>OLOPA_PROBE_EVENTS</code> (or <code>--probe-events</code>). Default active probes: <code>fork,exec,file,net</code>. The <code>tc</code> probe must be explicitly enabled for <code>block egress</code> enforcement.
+      </div>
+    </section>
+
+    <!-- CORRELATE -->
+    <section class="section" id="correlate">
+      <h2><code>correlate</code></h2>
+      <p>Joins event streams into a single match context. Events are bound to aliases using <code>as</code> and joined to previous bindings using <code>on</code> conditions or <code>by</code> shortcuts.</p>
+
+      <pre><code><span class="kw">correlate</span>
+  process.spawn <span class="kw">as</span> p
+  <span class="kw">with</span> file.open   <span class="kw">as</span> f  <span class="kw">on</span> f.process_id == p.id
+  <span class="kw">with</span> network.connect <span class="kw">as</span> n  <span class="kw">on</span> n.process_id == p.id</code></pre>
+
+      <p>The <code>by</code> shorthand links a file or network event directly to the spawning process:</p>
+
+      <pre><code><span class="cmt">// "file.write by process" is sugar for joining on process_id</span>
+<span class="kw">correlate</span>
+  file.write <span class="kw">as</span> f <span class="kw">by</span> process <span class="kw">as</span> p</code></pre>
+
+      <div class="callout tip">
+        <strong>Tip:</strong> Aliases declared in <code>correlate</code> are available throughout the rest of the rule — in <code>where</code>, <code>let</code>, <code>score</code>, <code>emit</code>, and <code>respond</code>.
+      </div>
+    </section>
+
+    <!-- WHERE -->
+    <section class="section" id="where">
+      <h2><code>where</code></h2>
+      <p>The boolean filter that must evaluate to <code>true</code> for a rule to trigger. All conditions are joined with <code>and</code> / <code>or</code>.</p>
+
+      <pre><code><span class="kw">where</span>
+  p.name <span class="op">in</span> [<span class="str">"bash"</span>, <span class="str">"sh"</span>, <span class="str">"zsh"</span>]
+  <span class="op">and</span> f.path <span class="op">matches</span> [<span class="str">"/etc/shadow"</span>, <span class="str">"~/.aws/credentials"</span>]
+  <span class="op">and</span> n.dest.domain <span class="op">in</span> malicious_domains
+  <span class="op">and</span> n.direction == <span class="str">"outbound"</span>
+  <span class="op">and</span> n.dest.domain != <span class="kw2">null</span></code></pre>
+
+      <h3>Path membership: <code>under</code></h3>
+      <p><code>under</code> tests whether a path is a descendant of any path in a set — equivalent to a prefix match.</p>
+
+      <pre><code><span class="kw">where</span>
+  f.path <span class="op">under</span> <span class="str">"/root/.ssh"</span>
+
+<span class="cmt">// Or against a set of prefixes</span>
+<span class="kw">where</span>
+  f.path <span class="op">under</span> executable_dirs</code></pre>
+    </section>
+
+    <!-- LET -->
+    <section class="section" id="let">
+      <h2><code>let</code></h2>
+      <p>Computes named boolean or value bindings for use in <code>score</code> conditions and <code>respond</code> blocks. Bindings make complex conditions readable and reusable within a rule.</p>
+
+      <pre><code><span class="kw">let</span>
+  prod           = w.namespace <span class="op">in</span> [<span class="str">"prod"</span>, <span class="str">"payments"</span>, <span class="str">"identity"</span>]
+  interactive    = p.tty == <span class="kw2">true</span>
+  rare_process   = p.name <span class="op">not_in</span> <span class="fn">baseline.workload</span>(w.namespace, w.name).allowed_processes
+  unusual_dest   = n.dest.domain <span class="op">not_in</span> <span class="fn">host</span>(p.host_id).baseline.domains
+  burst          = <span class="fn">rate</span>(n.dest.domain, <span class="lit">30s</span>) >= <span class="num">4</span>
+  large_egress   = n.bytes_out > <span class="num">250000</span></code></pre>
+    </section>
+
+    <!-- SCORE -->
+    <section class="section" id="score">
+      <h2><code>score</code></h2>
+      <p>Accumulates a numeric risk score. Starts from a base value and applies conditional adjustments. The result is available in <code>respond</code> as <code>score</code>.</p>
+
+      <pre><code><span class="kw">score</span>
+  <span class="num">60</span>
+  +<span class="num">20</span> <span class="kw">if</span> rare_for_workload
+  +<span class="num">10</span> <span class="kw">if</span> prod
+  +<span class="num">10</span> <span class="kw">if</span> suspicious_dest
+  -<span class="num">30</span> <span class="kw">if</span> package_mgmt
+  +<span class="num">15</span> <span class="kw">if</span> interactive
+  +<span class="num">20</span> <span class="kw">if</span> suspicious_path</code></pre>
+
+      <p>Adjustments can be positive (raise confidence) or negative (lower it). The score feeds directly into conditional branching in <code>respond</code> and can gate rule firing via <code>require score >= N</code>.</p>
+    </section>
+
+    <!-- EMIT -->
+    <section class="section" id="emit">
+      <h2><code>emit</code></h2>
+      <p>Publishes a named fact instance to the shared fact store. Other rules within the TTL window can reference this fact in their <code>where</code> or <code>score</code> clauses.</p>
+
+      <pre><code><span class="kw">emit</span>
+  <span class="kw">fact</span> host.compromise_candidate(host.id) <span class="kw">expires</span> <span class="lit">24h</span>
+
+<span class="kw">emit</span>
+  <span class="kw">fact</span> host.binary_tamper(host.id) <span class="kw">expires</span> <span class="lit">24h</span></code></pre>
+    </section>
+
+    <!-- RESPOND -->
+    <section class="section" id="respond">
+      <h2><code>respond</code></h2>
+      <p>Specifies actions when the rule matches. Supports unconditional actions and <code>if score &gt;= N</code> branches for severity tiering.</p>
+
+      <pre><code><span class="cmt">// Simple unconditional response</span>
+<span class="kw">respond</span>
+  alert critical
+  block egress n.dest.domain
+  snapshot p, n
+  open case <span class="str">"Blocked outbound to protected website"</span>
+
+<span class="cmt">// Score-gated branching</span>
+<span class="kw">respond</span>
+  <span class="kw">if</span> score >= <span class="num">90</span> {
+    alert critical
+    isolate host
+    snapshot p, f, n, c, w
+    open case <span class="str">"Container credential access and egress chain"</span>
+  } <span class="kw">else</span> {
+    alert high
+    snapshot p, f, n
+  }</code></pre>
+
+      <h3>Response actions</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Action</th><th>Description</th><th>Requires</th></tr></thead>
+          <tbody>
+            <tr><td><code>alert &lt;severity&gt;</code></td><td>Emit an alert at the given severity (<code>low</code> / <code>medium</code> / <code>high</code> / <code>critical</code>), with an optional message string</td><td>—</td></tr>
+            <tr><td><code>block egress &lt;target&gt;</code></td><td>Block outbound traffic to the specified domain or IP via TC firewall rules</td><td><code>tc</code> probe active</td></tr>
+            <tr><td><code>isolate host</code></td><td>Network-isolate the host where the event occurred</td><td>agent privileges</td></tr>
+            <tr><td><code>snapshot &lt;aliases…&gt;</code></td><td>Capture a forensic snapshot of the listed correlated events</td><td>—</td></tr>
+            <tr><td><code>open case &lt;title&gt;</code></td><td>Open a named investigation case</td><td>—</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout note">
+        <strong>Note:</strong> <code>block egress</code> enforcement is backed by the agent's TC (traffic control) firewall hook. Ensure the agent is started with <code>tc</code> in <code>OLOPA_PROBE_EVENTS</code> (or <code>--probe-events tc</code>) and that <code>OLOPA_TC_DENY_RULES</code> is configured. Without the <code>tc</code> probe the action is logged but not enforced.
+      </div>
+    </section>
+
+    <!-- REQUIRE -->
+    <section class="section" id="require">
+      <h2><code>require</code></h2>
+      <p>A final gate — if the condition is false the rule does not fire, regardless of <code>where</code>. Typically used to enforce a minimum score threshold.</p>
+
+      <pre><code><span class="kw">require</span>
+  score >= <span class="num">40</span></code></pre>
+
+      <div class="callout tip">
+        <strong>Tip:</strong> <code>require</code> is evaluated after <code>score</code> is computed, so negative adjustments (e.g. <code>-30 if package_mgmt</code>) can suppress a rule entirely for known-good processes.
+      </div>
+    </section>
+
+    <!-- WITHIN -->
+    <section class="section" id="within">
+      <h2><code>within</code></h2>
+      <p>Constrains correlated events to a sliding time window. All events in the <code>correlate</code> block must occur within the duration of the anchor event.</p>
+
+      <pre><code><span class="kw">within</span> <span class="lit">15m</span></code></pre>
+
+      <p>Place <code>within</code> after the <code>where</code> block. If omitted, correlation is unbounded (or uses the runtime default).</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- AROUND -->
+    <section class="section" id="around">
+      <h2><code>around</code></h2>
+      <p><code>around</code> is a temporal grouping primitive. It aggregates multiple event types on a shared key within a time window, without requiring strict join conditions between individual events.</p>
+
+      <pre><code><span class="kw">around</span> host.id <span class="kw">within</span> <span class="lit">10m</span> {
+  process.spawn <span class="kw">as</span> p,
+  network.connect <span class="kw">as</span> n
+}
+
+<span class="kw">where</span>
+  p.name <span class="op">in</span> [<span class="str">"sh"</span>, <span class="str">"bash"</span>, <span class="str">"zsh"</span>]
+  <span class="op">and</span> n.direction == <span class="str">"outbound"</span>
+
+<span class="kw">respond</span>
+  alert high <span class="str">"Interactive shell with outbound activity in host window"</span></code></pre>
+
+      <p>Useful for hunting patterns where you care about co-occurrence on an entity (host, user, pod) rather than strict causal joins.</p>
+    </section>
+
+    <!-- GRAPH -->
+    <section class="section" id="graph">
+      <h2><code>graph</code></h2>
+      <p><code>graph</code> matches structural event topology — the shape of relationships between event types — rather than individual event attributes. Useful for lateral movement and attack-chain detection.</p>
+
+      <pre><code><span class="kw">graph</span> endpoint.process <span class="kw">as</span> e {
+  process <span class="kw">as</span> p,
+  network <span class="kw">as</span> n -> connects_to
+}
+
+<span class="kw">where</span>
+  e.pid > <span class="num">0</span>
+  <span class="op">and</span> n.dest.port <span class="op">in</span> [<span class="num">22</span>, <span class="num">3389</span>, <span class="num">445</span>]
+  <span class="op">and</span> <span class="fn">rate</span>(n.dest.domain, <span class="lit">5m</span>) >= <span class="num">6</span>
+
+<span class="kw">respond</span>
+  alert medium <span class="str">"Graph lateral movement shape candidate"</span></code></pre>
+
+      <p>Edge labels like <code>connects_to</code> describe the relationship semantics. The runtime evaluates whether the observed event graph matches the declared topology.</p>
+    </section>
+
+    <!-- OPERATORS -->
+    <section class="section" id="operators">
+      <h2>Operators</h2>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Operator</th><th>Types</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>==</code> / <code>!=</code></td><td>any scalar</td><td>Equality / inequality</td></tr>
+            <tr><td><code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code></td><td>Int, Float</td><td>Numeric comparison</td></tr>
+            <tr><td><code>in</code></td><td>Str, Int, Path</td><td>Set or array membership</td></tr>
+            <tr><td><code>not_in</code></td><td>Str, Int, Path</td><td>Set non-membership</td></tr>
+            <tr><td><code>under</code></td><td>Path</td><td>Path prefix / descendant test</td></tr>
+            <tr><td><code>matches</code></td><td>Path, Str</td><td>Glob pattern match against a list</td></tr>
+            <tr><td><code>and</code></td><td>Bool</td><td>Logical AND</td></tr>
+            <tr><td><code>or</code></td><td>Bool</td><td>Logical OR</td></tr>
+            <tr><td><code>not</code></td><td>Bool</td><td>Logical negation</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- BUILT-IN SETS -->
+    <section class="section" id="builtins">
+      <h2>Built-in Sets</h2>
+      <p>The following sets are globally available — no <code>use</code> or redeclaration required.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Type</th><th>Contents</th></tr></thead>
+          <tbody>
+            <tr><td><code>shells</code></td><td><code>Set&lt;Str&gt;</code></td><td>bash, sh, zsh, fish, python, perl, node, powershell …</td></tr>
+            <tr><td><code>web_servers</code></td><td><code>Set&lt;Str&gt;</code></td><td>nginx, apache2, gunicorn, caddy, envoy …</td></tr>
+            <tr><td><code>db_servers</code></td><td><code>Set&lt;Str&gt;</code></td><td>postgres, mysqld, mongod, redis-server …</td></tr>
+            <tr><td><code>recon_tools</code></td><td><code>Set&lt;Str&gt;</code></td><td>nmap, masscan, nuclei, gobuster, sqlmap …</td></tr>
+            <tr><td><code>exfil_tools</code></td><td><code>Set&lt;Str&gt;</code></td><td>curl, wget, nc, socat, rclone, scp …</td></tr>
+            <tr><td><code>sensitive_procs</code></td><td><code>Set&lt;Str&gt;</code></td><td>lsass.exe, ssh-agent, gpg, pass …</td></tr>
+            <tr><td><code>credential_paths</code></td><td><code>Set&lt;Path&gt;</code></td><td>/etc/shadow, ~/.aws/credentials, ~/.ssh/id_rsa …</td></tr>
+            <tr><td><code>sensitive_dirs</code></td><td><code>Set&lt;Path&gt;</code></td><td>/etc, /root, /proc/1, /sys/kernel …</td></tr>
+            <tr><td><code>tmp_dirs</code></td><td><code>Set&lt;Path&gt;</code></td><td>/tmp, /var/tmp, /dev/shm …</td></tr>
+            <tr><td><code>c2_ports</code></td><td><code>Set&lt;Int&gt;</code></td><td>4444, 1337, 31337, 9001 …</td></tr>
+            <tr><td><code>well_known_ports</code></td><td><code>Set&lt;Int&gt;</code></td><td>80, 443, 22, 25, 53, 3306 …</td></tr>
+            <tr><td><code>malicious_reputation</code></td><td><code>Set&lt;Str&gt;</code></td><td>"malicious", "known_bad", "blacklisted"</td></tr>
+            <tr><td><code>suspicious_reputation</code></td><td><code>Set&lt;Str&gt;</code></td><td>"suspicious", "unknown", "newly_registered"</td></tr>
+            <tr><td><code>bad_reputation</code></td><td><code>Set&lt;Str&gt;</code></td><td>Union of malicious + suspicious</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- BUILT-IN PREDICATES -->
+    <section class="section" id="stdlib-preds">
+      <h2>Built-in Predicates</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Predicate</th><th>Arguments</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>is_shell(proc)</code></td><td>Process</td><td>Process name is a known shell or interpreter</td></tr>
+            <tr><td><code>from_tmp(proc)</code></td><td>Process</td><td>Process binary path is under a temp directory</td></tr>
+            <tr><td><code>unsigned_from_tmp(proc)</code></td><td>Process</td><td>Unsigned binary running from tmp</td></tr>
+            <tr><td><code>privileged_shell(proc)</code></td><td>Process</td><td>Shell running as uid 0</td></tr>
+            <tr><td><code>living_off_the_land(proc)</code></td><td>Process</td><td>Process is a recon/exfil tool or unexpected shell</td></tr>
+            <tr><td><code>external_c2(endpoint)</code></td><td>NetworkEndpoint</td><td>External dest on a C2 port or with bad reputation</td></tr>
+            <tr><td><code>unexpected_external(proc, endpoint)</code></td><td>Process, Endpoint</td><td>Dest domain not in host baseline</td></tr>
+            <tr><td><code>sensitive_file(file)</code></td><td>FileEvent</td><td>Path in credential_paths or has a sensitivity label</td></tr>
+            <tr><td><code>credential_access(proc, file)</code></td><td>Process, FileEvent</td><td>Sensitive file access by unexpected uid</td></tr>
+            <tr><td><code>unusual_country(user, country)</code></td><td>User, Str</td><td>Country not in user's baseline</td></tr>
+            <tr><td><code>impossible_travel(user, country, ts)</code></td><td>User, Str, Timestamp</td><td>Country change within 2h</td></tr>
+            <tr><td><code>unusual_host(user, host_id)</code></td><td>User, Str</td><td>Host not in user's baseline</td></tr>
+            <tr><td><code>unusual_hour(user, ts)</code></td><td>User, Timestamp</td><td>Hour not in user's login baseline</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- BUILT-IN CALLABLES -->
+    <section class="section" id="stdlib-callables">
+      <h2>Built-in Callables</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Callable</th><th>Returns</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>baseline.image(image_id)</code></td><td><code>BaselineProfile</code></td><td>Container image process baseline</td></tr>
+            <tr><td><code>baseline.workload(namespace, name)</code></td><td><code>BaselineProfile</code></td><td>Kubernetes workload process baseline</td></tr>
+            <tr><td><code>intel.domains(feed)</code></td><td><code>Set&lt;Str&gt;</code></td><td>Threat intel domain set for a named feed</td></tr>
+            <tr><td><code>rare(value)</code></td><td><code>Bool</code></td><td>Statistically rare value for current context</td></tr>
+            <tr><td><code>unusual_for(value, entity)</code></td><td><code>Bool</code></td><td>Anomalous relative to entity baseline</td></tr>
+            <tr><td><code>rate(value, window)</code></td><td><code>Int</code></td><td>Event frequency in a time window</td></tr>
+            <tr><td><code>count(list)</code></td><td><code>Int</code></td><td>Element count</td></tr>
+            <tr><td><code>avg(values)</code></td><td><code>Float</code></td><td>Average of integer set</td></tr>
+            <tr><td><code>sum(values)</code></td><td><code>Int</code></td><td>Sum of integer set</td></tr>
+            <tr><td><code>max(values)</code></td><td><code>Int</code></td><td>Maximum of integer set</td></tr>
+            <tr><td><code>min(values)</code></td><td><code>Int</code></td><td>Minimum of integer set</td></tr>
+            <tr><td><code>distinct(values)</code></td><td><code>Set&lt;Str&gt;</code></td><td>Deduplicated string set</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- EXAMPLES -->
+    <section class="section" id="examples">
+      <h2>Rule Gallery</h2>
+
+      <h3>Outbound to specific domain</h3>
+      <pre><code><span class="kw">rule</span> <span class="str">"outbound_to_specific_website"</span> {
+  <span class="kw">from</span> endpoint.process, network.flow
+
+  <span class="kw">correlate</span>
+    process.spawn <span class="kw">as</span> p
+    <span class="kw">with</span> network.connect <span class="kw">as</span> n <span class="kw">on</span> n.process_id == p.id
+
+  <span class="kw">where</span>
+    n.direction == <span class="str">"outbound"</span>
+    <span class="op">and</span> n.dest.domain <span class="op">in</span> [<span class="str">"apple.com"</span>]
+
+  <span class="kw">respond</span>
+    alert critical
+    block egress n.dest.domain
+    snapshot p, n
+    open case <span class="str">"Blocked outbound to protected website"</span>
+}</code></pre>
+
+      <h3>Business-hours variant with time context</h3>
+      <pre><code><span class="kw">rule</span> <span class="str">"outbound_to_specific_website_business_hours"</span> {
+  <span class="kw">from</span> endpoint.process, network.flow
+
+  <span class="kw">correlate</span>
+    process.spawn <span class="kw">as</span> p
+    <span class="kw">with</span> network.connect <span class="kw">as</span> n <span class="kw">on</span> n.process_id == p.id
+
+  <span class="kw">where</span>
+    n.direction == <span class="str">"outbound"</span>
+    <span class="op">and</span> n.dest.domain <span class="op">in</span> [<span class="str">"apple.com"</span>]
+    <span class="op">and</span> time.weekday == <span class="str">"saturday"</span>
+    <span class="op">and</span> time.hour >= <span class="num">9</span>
+    <span class="op">and</span> time.hour < <span class="num">23</span>
+
+  <span class="kw">respond</span>
+    alert critical
+    block egress n.dest.domain
+    snapshot p, n
+    open case <span class="str">"Blocked outbound during business hours"</span>
+}</code></pre>
+
+      <h3>Scored rule with <code>require</code> gate</h3>
+      <pre><code><span class="kw">set</span> <span class="ent">executable_dirs</span> = [<span class="str">"/bin"</span>, <span class="str">"/sbin"</span>, <span class="str">"/usr/bin"</span>, <span class="str">"/usr/local/bin"</span>]
+
+<span class="kw">rule</span> <span class="str">"binary_directory_modification"</span> {
+  <span class="kw">from</span> endpoint.file, endpoint.process
+
+  <span class="kw">correlate</span>
+    file.write <span class="kw">as</span> f <span class="kw">by</span> process <span class="kw">as</span> p
+
+  <span class="kw">where</span>
+    f.path <span class="op">under</span> executable_dirs
+
+  <span class="kw">let</span>
+    package_mgmt    = p.name <span class="op">in</span> [<span class="str">"apt"</span>, <span class="str">"apt-get"</span>, <span class="str">"dpkg"</span>, <span class="str">"yum"</span>]
+    interactive     = p.parent.name <span class="op">in</span> [<span class="str">"bash"</span>, <span class="str">"sh"</span>, <span class="str">"zsh"</span>]
+    suspicious_path = p.binary.path <span class="op">under</span> [<span class="str">"/tmp"</span>, <span class="str">"/var/tmp"</span>, <span class="str">"/dev/shm"</span>]
+
+  <span class="kw">score</span>
+    <span class="num">60</span>
+    -<span class="num">30</span> <span class="kw">if</span> package_mgmt
+    +<span class="num">15</span> <span class="kw">if</span> interactive
+    +<span class="num">20</span> <span class="kw">if</span> suspicious_path
+    +<span class="num">10</span> <span class="kw">if</span> p.user.name != <span class="str">"root"</span>
+
+  <span class="kw">require</span>
+    score >= <span class="num">40</span>
+
+  <span class="kw">emit</span>
+    <span class="kw">fact</span> host.binary_tamper(host.id) <span class="kw">expires</span> <span class="lit">24h</span>
+
+  <span class="kw">respond</span>
+    <span class="kw">if</span> score >= <span class="num">80</span> {
+      alert critical
+      snapshot p, f
+      open case <span class="str">"Executable directory modification"</span>
+    } <span class="kw">else</span> {
+      alert medium
+    }
+}</code></pre>
+
+      <h3>Full multi-stream correlated detection</h3>
+      <pre><code><span class="kw">use</span> intel.malicious_domains
+<span class="kw">use</span> baseline.workload_profiles
+
+<span class="kw">rule</span> <span class="str">"container_shell_credential_access_and_egress"</span> {
+  <span class="kw">from</span> endpoint.process, endpoint.file, network.flow,
+       container.runtime, k8s.workload
+
+  <span class="kw">correlate</span>
+    process.spawn     <span class="kw">as</span> p
+    <span class="kw">with</span> file.open    <span class="kw">as</span> f <span class="kw">on</span> f.process_id == p.id
+    <span class="kw">with</span> network.connect <span class="kw">as</span> n <span class="kw">on</span> n.process_id == p.id
+    <span class="kw">with</span> container.context <span class="kw">as</span> c <span class="kw">on</span> c.container_id == p.container_id
+    <span class="kw">with</span> workload.info <span class="kw">as</span> w <span class="kw">on</span> w.pod_uid == c.pod_uid
+
+  <span class="kw">where</span>
+    p.name <span class="op">in</span> [<span class="str">"bash"</span>, <span class="str">"sh"</span>, <span class="str">"zsh"</span>]
+    <span class="op">and</span> f.path <span class="op">matches</span> [<span class="str">"/etc/shadow"</span>, <span class="str">"/root/.ssh/id_rsa"</span>, <span class="str">"~/.aws/credentials"</span>]
+    <span class="op">and</span> n.dest.domain <span class="op">in</span> malicious_domains
+
+  <span class="kw">within</span> <span class="lit">15m</span>
+
+  <span class="kw">let</span>
+    prod         = w.namespace <span class="op">in</span> [<span class="str">"prod"</span>, <span class="str">"payments"</span>, <span class="str">"identity"</span>]
+    interactive  = p.tty == <span class="kw2">true</span>
+    rare_process = p.name <span class="op">not_in</span> <span class="fn">baseline.workload</span>(w.namespace, w.name).allowed_processes
+    unusual_dest = n.dest.domain <span class="op">not_in</span> <span class="fn">host</span>(p.host_id).baseline.domains
+
+  <span class="kw">score</span>
+    <span class="num">70</span>
+    +<span class="num">10</span> <span class="kw">if</span> prod
+    +<span class="num">10</span> <span class="kw">if</span> interactive
+    +<span class="num">10</span> <span class="kw">if</span> rare_process
+    +<span class="num">10</span> <span class="kw">if</span> unusual_dest
+
+  <span class="kw">emit</span>
+    <span class="kw">fact</span> host.compromise_candidate(host.id) <span class="kw">expires</span> <span class="lit">24h</span>
+
+  <span class="kw">respond</span>
+    <span class="kw">if</span> score >= <span class="num">90</span> {
+      alert critical
+      isolate host
+      snapshot p, f, n, c, w
+      open case <span class="str">"Container credential access and egress chain"</span>
+    } <span class="kw">else</span> {
+      alert high
+      snapshot p, f, n
+    }
+}</code></pre>
+
+    </section>
+
+  </main>
+</div>
+
+<script>
+  const sections = Array.from(document.querySelectorAll('section[id]'));
+  const sectionLinks = Array.from(document.querySelectorAll('.nav-item[href^="#"]'));
+  const visible = new Set();
+
+  function setActive() {
+    // Pick the topmost section currently visible in the observation band
+    const active = sections.find(s => visible.has(s.id));
+    sectionLinks.forEach(link => {
+      link.classList.toggle('active', !!active && link.getAttribute('href') === '#' + active.id);
+    });
+  }
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      entry.isIntersecting ? visible.add(entry.target.id) : visible.delete(entry.target.id);
+    });
+    setActive();
+  }, { rootMargin: '-5% 0px -55% 0px' });
+
+  sections.forEach(s => observer.observe(s));
+</script>
+</body>
+</html>
