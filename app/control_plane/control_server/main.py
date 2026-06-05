@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 
 from .deps import settings, template_root
 from .routers import dashboard, docs, landing
-from app.intel_sync.sync import run_loop, run_sync
+from intel_sync.sync import run_loop, run_sync
 
 logger = logging.getLogger("control_plane")
 
