@@ -15,6 +15,9 @@ Route organisation:
 from __future__ import annotations
 
 import json
+import logging
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 import subprocess
 import tempfile
@@ -28,17 +31,53 @@ from pydantic import BaseModel, Field
 
 from .deps import settings, template_root
 from .routers import dashboard, docs, landing
+from app.intel_sync.sync import run_loop, run_sync
+
+logger = logging.getLogger("control_plane")
 
 
-app = FastAPI(title="olopa-control-plane", version="0.1.0")
+# -- Intel sync background task ------------------------------------------------
+
+_intel_sync_thread: threading.Thread | None = None
+
+
+def _start_intel_sync_daemon() -> None:
+    """Start the intel feed sync daemon in a background thread."""
+    global _intel_sync_thread
+    intel_path = settings.__dict__.get("intel_path") or None  # optional setting
+    t = threading.Thread(
+        target=run_loop,
+        args=(intel_path,),
+        daemon=True,
+        name="intel-sync",
+    )
+    t.start()
+    _intel_sync_thread = t
+    logger.info("intel-sync daemon thread started (pid-thread=%s)", t.ident)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _start_intel_sync_daemon()
+    yield
+
+
+app = FastAPI(title="olopa-control-plane", version="0.1.0", lifespan=lifespan)
 app.mount("/assets", StaticFiles(directory=str(template_root / "assets")), name="assets")
+
+# Built React console assets (hashed JS/CSS), referenced under the /ui/ base.
+# Only mounted when a build is present so dev checkouts without `npm run build`
+# can still fall back to the legacy template.
+_webdist = template_root.parent / "webdist"
+if _webdist.is_dir():
+    app.mount("/ui", StaticFiles(directory=str(_webdist)), name="ui")
 
 app.include_router(dashboard.router)
 app.include_router(landing.router)
 app.include_router(docs.router)
 
 
-# ── Ingest proxy helpers ──────────────────────────────────────────────────────
+# -- Ingest proxy helpers ------------------------------------------------------
 
 async def proxy_rust_get(path: str, *, params: dict | None = None) -> dict:
     """Proxy a GET request to the Rust ingest server and return parsed JSON."""
@@ -69,7 +108,7 @@ async def check_rust_health() -> bool:
         return False
 
 
-# ── Health ────────────────────────────────────────────────────────────────────
+# -- Health --------------------------------------------------------------------
 
 @app.get("/health", tags=["api"])
 async def health() -> dict:
@@ -85,7 +124,7 @@ async def health() -> dict:
     }
 
 
-# ── Control API ───────────────────────────────────────────────────────────────
+# -- Control API ---------------------------------------------------------------
 
 @app.get("/api/v1/control/status", tags=["api"])
 async def control_status() -> dict:
@@ -104,7 +143,7 @@ async def control_status() -> dict:
     }
 
 
-# ── Ingest proxies ────────────────────────────────────────────────────────────
+# -- Ingest proxies ------------------------------------------------------------
 
 @app.get("/api/v1/ingest/stats", tags=["api"])
 @app.get("/api/v1/dashboard/ingest/stats", include_in_schema=False)
@@ -127,7 +166,7 @@ async def ingest_recent_proxy(limit: int = Query(default=100, ge=1, le=5000)) ->
     return await proxy_rust_get("/api/v1/ingest/recent", params={"limit": limit})
 
 
-# ── Compiler API ──────────────────────────────────────────────────────────────
+# -- Compiler API --------------------------------------------------------------
 
 class CompileRequest(BaseModel):
     """Request body for triggering the OIL compiler."""
@@ -210,4 +249,69 @@ async def compile_oil(req: CompileRequest) -> dict:
         "stdout": proc.stdout,
         "stderr": proc.stderr,
         "stdout_json": stdout_json,
+    }
+
+
+# -- Intel feed API ------------------------------------------------------------
+
+def _intel_path() -> str:
+    """Resolve the intel.json output path from env / settings."""
+    import os
+    return os.environ.get("OLOPA_INTEL_PATH", "/etc/olopa/intel.json")
+
+
+@app.post("/api/v1/intel/sync", tags=["api"])
+async def intel_sync_now() -> dict:
+    """Trigger an immediate threat-intel feed sync and return the result.
+
+    Runs synchronously in a thread executor so the event loop isn't blocked.
+    The background daemon continues its normal schedule independently.
+    """
+    import asyncio
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(None, lambda: run_sync(_intel_path()))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"intel sync failed: {exc}") from exc
+    return result.to_dict()
+
+
+@app.get("/api/v1/intel/status", tags=["api"])
+async def intel_status() -> dict:
+    """Return metadata from the current intel.json on disk.
+
+    Does not trigger a new sync.  Returns ``present: false`` when the file
+    has not been written yet (first sync hasn't completed).
+    """
+    path = Path(_intel_path())
+    if not path.exists():
+        return {
+            "present": False,
+            "path": str(path),
+            "sync_daemon_running": _intel_sync_thread is not None and _intel_sync_thread.is_alive(),
+        }
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"could not read intel.json: {exc}") from exc
+
+    sets_meta = {
+        name: {
+            "type": s.get("type"),
+            "count": s.get("count", 0),
+            "description": s.get("description", ""),
+        }
+        for name, s in raw.get("sets", {}).items()
+    }
+    total_entries = sum(s["count"] for s in sets_meta.values())
+
+    return {
+        "present": True,
+        "path": str(path),
+        "version": raw.get("version"),
+        "generated_at_unix_s": raw.get("generated_at_unix_s"),
+        "sets": sets_meta,
+        "total_entries": total_entries,
+        "sync_daemon_running": _intel_sync_thread is not None and _intel_sync_thread.is_alive(),
     }

@@ -125,6 +125,48 @@
     },
     {
       "aliases": [
+        "db_port"
+      ],
+      "canonical": "db.db_port",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "db.pid",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "db.process_name",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [
+        "query_class"
+      ],
+      "canonical": "db.query_class",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "query_hash"
+      ],
+      "canonical": "db.query_hash",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "db.uid",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
         "compliant"
       ],
       "canonical": "device.compliant",
@@ -1393,6 +1435,40 @@
     },
     {
       "aliases": [
+        "data_len"
+      ],
+      "canonical": "ssl.data_len",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
+        "operation"
+      ],
+      "canonical": "ssl.operation",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "ssl.pid",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [],
+      "canonical": "ssl.process_name",
+      "is_time_context": false,
+      "value_type": "string"
+    },
+    {
+      "aliases": [],
+      "canonical": "ssl.uid",
+      "is_time_context": false,
+      "value_type": "number"
+    },
+    {
+      "aliases": [
         "hour"
       ],
       "canonical": "time.hour",
@@ -1518,14 +1594,29 @@
     {
       "class": "temporal",
       "emit": [],
-      "id": "rule:0:outbound_to_specific_website_business_hours",
+      "id": "rule:0:ssl_mass_encrypt_with_file_writes",
       "joins": [
+        {
+          "left_alias": "s",
+          "on": {
+            "lhs": {
+              "op": "field",
+              "path": "p.pid"
+            },
+            "op": "eq",
+            "rhs": {
+              "op": "field",
+              "path": "s.pid"
+            }
+          },
+          "right_alias": "p"
+        },
         {
           "left_alias": "p",
           "on": {
             "lhs": {
               "op": "field",
-              "path": "n.process_id"
+              "path": "f.process_id"
             },
             "op": "eq",
             "rhs": {
@@ -1533,65 +1624,35 @@
               "path": "p.id"
             }
           },
-          "right_alias": "n"
+          "right_alias": "f"
         }
       ],
       "lets": [],
-      "name": "outbound_to_specific_website_business_hours",
+      "name": "ssl_mass_encrypt_with_file_writes",
       "predicates": [
         {
           "lhs": {
             "lhs": {
               "lhs": {
-                "lhs": {
-                  "lhs": {
-                    "op": "field",
-                    "path": "n.direction"
-                  },
-                  "op": "eq",
-                  "rhs": {
-                    "op": "str",
-                    "value": "outbound"
-                  }
-                },
-                "op": "and",
-                "rhs": {
-                  "lhs": {
-                    "op": "field",
-                    "path": "n.dest.domain"
-                  },
-                  "op": "in",
-                  "rhs": [
-                    {
-                      "op": "str",
-                      "value": "apple.com"
-                    }
-                  ]
-                }
+                "op": "field",
+                "path": "s.operation"
               },
-              "op": "and",
+              "op": "eq",
               "rhs": {
-                "lhs": {
-                  "op": "field",
-                  "path": "time.weekday"
-                },
-                "op": "eq",
-                "rhs": {
-                  "op": "str",
-                  "value": "saturday"
-                }
+                "op": "int",
+                "value": 0
               }
             },
             "op": "and",
             "rhs": {
               "lhs": {
                 "op": "field",
-                "path": "time.hour"
+                "path": "s.data_len"
               },
-              "op": "ge",
+              "op": "gt",
               "rhs": {
                 "op": "int",
-                "value": 9
+                "value": 1048576
               }
             }
           },
@@ -1599,13 +1660,19 @@
           "rhs": {
             "lhs": {
               "op": "field",
-              "path": "time.hour"
+              "path": "f.mode"
             },
-            "op": "lt",
-            "rhs": {
-              "op": "int",
-              "value": 23
-            }
+            "op": "in",
+            "rhs": [
+              {
+                "op": "str",
+                "value": "write"
+              },
+              {
+                "op": "str",
+                "value": "read_write"
+              }
+            ]
           }
         }
       ],
@@ -1620,31 +1687,48 @@
                 "severity": "critical"
               },
               {
-                "action": "block_egress",
-                "target": "n.dest.domain"
+                "action": "isolate",
+                "isolate_kind": "host",
+                "target": "host"
               },
               {
                 "action": "snapshot",
                 "snapshot_kind": "entities",
                 "targets": [
                   "p",
-                  "n"
+                  "s",
+                  "f"
                 ]
               },
               {
                 "action": "open_case",
-                "title": "Blocked outbound to protected website during business hours"
+                "title": "Mass file encryption — ransomware suspected"
               }
             ],
-            "condition": null
+            "condition": {
+              "lhs": {
+                "op": "field",
+                "path": "score"
+              },
+              "op": "ge",
+              "rhs": {
+                "op": "int",
+                "value": 85
+              }
+            }
           }
         ]
       },
       "score": {
-        "base": 0,
+        "base": 85,
         "modifiers": []
       },
       "sources": [
+        {
+          "alias": null,
+          "domain": "ssl",
+          "event": "event"
+        },
         {
           "alias": null,
           "domain": "endpoint",
@@ -1652,12 +1736,15 @@
         },
         {
           "alias": null,
-          "domain": "network",
-          "event": "flow"
+          "domain": "endpoint",
+          "event": "file"
         }
       ],
       "verify": [],
-      "window": null
+      "window": {
+        "unit": "m",
+        "value": 2
+      }
     }
   ],
   "version": 1

@@ -13,10 +13,10 @@
 //!                   const struct addrinfo *hints, struct addrinfo **res)
 //!
 //! Argument layout (0-indexed):
-//!   arg 0 = `node`    — hostname string (what we capture)
-//!   arg 1 = `service` — port/service string (ignored here)
-//!   arg 2 = `hints`   — addrinfo struct pointer (ignored)
-//!   arg 3 = `res`     — result pointer (ignored; return path not hooked)
+//!   arg 0 = `node`    - hostname string (what we capture)
+//!   arg 1 = `service` - port/service string (ignored here)
+//!   arg 2 = `hints`   - addrinfo struct pointer (ignored)
+//!   arg 3 = `res`     - result pointer (ignored; return path not hooked)
 //!
 //! VERIFIER RULE: after bpf_ringbuf_reserve() succeeds, every exit path must
 //! call entry.submit(0) or entry.discard(0). Never use ? after reservation.

@@ -2,6 +2,17 @@
 
 FROM caddy:2.8-alpine AS caddy_runtime
 
+# -- React console build -------------------------------------------------------
+# Builds the SPA into control_server/webdist (vite base=/ui/, outDir is
+# ../control_server/webdist relative to the web/ dir).
+FROM node:20-bookworm-slim AS web_build
+WORKDIR /build/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+# Built assets now at /build/control_server/webdist.
+
 FROM rust:1.94-bookworm AS runtime
 
 RUN apt-get update \
@@ -27,6 +38,9 @@ RUN python3 -m venv "${VENV_PATH}" \
 
 # Control-plane source.
 COPY . ./app/control_plane
+# Built React console (overrides any local webdist; web/ source/node_modules are
+# excluded via .dockerignore).
+COPY --from=web_build /build/control_server/webdist ./app/control_plane/control_server/webdist
 COPY --from=caddy_runtime /usr/bin/caddy /usr/bin/caddy
 COPY Caddyfile /etc/caddy/Caddyfile
 

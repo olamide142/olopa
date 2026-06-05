@@ -1,0 +1,27 @@
+// ─── Mass encryption correlated with file writes ──────────────────────────────
+rule "ssl_mass_encrypt_with_file_writes" {
+  from ssl.event, endpoint.process, endpoint.file
+
+  correlate
+    ssl.event as s
+    with process.spawn as p on p.pid == s.pid
+    with file.open as f on f.process_id == p.id
+
+  where
+    s.operation == 0  // 0 = Encrypt
+    and s.data_len > 1048576 // 1 MiB+ per call is suspicious for TLS
+    and f.mode in ["write", "read_write"]
+
+  within 2m
+
+  score
+    85 // Critical threshold
+
+  respond
+    if score >= 85 {
+      alert critical
+      isolate host  // Immediate containment
+      snapshot p, s, f
+      open case "Mass file encryption — ransomware suspected"
+    }
+}

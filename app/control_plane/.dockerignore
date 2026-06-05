@@ -4,3 +4,6 @@ __pycache__
 *.pyo
 .git
 .github
+web/node_modules
+web/dist
+control_server/webdist

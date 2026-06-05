@@ -489,6 +489,7 @@ async fn main() -> anyhow::Result<()> {
         runtime: Arc::clone(&runtime),
         auth: Arc::new(AuthState::from_config(&cfg.auth)),
     };
+
     let app = Router::new()
         .route("/", get(root_ok))
         .route("/health", get(health))
