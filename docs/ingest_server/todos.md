@@ -47,6 +47,7 @@ Implemented today:
   - `process_exec_events`
   - `file_events`
   - `net_events`
+  - `db_query_events` (schema version 2; optional for version 1 senders)
   - `agent_heartbeats`
 - `ack_batch` returns `AckResponse` with:
   - `accepted`
@@ -98,7 +99,8 @@ Not implemented yet:
 - advanced identity integration beyond static API tokens (for example mTLS identity binding, token rotation/revocation),
 - request size/rate limiting safeguards,
 - idempotency and duplicate suppression using `batch_id`,
-- SQL query event family ingestion (`db_query_events`) for uprobe-derived database telemetry,
+- statement-text capture so `db_query_events.database`/`tables` can be populated
+  (the uprobe currently hashes statements in kernel space),
 - durable pre-flush spool/WAL for crash recovery,
 - retry policy and circuit-breaker logic for ClickHouse,
 - Prometheus/OpenTelemetry metrics/traces,
@@ -180,6 +182,18 @@ Done criteria:
 
 - ingest accepts and stores DB query telemetry without breaking existing senders,
 - query-event rows are visible in `recent` and `summary` APIs.
+
+Current status:
+
+- steps 1, 3, and 4 are implemented; rows persist as `event_kind = "db_query"`
+  and appear in `recent`/`summary`,
+- the agent alert wire is at version 2, carrying statement hash, class, port,
+  and process name end to end (`agent/agent/src/agent.rs`),
+- step 2 is partially met: `db_engine`, `db_server`, `operation`, and
+  `statement_fingerprint` are populated; `database` and `tables` serialize as
+  `null`/`[]` because the uprobe hashes statement text in kernel space rather
+  than copying it out. Populating them requires statement capture with
+  redaction — tracked as the remaining work below.
 
 #### Epic 1.1 Idempotency and Deduplication
 

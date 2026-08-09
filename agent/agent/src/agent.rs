@@ -51,6 +51,35 @@ pub struct IngestEvent {
     pub dns_query: [u8; 64],  // NUL-terminated queried hostname
 }
 
+// Hand-written because `[u8; 64]` has no std `Default` impl. Lets callers and
+// fixtures set only the fields their event family populates and leave the
+// rest zeroed, which is exactly the ring-buffer decoding contract.
+impl Default for IngestEvent {
+    fn default() -> Self {
+        Self {
+            ts_ns: 0,
+            pid: 0,
+            uid: 0,
+            event_type: 0,
+            vertex_id: 0,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.0,
+            sql_query_hash: 0,
+            sql_query_class: 0,
+            sql_db_port: 0,
+            ssl_data_len: 0,
+            ssl_operation: 0,
+            _pad_aux: [0; 2],
+            dns_query_hash: 0,
+            dns_query: [0; 64],
+        }
+    }
+}
+
 // Minimal sender state queried by housekeeping to decide spool replay behavior.
 #[derive(Clone, Debug, Default)]
 pub struct SenderStats {
@@ -1021,20 +1050,37 @@ fn cstr_to_str(buf: &[u8]) -> &str {
 }
 
 // Versioned binary alert payload encoding for incident fast-lane sends.
-// Layout (little-endian):
+//
+// Fixed header (little-endian), identical across v1 and v2:
 // [magic:4][version:u16][event_type:u8][reserved:u8]
 // [ts_ns:u64][pid:u32][uid:u32][vertex_id:u32][dst_vertex_id:u32][comm_id:u32][risk_score:f32]
 // [rule_id_len:u16][rule_name_len:u16][rule_id:utf8 bytes][rule_name:utf8 bytes]
+//
+// v2 appends a per-family extension block after `rule_name`, so SQL/TLS/DNS
+// probe detail survives the hop into the ingest sender instead of being
+// collapsed into `dst_vertex_id`:
+// [comm_len:u8][comm:utf8 bytes]
+// [sql_query_hash:u32][sql_query_class:u8][sql_db_port:u16]
+// [ssl_data_len:u32][ssl_operation:u8]
+// [dns_query_hash:u32][dns_query_len:u8][dns_query:utf8 bytes]
+//
+// The extension is strictly additive: a v1 decoder reads the same header
+// offsets and stops at `rule_name`.
 fn encode_alert_payload(event: &IngestEvent, matched_rule: &RuleMatch) -> Vec<u8> {
     const ALERT_MAGIC: [u8; 4] = *b"OLRT";
-    const ALERT_WIRE_VERSION: u16 = 1;
+    const ALERT_WIRE_VERSION: u16 = 2;
 
     let rule_id = matched_rule.rule_id.as_bytes();
     let rule_name = matched_rule.rule_name.as_bytes();
     let rule_id_len = rule_id.len().min(u16::MAX as usize);
     let rule_name_len = rule_name.len().min(u16::MAX as usize);
 
-    let mut out = Vec::with_capacity(40 + rule_id_len + rule_name_len);
+    let comm = cstr_to_str(&event.comm).as_bytes();
+    let comm_len = comm.len().min(u8::MAX as usize);
+    let dns_query = cstr_to_str(&event.dns_query).as_bytes();
+    let dns_query_len = dns_query.len().min(u8::MAX as usize);
+
+    let mut out = Vec::with_capacity(64 + rule_id_len + rule_name_len + comm_len + dns_query_len);
     out.extend_from_slice(&ALERT_MAGIC);
     out.extend_from_slice(&ALERT_WIRE_VERSION.to_le_bytes());
     out.push(event.event_type);
@@ -1050,6 +1096,18 @@ fn encode_alert_payload(event: &IngestEvent, matched_rule: &RuleMatch) -> Vec<u8
     out.extend_from_slice(&(rule_name_len as u16).to_le_bytes());
     out.extend_from_slice(&rule_id[..rule_id_len]);
     out.extend_from_slice(&rule_name[..rule_name_len]);
+
+    // v2 extension block.
+    out.push(comm_len as u8);
+    out.extend_from_slice(&comm[..comm_len]);
+    out.extend_from_slice(&event.sql_query_hash.to_le_bytes());
+    out.push(event.sql_query_class);
+    out.extend_from_slice(&event.sql_db_port.to_le_bytes());
+    out.extend_from_slice(&event.ssl_data_len.to_le_bytes());
+    out.push(event.ssl_operation);
+    out.extend_from_slice(&event.dns_query_hash.to_le_bytes());
+    out.push(dns_query_len as u8);
+    out.extend_from_slice(&dns_query[..dns_query_len]);
     out
 }
 
@@ -1106,6 +1164,11 @@ mod tests {
         risk_score: f32,
         rule_id: String,
         rule_name: String,
+        comm: String,
+        sql_query_hash: u32,
+        sql_query_class: u8,
+        sql_db_port: u16,
+        dns_query: String,
     }
 
     fn decode_alert_payload(payload: &[u8]) -> DecodedAlertPayload {
@@ -1113,7 +1176,7 @@ mod tests {
         assert!(payload.len() >= 40, "payload too short");
         assert_eq!(&payload[0..4], MAGIC, "invalid alert magic");
         let version = u16::from_le_bytes([payload[4], payload[5]]);
-        assert_eq!(version, 1, "unsupported alert version");
+        assert_eq!(version, 2, "unsupported alert version");
 
         let event_type = payload[6];
         let ts_ns = u64::from_le_bytes(payload[8..16].try_into().expect("ts"));
@@ -1137,6 +1200,27 @@ mod tests {
         assert!(end_rule_name <= payload.len(), "invalid rule_name_len");
         let rule_name =
             String::from_utf8(payload[cursor..end_rule_name].to_vec()).expect("rule_name utf8");
+        cursor = end_rule_name;
+
+        // v2 extension block.
+        let comm_len = payload[cursor] as usize;
+        cursor += 1;
+        let comm = String::from_utf8(payload[cursor..cursor + comm_len].to_vec()).expect("comm");
+        cursor += comm_len;
+        let sql_query_hash =
+            u32::from_le_bytes(payload[cursor..cursor + 4].try_into().expect("sql hash"));
+        cursor += 4;
+        let sql_query_class = payload[cursor];
+        cursor += 1;
+        let sql_db_port =
+            u16::from_le_bytes(payload[cursor..cursor + 2].try_into().expect("db port"));
+        cursor += 2;
+        // ssl_data_len(4) + ssl_operation(1) + dns_query_hash(4)
+        cursor += 9;
+        let dns_query_len = payload[cursor] as usize;
+        cursor += 1;
+        let dns_query =
+            String::from_utf8(payload[cursor..cursor + dns_query_len].to_vec()).expect("dns query");
 
         DecodedAlertPayload {
             ts_ns,
@@ -1149,6 +1233,11 @@ mod tests {
             risk_score,
             rule_id,
             rule_name,
+            comm,
+            sql_query_hash,
+            sql_query_class,
+            sql_db_port,
+            dns_query,
         }
     }
 
@@ -1210,6 +1299,152 @@ mod tests {
         assert_eq!(decoded.dst_vertex_id, 1);
         assert_eq!(decoded.comm_id, 123);
         assert!((decoded.risk_score - 0.9).abs() < 0.0001);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn sql_alert_payload_carries_query_detail_through_wire() {
+        let path = temp_runtime_ir_path();
+        // Rule addresses the SQL field family directly, proving uprobe-derived
+        // DDL is both matchable and preserved across the alert encoding.
+        let json = r#"{
+  "version": 1,
+  "rules": [
+    {
+      "id": "rule:0:sql_ddl",
+      "name": "sql_ddl",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "sql.query_class" },
+          "rhs": { "op": "int", "value": 3 }
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+        let mut comm = [0u8; 16];
+        comm[..4].copy_from_slice(b"psql");
+
+        let event = IngestEvent {
+            ts_ns: 500,
+            pid: 900,
+            uid: 1000,
+            event_type: 4,
+            vertex_id: 900,
+            dst_vertex_id: 0xdead_beef,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm,
+            comm_id: 55,
+            risk_score: 0.85,
+            sql_query_hash: 0xdead_beef,
+            sql_query_class: 3,
+            sql_db_port: 5432,
+            ssl_data_len: 0,
+            ssl_operation: 0,
+            _pad_aux: [0; 2],
+            dns_query_hash: 0,
+            dns_query: [0; 64],
+        };
+
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1, "sql.query_class rule should match");
+
+        let payload = encode_alert_payload(&event, &matches[0]);
+        let decoded = decode_alert_payload(&payload);
+        assert_eq!(decoded.event_type, 4);
+        assert_eq!(decoded.comm, "psql");
+        assert_eq!(decoded.sql_query_hash, 0xdead_beef);
+        assert_eq!(decoded.sql_query_class, 3);
+        assert_eq!(decoded.sql_db_port, 5432);
+
+        // The same payload must land in the db_query family on the wire.
+        let batches = payload_to_batches_for_tests(&payload, "acme", "host-01");
+        assert_eq!(batches.len(), 1);
+        let db_events = batches[0]["db_query_events"]
+            .as_array()
+            .expect("db_query_events array");
+        assert_eq!(db_events.len(), 1);
+        assert_eq!(db_events[0]["db_engine"], "postgresql");
+        assert_eq!(db_events[0]["operation"], "ddl");
+        assert_eq!(db_events[0]["statement_fingerprint"], "deadbeef");
+        assert_eq!(db_events[0]["comm"], "psql");
+        assert_eq!(db_events[0]["pid"], 900);
+        assert!(batches[0]["process_exec_events"]
+            .as_array()
+            .expect("process array")
+            .is_empty());
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn dns_alert_payload_maps_to_net_family_with_query_name() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "rules": [
+    {
+      "id": "rule:0:any_dns",
+      "name": "any_dns",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "event.event_type" },
+          "rhs": { "op": "int", "value": 6 }
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+        let mut dns_query = [0u8; 64];
+        dns_query[..11].copy_from_slice(b"evil.c2.net");
+        let mut comm = [0u8; 16];
+        comm[..4].copy_from_slice(b"curl");
+
+        let event = IngestEvent {
+            ts_ns: 700,
+            pid: 1200,
+            uid: 0,
+            event_type: 6,
+            vertex_id: 1200,
+            dst_vertex_id: 7,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm,
+            comm_id: 12,
+            risk_score: 0.7,
+            sql_query_hash: 0,
+            sql_query_class: 0,
+            sql_db_port: 0,
+            ssl_data_len: 0,
+            ssl_operation: 0,
+            _pad_aux: [0; 2],
+            dns_query_hash: 7,
+            dns_query,
+        };
+
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+
+        let payload = encode_alert_payload(&event, &matches[0]);
+        assert_eq!(decode_alert_payload(&payload).dns_query, "evil.c2.net");
+
+        let batches = payload_to_batches_for_tests(&payload, "acme", "host-01");
+        let net_events = batches[0]["net_events"].as_array().expect("net array");
+        assert_eq!(net_events.len(), 1);
+        assert_eq!(net_events[0]["protocol"], "dns");
+        assert_eq!(net_events[0]["dst_port"], 53);
+        assert_eq!(net_events[0]["attrs"]["dns_query"], "evil.c2.net");
+        assert_eq!(net_events[0]["comm"], "curl");
 
         let _ = fs::remove_file(path);
     }

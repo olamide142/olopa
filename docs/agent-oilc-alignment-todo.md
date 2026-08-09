@@ -1,5 +1,14 @@
 # Agent + OILC Alignment TODO
 
+> **Status: superseded / complete (2026-08-09).**
+> Every P0-P2 item below has shipped: `RuntimeIR` is the frozen shared schema,
+> `MirExpr::Raw` is gone, `oilc` emits runtime-IR as a first-class artifact, and
+> the agent loads it and evaluates per-rule matches in place of
+> `SimpleRuleEngine`. Cross-project integration coverage lives in
+> `agent::tests::e2e_rule_to_runtime_to_sender_to_ingest_runtime`.
+> Retained for historical context — active work is tracked in
+> `docs/olopa-implementation-todo.md`.
+
 Target plan to restore:
 - `oilc` compiles OIL into an executable IR for a Rust runtime.
 - `agent` evaluates every event against every compiled rule using that IR/runtime.

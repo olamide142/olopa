@@ -20,6 +20,7 @@ const KIND_OPTIONS = [
   { value: "process_exec", label: "Kind: process" },
   { value: "file", label: "Kind: file" },
   { value: "net", label: "Kind: net" },
+  { value: "db_query", label: "Kind: database" },
   { value: "heartbeat", label: "Kind: heartbeat" },
 ];
 

@@ -60,7 +60,7 @@ export interface IngestSummary {
   by_host: Record<string, number>;
 }
 
-export type EventKind = "process_exec" | "file" | "net" | "agent_heartbeat";
+export type EventKind = "process_exec" | "file" | "net" | "db_query" | "agent_heartbeat";
 
 export interface RecentRow {
   tenant_id: string;
@@ -83,6 +83,12 @@ export interface RawEvent {
   dst_ip?: string;
   src_port?: number;
   dst_port?: number;
+  // db_query fields
+  db_engine?: string;
+  db_server?: string | null;
+  database?: string | null;
+  tables?: string[];
+  statement_fingerprint?: string;
   // heartbeat fields
   agent_version?: string;
   kernel_version?: string;

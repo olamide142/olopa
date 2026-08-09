@@ -2110,6 +2110,7 @@ mod tests {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.1,
+            ..Default::default()
         };
         let matches = engine.evaluate_matches(&event);
         assert_eq!(matches.len(), 1);
@@ -2151,6 +2152,7 @@ mod tests {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.1,
+            ..Default::default()
         };
         let matches = engine.evaluate_matches(&event);
         assert_eq!(matches.len(), 1);
@@ -2191,6 +2193,7 @@ mod tests {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.1,
+            ..Default::default()
         };
         let matches = engine.evaluate_matches(&event);
         assert_eq!(matches.len(), 1);
@@ -2241,6 +2244,7 @@ mod tests {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.1,
+            ..Default::default()
         };
         let matches = engine.evaluate_matches(&event);
         assert_eq!(matches.len(), 1);
@@ -2324,6 +2328,7 @@ mod tests {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.1,
+            ..Default::default()
         };
         let matches = engine.evaluate_matches(&event);
         assert_eq!(matches.len(), 4);
@@ -2380,6 +2385,7 @@ mod tests {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.1,
+            ..Default::default()
         };
         let matches = engine.evaluate_matches(&event);
         assert_eq!(matches.len(), 1);
@@ -2431,6 +2437,7 @@ mod tests {
             comm: bash,
             comm_id: 0,
             risk_score: 0.0,
+            ..Default::default()
         };
         assert!(
             engine.evaluate_matches(&event1).is_empty(),
@@ -2500,6 +2507,7 @@ mod tests {
             comm,
             comm_id: 0,
             risk_score: 0.1,
+            ..Default::default()
         };
         let matches = engine.evaluate_matches(&event);
         assert_eq!(matches.len(), 1);
@@ -2539,6 +2547,7 @@ mod tests {
             comm,
             comm_id: 0,
             risk_score: 0.1,
+            ..Default::default()
         };
         let first_matches = engine.evaluate_matches(&first);
         assert_eq!(first_matches.len(), 1);
@@ -2589,6 +2598,7 @@ mod tests {
             comm: bash,
             comm_id: 0,
             risk_score: 0.1,
+            ..Default::default()
         };
 
         let first_matches = engine.evaluate_matches(&first);
@@ -2643,6 +2653,7 @@ mod tests {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.1,
+            ..Default::default()
         };
         let matches = engine.evaluate_matches(&event);
         assert!(matches.is_empty());
@@ -2679,6 +2690,7 @@ mod tests {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.1,
+            ..Default::default()
         };
         let matches = engine.evaluate_matches(&event);
         assert_eq!(matches.len(), 1);
@@ -2763,6 +2775,7 @@ mod tests {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.1,
+            ..Default::default()
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -2837,6 +2850,7 @@ mod tests {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.0,
+            ..Default::default()
         };
         let matches = engine.evaluate_matches(&event);
         assert_eq!(matches.len(), 2);
@@ -2906,6 +2920,7 @@ rule "pid_42" {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.0,
+            ..Default::default()
         };
         let matches = engine.evaluate_matches(&event);
         assert_eq!(matches.len(), 1);
@@ -2986,6 +3001,7 @@ rule "uid_7" {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.0,
+            ..Default::default()
         };
         let matches = engine.evaluate_matches(&event);
         assert_eq!(matches.len(), 2);
@@ -3041,6 +3057,7 @@ rule "uid_7" {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.1,
+            ..Default::default()
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -3085,6 +3102,7 @@ rule "uid_7" {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.2,
+            ..Default::default()
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -3131,6 +3149,7 @@ rule "uid_7" {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.2,
+            ..Default::default()
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -3174,6 +3193,7 @@ rule "uid_7" {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.2,
+            ..Default::default()
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -3220,6 +3240,7 @@ rule "uid_7" {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.2,
+            ..Default::default()
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -3268,6 +3289,7 @@ rule "uid_7" {
             comm,
             comm_id: 0,
             risk_score: 0.2,
+            ..Default::default()
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -3319,6 +3341,7 @@ rule "uid_7" {
             comm,
             comm_id: 0,
             risk_score: 0.2,
+            ..Default::default()
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -3364,6 +3387,7 @@ rule "uid_7" {
             comm,
             comm_id: 0,
             risk_score: 0.2,
+            ..Default::default()
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -3409,6 +3433,7 @@ rule "uid_7" {
             comm,
             comm_id: 0,
             risk_score: 0.2,
+            ..Default::default()
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -3464,6 +3489,7 @@ rule "uid_7" {
             comm,
             comm_id: 0,
             risk_score: 0.2,
+            ..Default::default()
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -3524,6 +3550,7 @@ rule "uid_7" {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.0,
+            ..Default::default()
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -3575,6 +3602,7 @@ rule "uid_7" {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.0,
+            ..Default::default()
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -3677,6 +3705,7 @@ rule "uid_7" {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.0,
+            ..Default::default()
         };
         let exec_matches = engine.evaluate_matches(&exec_event);
         assert!(exec_matches.iter().any(|m| m.rule_name == "process_fields"));
@@ -3805,6 +3834,7 @@ rule "uid_7" {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.75,
+            ..Default::default()
         };
         let exec_matches = engine.evaluate_matches(&exec_event);
         assert!(exec_matches
@@ -3889,6 +3919,7 @@ rule "uid_7" {
             comm: [0; 16],
             comm_id: 0,
             risk_score: 0.0,
+            ..Default::default()
         };
         let exec_matches = engine.evaluate_matches(&exec_event);
         assert!(exec_matches
@@ -3929,6 +3960,7 @@ rule "uid_7" {
             comm,
             comm_id: 0,
             risk_score: 0.1,
+            ..Default::default()
         };
 
         let local = event_local_time(&event).expect("local time conversion");

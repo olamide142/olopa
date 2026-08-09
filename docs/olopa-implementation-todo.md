@@ -57,10 +57,11 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
   - Extend runtime field resolution so rules can reference cgroup-scoped context.
   - Add cgroup-targeted policy controls (allow/deny/rate limit) and tests for container workloads.
 - [ ] Add SQL query visibility via uprobes for process->table attribution.
-  - Attach uprobes/uretprobes to common SQL client/server symbols (starting with `libpq` and MySQL client APIs).
-  - Emit normalized DB query events carrying process identity, db target, statement fingerprint, operation kind, and resolved table list.
-  - Correlate prepared statement lifecycle (`prepare`/`bind`/`execute`) so table access is visible even when literals are omitted.
-  - Add query text redaction/tokenization safeguards to avoid storing sensitive literal values.
+  - Done: uprobes attached to `libpq` (`PQexec`) and MySQL (`mysql_real_query`) with multi-distro library discovery (`agent/agent/src/probe_manager.rs`).
+  - Done: normalized `db_query_events` family carries process identity, db engine/port, statement fingerprint, and operation kind end to end (agent -> ingest -> `recent`/`summary`).
+  - Done: alert wire version 2 preserves SQL/TLS/DNS detail across the sender hop instead of collapsing it into `dst_vertex_id`.
+  - Remaining: correlate prepared statement lifecycle (`prepare`/`bind`/`execute`) so table access is visible even when literals are omitted.
+  - Remaining: capture and redact/tokenize statement text so `database` and `tables` can be resolved without storing sensitive literal values.
 - [x] Implement TC egress policy enforcement path (beyond pass-through).
   - Added kernel-side TC policy enforcement map (`TC_EGRESS_POLICY`) in `agent/ebpf/src/tc.rs`.
   - TC program now parses IPv4+TCP/UDP egress tuple and returns `TC_ACT_SHOT` on deny policy match.
@@ -86,7 +87,9 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
 - [ ] Add end-to-end integration tests: `oilc -> runtime-ir artifact -> agent eval -> server ingest`.
   - Progress: added `agent::tests::e2e_rule_to_runtime_to_sender_to_ingest_runtime` to validate `oilc` compilation, runtime-ir evaluation, alert payload conversion via HTTP sender logic, and ingest API contract (`/api/v1/ingest/batches` + `/api/v1/ingest/recent`).
   - Note: test is `#[ignore]` by default because it requires local TCP bind + external ingest server process spawn (not available in restricted sandboxes).
-- [ ] Add CI workflows for deterministic checks/tests across `oilc`, `agent`, and `app/server`.
+- [x] Add CI workflows for deterministic checks/tests across `oilc`, `agent`, and `app/server`.
+  - `.github/workflows/ci.yml` runs `oilc`, `agent`, and ingest-server suites plus the gated `e2e-runtime-to-ingest` job.
+  - Follow-up: add lint/format gates and a load/perf smoke job.
 - [ ] Add observability surface: metrics/traces/log correlation across compiler, agent, server.
 
 ## P4 - Platform Targets (Roadmap Features)
@@ -94,6 +97,7 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
 - [ ] Integrate Memgraph-trigger execution path where required by graph rules.
 - [ ] Add rule package/version lifecycle (load, reload, rollback) with compatibility checks.
 - [ ] Add SQL semantic policy support (example: block process X from reading table `finance` on DB Y).
-  - Extend OIL/runtime field model with DB entities (`db.query`, `db.table`, `db.operation`, `db.server`).
+  - Progress: runtime field model already resolves `sql.query_hash`, `sql.query_class`, and `sql.db_port`, so rules can match uprobe-derived SQL today.
+  - Remaining: extend the field model with table-level entities (`db.query`, `db.table`, `db.operation`, `db.server`) once statement capture lands.
   - Add policy evaluation mode transitions: observe -> enforce for staged rollout safety.
   - Define enforcement strategy per engine path (client-library fail-close hook, DB proxy, or native DB plugin) with deterministic rollback.
