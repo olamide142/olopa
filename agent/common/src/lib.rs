@@ -7,28 +7,55 @@
 //!   - eBPF probe writers (`agent/ebpf/src/*`)
 //!   - userspace ring-buffer decoders (`agent/agent/src/agent.rs`)
 //! - Fixed-size byte arrays are NUL-terminated when sourced from kernel helpers.
+//!
+//! # Ring-buffer discrimination
+//!
+//! Every event emitted to the shared ring buffer begins with a `kind: u32` tag
+//! holding one of the `EVENT_KIND_*` constants, followed by `pid` so the tag
+//! costs no padding against the 8-byte-aligned `ts_ns`.
+//!
+//! The decoder dispatches on that tag and then checks the payload length
+//! against the tagged type. It must never dispatch on length alone: sizes are
+//! not unique (`NetEvent`, `SqlEvent`, and `SslEvent` are all 48 bytes;
+//! `ExecEvent` and `DnsEvent` are both 112), and an earlier length-based
+//! decoder silently parsed every `DnsEvent` as a `FileEvent`.
 #![no_std]
+
+/// Process execution event (`ExecEvent`).
+pub const EVENT_KIND_EXEC: u32 = 1;
+/// File open event (`FileEvent`).
+pub const EVENT_KIND_FILE: u32 = 2;
+/// Outbound connection event (`NetEvent`).
+pub const EVENT_KIND_NET: u32 = 3;
+/// SQL query event (`SqlEvent`).
+pub const EVENT_KIND_SQL: u32 = 4;
+/// TLS encrypt/decrypt event (`SslEvent`).
+pub const EVENT_KIND_SSL: u32 = 5;
+/// DNS resolution event (`DnsEvent`).
+pub const EVENT_KIND_DNS: u32 = 6;
 
 /// Process execution event (execve / execveat syscall)
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ExecEvent {
-    pub ts_ns: u64,
+    pub kind: u32, // EVENT_KIND_EXEC
     pub pid: u32,
+    pub ts_ns: u64,
     pub ppid: u32,
     pub uid: u32,
     pub gid: u32,
+    pub argv_hash: u32,     // simple hash of the full argv string
     pub comm: [u8; 16],     // TASK_COMM_LEN — kernel-enforced max
     pub filename: [u8; 64], // truncated path of the executable
-    pub argv_hash: u32,     // simple hash of the full argv string
 }
 
 /// File open/read/write event (openat syscall)
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct FileEvent {
-    pub ts_ns: u64,
+    pub kind: u32, // EVENT_KIND_FILE
     pub pid: u32,
+    pub ts_ns: u64,
     pub uid: u32,
     pub flags: u32, // O_RDONLY / O_WRONLY / O_RDWR etc.
     pub comm: [u8; 16],
@@ -39,8 +66,9 @@ pub struct FileEvent {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct NetEvent {
-    pub ts_ns: u64,
+    pub kind: u32, // EVENT_KIND_NET
     pub pid: u32,
+    pub ts_ns: u64,
     pub uid: u32,
     pub dst_ip: u32, // IPv4 big-endian
     pub dst_port: u16,
@@ -50,35 +78,32 @@ pub struct NetEvent {
 }
 
 /// SQL query event (uprobe on PQexec / mysql_real_query)
-///
-/// Size: 48 bytes (unique — avoids ring-buffer size collision with NetEvent/SslEvent).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SqlEvent {
-    pub ts_ns: u64,
+    pub kind: u32, // EVENT_KIND_SQL
     pub pid: u32,
+    pub ts_ns: u64,
     pub uid: u32,
-    pub comm: [u8; 16],     // TASK_COMM_LEN
-    pub query_hash: u32,    // FNV-1a hash of first 128 bytes of query text
-    pub query_class: u8,    // 0=other 1=select 2=dml 3=ddl 4=admin
-    pub db_port: u16,       // 5432 (postgres) or 3306 (mysql); 0 if unknown
+    pub query_hash: u32, // FNV-1a hash of first 128 bytes of query text
+    pub db_port: u16,    // 5432 (postgres) or 3306 (mysql); 0 if unknown
+    pub query_class: u8, // 0=other 1=select 2=dml 3=ddl 4=admin
     pub _pad: u8,
-    pub _ext: [u8; 8],      // reserved — keeps struct size unique (48 bytes)
+    pub comm: [u8; 16], // TASK_COMM_LEN
 }
 
 /// TLS/OpenSSL encryption event (uprobe on EVP_EncryptUpdate / EVP_DecryptUpdate)
-///
-/// Size: 44 bytes (unique — avoids ring-buffer size collision with NetEvent/SqlEvent).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SslEvent {
-    pub ts_ns: u64,
+    pub kind: u32, // EVENT_KIND_SSL
     pub pid: u32,
+    pub ts_ns: u64,
     pub uid: u32,
-    pub comm: [u8; 16],    // TASK_COMM_LEN
-    pub data_len: u32,     // input bytes processed in this call
-    pub operation: u8,     // 0=encrypt 1=decrypt
-    pub _pad: [u8; 7],     // extended to 7 bytes to reach 44-byte unique size
+    pub data_len: u32, // input bytes processed in this call
+    pub operation: u8, // 0=encrypt 1=decrypt
+    pub _pad: [u8; 3],
+    pub comm: [u8; 16], // TASK_COMM_LEN
 }
 
 /// DNS name resolution event (uprobe on libc getaddrinfo).
@@ -86,19 +111,18 @@ pub struct SslEvent {
 /// Fires on the process that initiated the lookup, capturing the hostname
 /// before the kernel resolver runs.  Useful for detecting C2 callback domains,
 /// DGA patterns, and data-exfiltration via DNS.
-///
-/// Size: 104 bytes (unique).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct DnsEvent {
-    pub ts_ns: u64,
+    pub kind: u32, // EVENT_KIND_DNS
     pub pid: u32,
+    pub ts_ns: u64,
     pub uid: u32,
-    pub comm: [u8; 16],    // TASK_COMM_LEN
-    pub query: [u8; 64],   // NUL-terminated queried hostname (truncated to 63 chars)
-    pub query_hash: u32,   // FNV-1a hash of `query` up to NUL
-    pub query_len: u16,    // byte length of query string (capped at 63)
+    pub query_hash: u32, // FNV-1a hash of `query` up to NUL
+    pub query_len: u16,  // byte length of query string (capped at 63)
     pub _pad: [u8; 2],
+    pub comm: [u8; 16],  // TASK_COMM_LEN
+    pub query: [u8; 64], // NUL-terminated queried hostname (truncated to 63 chars)
 }
 
 /// XDP packet verdict counters — stored in a BPF array map, index = action

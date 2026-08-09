@@ -26,7 +26,7 @@ use aya_ebpf::{
     macros::uprobe,
     programs::ProbeContext,
 };
-use olopa_common::SqlEvent;
+use olopa_common::{EVENT_KIND_SQL, SqlEvent};
 
 use crate::EVENTS;
 
@@ -62,6 +62,7 @@ unsafe fn try_sql_query(ctx: &ProbeContext, query_arg: usize, default_port: u16)
     // After reservation every exit path must submit or discard.
     let event = entry.as_mut_ptr();
 
+    (*event).kind = EVENT_KIND_SQL;
     (*event).ts_ns = bpf_ktime_get_ns();
 
     let pid_tgid = bpf_get_current_pid_tgid();
@@ -100,7 +101,6 @@ unsafe fn try_sql_query(ctx: &ProbeContext, query_arg: usize, default_port: u16)
     (*event).query_class = classify_query(&buf);
     (*event).db_port = default_port;
     (*event)._pad = 0;
-    (*event)._ext = [0u8; 8];
 
     entry.submit(0);
     0

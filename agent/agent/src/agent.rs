@@ -13,7 +13,10 @@ use anyhow::{Context, Result};
 use aya::{include_bytes_aligned, maps::RingBuf, Ebpf};
 use aya_log::EbpfLogger;
 use log::{debug, info, warn};
-use olopa_common::{DnsEvent, ExecEvent, FileEvent, NetEvent, SqlEvent, SslEvent};
+use olopa_common::{
+    DnsEvent, ExecEvent, FileEvent, NetEvent, SqlEvent, SslEvent, EVENT_KIND_DNS, EVENT_KIND_EXEC,
+    EVENT_KIND_FILE, EVENT_KIND_NET, EVENT_KIND_SQL, EVENT_KIND_SSL,
+};
 use serde::Serialize;
 use tokio::signal;
 
@@ -600,15 +603,34 @@ impl OlopaAgent {
         RE: RuleEngineLike,
         SN: SenderLike,
     {
-        use core::mem::size_of;
-
         // Drain all currently available ring items before returning.
         let mut stats = IngestLoopStats::default();
         while let Some(item) = ring.next() {
             let bytes: &[u8] = &item;
-            // Decode based on fixed struct byte lengths.
-            let event = if bytes.len() == size_of::<ExecEvent>() {
-                // SAFETY: ring item length is exactly ExecEvent size and layout
+
+            // Dispatch on the leading `kind` tag, never on payload length:
+            // event sizes are not unique (NetEvent/SqlEvent/SslEvent are all
+            // 48 bytes, ExecEvent/DnsEvent both 112), so a length-based chain
+            // silently decodes one family as another.
+            let Some(kind) = read_event_kind(bytes) else {
+                warn!("ringbuf item too short for kind tag: {} bytes", bytes.len());
+                continue;
+            };
+
+            // The length check keeps the pointer cast below sound.
+            let expected = expected_event_size(kind);
+            if expected != Some(bytes.len()) {
+                warn!(
+                    "ringbuf kind={} length mismatch: got {} bytes, expected {:?}; skipping",
+                    kind,
+                    bytes.len(),
+                    expected
+                );
+                continue;
+            }
+
+            let event = if kind == EVENT_KIND_EXEC {
+                // SAFETY: tag says ExecEvent and length matches its size; layout
                 // matches the shared `olopa_common` repr(C) type.
                 let raw = unsafe { &*(bytes.as_ptr() as *const ExecEvent) };
                 log_exec_ingest(raw);
@@ -633,8 +655,8 @@ impl OlopaAgent {
                     dns_query_hash: 0,
                     dns_query: [0; 64],
                 }
-            } else if bytes.len() == size_of::<FileEvent>() {
-                // SAFETY: ring item length is exactly FileEvent size.
+            } else if kind == EVENT_KIND_FILE {
+                // SAFETY: tag says FileEvent and length matches its size.
                 let raw = unsafe { &*(bytes.as_ptr() as *const FileEvent) };
                 log_file_ingest(raw);
                 IngestEvent {
@@ -658,8 +680,8 @@ impl OlopaAgent {
                     dns_query_hash: 0,
                     dns_query: [0; 64],
                 }
-            } else if bytes.len() == size_of::<NetEvent>() {
-                // SAFETY: ring item length is exactly NetEvent size.
+            } else if kind == EVENT_KIND_NET {
+                // SAFETY: tag says NetEvent and length matches its size.
                 let raw = unsafe { &*(bytes.as_ptr() as *const NetEvent) };
                 log_net_ingest(raw);
                 // Compact destination vertex key for network endpoint.
@@ -685,8 +707,8 @@ impl OlopaAgent {
                     dns_query_hash: 0,
                     dns_query: [0; 64],
                 }
-            } else if bytes.len() == size_of::<SqlEvent>() {
-                // SAFETY: ring item length is exactly SqlEvent size.
+            } else if kind == EVENT_KIND_SQL {
+                // SAFETY: tag says SqlEvent and length matches its size.
                 let raw = unsafe { &*(bytes.as_ptr() as *const SqlEvent) };
                 IngestEvent {
                     ts_ns: raw.ts_ns,
@@ -713,8 +735,8 @@ impl OlopaAgent {
                     dns_query_hash: 0,
                     dns_query: [0; 64],
                 }
-            } else if bytes.len() == size_of::<SslEvent>() {
-                // SAFETY: ring item length is exactly SslEvent size.
+            } else if kind == EVENT_KIND_SSL {
+                // SAFETY: tag says SslEvent and length matches its size.
                 let raw = unsafe { &*(bytes.as_ptr() as *const SslEvent) };
                 IngestEvent {
                     ts_ns: raw.ts_ns,
@@ -739,8 +761,8 @@ impl OlopaAgent {
                     dns_query_hash: 0,
                     dns_query: [0; 64],
                 }
-            } else if bytes.len() == size_of::<DnsEvent>() {
-                // SAFETY: ring item length is exactly DnsEvent size.
+            } else if kind == EVENT_KIND_DNS {
+                // SAFETY: tag says DnsEvent and length matches its size.
                 let raw = unsafe { &*(bytes.as_ptr() as *const DnsEvent) };
                 IngestEvent {
                     ts_ns: raw.ts_ns,
@@ -767,11 +789,9 @@ impl OlopaAgent {
                     dns_query: raw.query,
                 }
             } else {
-                // Unknown payload size: skip for hot-path resilience.
-                warn!(
-                    "ringbuf unknown payload size={} bytes; skipping",
-                    bytes.len()
-                );
+                // Unreachable: `expected_event_size` already rejected any kind
+                // without a known layout. Kept for hot-path resilience.
+                warn!("ringbuf unknown event kind={}; skipping", kind);
                 continue;
             };
 
@@ -1044,6 +1064,31 @@ fn log_net_ingest(e: &NetEvent) {
     );
 }
 
+/// Read the leading `kind` tag from a ring-buffer item.
+///
+/// Returns `None` when the item is too short to carry a tag.
+fn read_event_kind(bytes: &[u8]) -> Option<u32> {
+    let head = bytes.get(..4)?;
+    Some(u32::from_ne_bytes(head.try_into().ok()?))
+}
+
+/// Expected payload length for a tagged event kind.
+///
+/// `None` marks a kind this build has no layout for, which is how forward
+/// compatibility works: a newer probe's events are skipped, not misparsed.
+fn expected_event_size(kind: u32) -> Option<usize> {
+    use core::mem::size_of;
+    match kind {
+        EVENT_KIND_EXEC => Some(size_of::<ExecEvent>()),
+        EVENT_KIND_FILE => Some(size_of::<FileEvent>()),
+        EVENT_KIND_NET => Some(size_of::<NetEvent>()),
+        EVENT_KIND_SQL => Some(size_of::<SqlEvent>()),
+        EVENT_KIND_SSL => Some(size_of::<SslEvent>()),
+        EVENT_KIND_DNS => Some(size_of::<DnsEvent>()),
+        _ => None,
+    }
+}
+
 fn cstr_to_str(buf: &[u8]) -> &str {
     let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
     core::str::from_utf8(&buf[..end]).unwrap_or("<invalid utf8>")
@@ -1301,6 +1346,64 @@ mod tests {
         assert!((decoded.risk_score - 0.9).abs() < 0.0001);
 
         let _ = fs::remove_file(path);
+    }
+
+    /// Every probe's event must dispatch to its own kind. Sizes deliberately
+    /// collide (NetEvent/SqlEvent/SslEvent are all 48 bytes, ExecEvent and
+    /// DnsEvent both 112), which is exactly why dispatch reads the tag.
+    #[test]
+    fn event_kinds_dispatch_independently_of_colliding_sizes() {
+        use core::mem::size_of;
+
+        assert_eq!(size_of::<DnsEvent>(), size_of::<ExecEvent>());
+        assert_eq!(size_of::<SqlEvent>(), size_of::<NetEvent>());
+        assert_eq!(size_of::<SslEvent>(), size_of::<NetEvent>());
+
+        for (kind, size) in [
+            (EVENT_KIND_EXEC, size_of::<ExecEvent>()),
+            (EVENT_KIND_FILE, size_of::<FileEvent>()),
+            (EVENT_KIND_NET, size_of::<NetEvent>()),
+            (EVENT_KIND_SQL, size_of::<SqlEvent>()),
+            (EVENT_KIND_SSL, size_of::<SslEvent>()),
+            (EVENT_KIND_DNS, size_of::<DnsEvent>()),
+        ] {
+            assert_eq!(expected_event_size(kind), Some(size), "kind {kind}");
+        }
+
+        // Unknown kinds are skipped rather than parsed as a known layout.
+        assert_eq!(expected_event_size(9999), None);
+    }
+
+    #[test]
+    fn dns_event_bytes_decode_as_dns_not_file() {
+        // Regression: DnsEvent and ExecEvent share a size, and DnsEvent
+        // previously matched FileEvent's length in a size-based decoder, so
+        // DNS telemetry was parsed as file events.
+        let mut query = [0u8; 64];
+        query[..11].copy_from_slice(b"evil.c2.net");
+        let dns = DnsEvent {
+            kind: EVENT_KIND_DNS,
+            pid: 4242,
+            ts_ns: 99,
+            uid: 0,
+            query_hash: 0xabcd,
+            query_len: 11,
+            _pad: [0; 2],
+            comm: [0; 16],
+            query,
+        };
+
+        // SAFETY: reading a repr(C) POD as its own byte representation.
+        let bytes = unsafe {
+            core::slice::from_raw_parts(
+                &dns as *const DnsEvent as *const u8,
+                core::mem::size_of::<DnsEvent>(),
+            )
+        };
+
+        assert_eq!(read_event_kind(bytes), Some(EVENT_KIND_DNS));
+        assert_eq!(expected_event_size(EVENT_KIND_DNS), Some(bytes.len()));
+        assert_ne!(read_event_kind(bytes), Some(EVENT_KIND_FILE));
     }
 
     #[test]

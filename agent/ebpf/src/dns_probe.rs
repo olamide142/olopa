@@ -29,7 +29,7 @@ use aya_ebpf::{
     macros::uprobe,
     programs::ProbeContext,
 };
-use olopa_common::DnsEvent;
+use olopa_common::{EVENT_KIND_DNS, DnsEvent};
 
 use crate::EVENTS;
 
@@ -58,6 +58,7 @@ unsafe fn try_dns_query(ctx: &ProbeContext) -> u32 {
     // After reservation every exit path must submit or discard.
     let event = entry.as_mut_ptr();
 
+    (*event).kind = EVENT_KIND_DNS;
     (*event).ts_ns = bpf_ktime_get_ns();
 
     let pid_tgid = bpf_get_current_pid_tgid();

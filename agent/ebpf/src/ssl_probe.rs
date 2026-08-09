@@ -26,7 +26,7 @@ use aya_ebpf::{
     macros::uprobe,
     programs::ProbeContext,
 };
-use olopa_common::SslEvent;
+use olopa_common::{EVENT_KIND_SSL, SslEvent};
 
 use crate::EVENTS;
 
@@ -60,6 +60,7 @@ unsafe fn try_ssl_event(ctx: &ProbeContext, operation: u8) -> u32 {
     // After reservation every exit path must submit or discard.
     let event = entry.as_mut_ptr();
 
+    (*event).kind = EVENT_KIND_SSL;
     (*event).ts_ns = bpf_ktime_get_ns();
 
     let pid_tgid = bpf_get_current_pid_tgid();
@@ -87,7 +88,7 @@ unsafe fn try_ssl_event(ctx: &ProbeContext, operation: u8) -> u32 {
     };
     (*event).data_len = if inl > 0 { inl as u32 } else { 0 };
     (*event).operation = operation;
-    (*event)._pad = [0u8; 7];
+    (*event)._pad = [0u8; 3];
 
     entry.submit(0);
     0

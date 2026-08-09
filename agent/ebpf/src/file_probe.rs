@@ -25,7 +25,7 @@ use aya_ebpf::{
     macros::tracepoint,
     programs::TracePointContext,
 };
-use olopa_common::FileEvent;
+use olopa_common::{EVENT_KIND_FILE, FileEvent};
 
 use crate::EVENTS;
 
@@ -51,6 +51,7 @@ unsafe fn try_openat(ctx: &TracePointContext, openat2: bool) -> u32 {
 
     let event = entry.as_mut_ptr();
 
+    (*event).kind = EVENT_KIND_FILE;
     (*event).ts_ns = bpf_ktime_get_ns();
 
     let pid_tgid = bpf_get_current_pid_tgid();
