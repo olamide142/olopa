@@ -56,15 +56,18 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
   - Propagate cgroup fields through agent wire payloads to ingest storage.
   - Extend runtime field resolution so rules can reference cgroup-scoped context.
   - Add cgroup-targeted policy controls (allow/deny/rate limit) and tests for container workloads.
-- [ ] Add SQL query visibility via uprobes for process->table attribution.
-  - Done: uprobes attached to `libpq` (`PQexec`) and MySQL (`mysql_real_query`) with multi-distro library discovery (`agent/agent/src/probe_manager.rs`).
+- [x] Add SQL query visibility via uprobes for process->table attribution.
+  - Done: uprobes attached to `libpq` and MySQL client libraries with multi-distro library discovery (`agent/agent/src/probe_manager.rs`).
   - Done: normalized `db_query_events` family carries process identity, db engine/port, statement fingerprint, and operation kind end to end (agent -> ingest -> `recent`/`summary`).
   - Done: alert wire version 2 preserves SQL/TLS/DNS detail across the sender hop instead of collapsing it into `dst_vertex_id`.
   - Done: statement text is captured (`SqlEvent::query`) and redacted before use, so `database` and `tables` resolve without storing literal values (`agent/agent/src/sql_norm.rs`). Redaction runs first and the raw buffer dies at decode scope; `statement_fingerprint` now hashes the redacted form so a query shape groups across differing literals.
-  - Done: hooked every client entry point that carries statement text — `PQexec`, `PQexecParams`, `PQprepare` (text at arg 2), `mysql_real_query`, `mysql_stmt_prepare`. Previously only `PQexec` and `mysql_real_query` were hooked, so an application using parameterized or prepared statements produced no SQL telemetry at all. Prepared statements are attributed at prepare time, which makes their table access visible without ever seeing bound literals.
-  - Remaining: count prepared-statement *executions*. `PQexecPrepared` and `mysql_stmt_execute` carry only a name or handle, so attributing them needs a BPF map holding prepare-time state keyed by (pid, name), plus eviction. Table visibility already works; only the per-execution count is missing.
-  - Remaining: libpq's async API (`PQsendQuery` and friends) is deliberately unhooked, because those are the internals of the `PQexec*` family and hooking both would double-count. A caller using the async API directly is therefore not seen.
-  - Remaining: statement capture truncates at 128 bytes, so a table named past that point is missed. Revisit if truncation shows up in practice.
+  - Done: hooked every client entry point that carries statement text — `PQexec`, `PQexecParams`, `mysql_real_query`. Previously only `PQexec` and `mysql_real_query` were hooked, so an application issuing parameterized queries produced no SQL telemetry at all.
+  - Done: prepared statement lifecycle. `PQprepare`/`mysql_stmt_prepare` record statement text into the `PREPARED_STATEMENTS` LRU map without emitting; `PQexecPrepared`/`mysql_stmt_execute` emit an event carrying the recorded text. Each execution is counted once and attributed to its tables, and bound literal values are never seen at all. Records are keyed by connection handle plus name, since a statement name is scoped to a connection.
+  - Known limits, all deliberate:
+    - An execute whose prepare was missed (agent started after a connection pool prepared its statements, or an LRU eviction under >8192 live statements) still emits, with no text and no tables. Dropping it would hide real database activity.
+    - libpq's async API (`PQsendQuery` and friends) is unhooked, because those are the internals of the `PQexec*` family and hooking both would double-count. A caller using the async API directly is not seen.
+    - Statement capture truncates at 128 bytes, so a table named past that point is missed. Revisit if truncation shows up in practice.
+    - The kernel-side prepared-statement path has not been exercised against a live verifier or a real database; it compiles and the programs and map are present in the object, but attach and load need a host with the client libraries and root.
 - [x] Implement TC egress policy enforcement path (beyond pass-through).
   - Added kernel-side TC policy enforcement map (`TC_EGRESS_POLICY`) in `agent/ebpf/src/tc.rs`.
   - TC program now parses IPv4+TCP/UDP egress tuple and returns `TC_ACT_SHOT` on deny policy match.

@@ -318,6 +318,15 @@ pub fn pack_tables(tables: &[TableRef]) -> [u8; SQL_TABLES_LEN] {
 /// FNV-1a over the redacted statement, so the same statement shape with
 /// different literal values yields one stable fingerprint.
 pub fn normalized_fingerprint(redacted: &str) -> u32 {
+    // No text, no fingerprint. This happens when a prepared statement executes
+    // without its prepare having been seen, and hashing the empty string would
+    // give every such execution one plausible-looking value — grouping
+    // unrelated queries under a fingerprint indistinguishable from a real one.
+    // Zero is the sentinel the sender already reads as "not normalized".
+    if redacted.is_empty() {
+        return 0;
+    }
+
     let mut hash: u32 = 0x811C_9DC5;
     for b in redacted.as_bytes() {
         hash ^= *b as u32;
@@ -526,6 +535,15 @@ mod tests {
         for name in text.split(',') {
             assert!(many.iter().any(|t| t.name == name), "partial name: {name}");
         }
+    }
+
+    /// A prepared statement executing without an observed prepare arrives with
+    /// no text. It must not be handed a fingerprint that looks real, or every
+    /// unresolvable execution groups together under one convincing hash.
+    #[test]
+    fn absent_statement_text_has_no_fingerprint() {
+        assert_eq!(normalized_fingerprint(""), 0);
+        assert_ne!(normalized_fingerprint("SELECT ?"), 0);
     }
 
     #[test]

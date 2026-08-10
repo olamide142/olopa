@@ -99,9 +99,6 @@ Not implemented yet:
 - advanced identity integration beyond static API tokens (for example mTLS identity binding, token rotation/revocation),
 - request size/rate limiting safeguards,
 - idempotency and duplicate suppression using `batch_id`,
-- prepared-statement *execution* counts. Prepare is hooked, so tables are already
-  attributed; `PQexecPrepared`/`mysql_stmt_execute` carry only a name or handle,
-  so counting each execution needs prepare-time state keyed by that name,
 - durable pre-flush spool/WAL for crash recovery,
 - retry policy and circuit-breaker logic for ClickHouse,
 - Prometheus/OpenTelemetry metrics/traces,
@@ -204,7 +201,13 @@ Two properties of that path are worth keeping in mind when changing it:
   written before this change,
 - `database` is only reported when every qualified table reference in the
   statement agrees on it. A cross-database join yields `null` rather than an
-  arbitrary pick.
+  arbitrary pick,
+- prepared statements report one row per *execution*, not per prepare. The
+  agent records statement text at `PQprepare`/`mysql_stmt_prepare` and replays
+  it at execute time, so `tables` is populated even though the execute call
+  never carries SQL. An execute whose prepare was not observed still produces a
+  row, with `tables` empty and `statement_fingerprint` `"00000000"` — a zero
+  fingerprint is the explicit marker for "statement text unknown".
 
 #### Epic 1.1 Idempotency and Deduplication
 

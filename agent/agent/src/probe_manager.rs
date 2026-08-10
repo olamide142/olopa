@@ -72,19 +72,22 @@ pub enum ProbeKind {
 /// those internal calls land on the same entry a uprobe watches — listing the
 /// `PQsend*` family too would report one query twice. `mysql_query` is excluded
 /// for the same reason: it delegates to `mysql_real_query`.
+/// Prepared statements are split across a pair: the prepare records the text
+/// and the execute reports the query, so both halves must attach for a
+/// prepared workload to be visible.
 const LIBPQ_SQL_UPROBES: &[(&str, &[&str])] = &[
     ("uprobe_pqexec", &["PQexec", "PQexecParams"]),
     ("uprobe_pqprepare", &["PQprepare"]),
+    ("uprobe_pqexecprepared", &["PQexecPrepared"]),
 ];
 
-/// MySQL client entry points carrying statement text at argument 1.
-///
-/// `mysql_stmt_execute` is absent: it takes only a statement handle, so
-/// attributing it needs prepare-time state keyed by that handle.
-const LIBMYSQL_SQL_UPROBES: &[(&str, &[&str])] = &[(
-    "uprobe_mysql_query",
-    &["mysql_real_query", "mysql_stmt_prepare"],
-)];
+/// MySQL client entry points, in the same three roles as libpq's: direct
+/// query, prepare, execute.
+const LIBMYSQL_SQL_UPROBES: &[(&str, &[&str])] = &[
+    ("uprobe_mysql_query", &["mysql_real_query"]),
+    ("uprobe_mysql_stmt_prepare", &["mysql_stmt_prepare"]),
+    ("uprobe_mysql_stmt_execute", &["mysql_stmt_execute"]),
+];
 
 /// Probe manager state.
 ///
@@ -560,6 +563,51 @@ fn cstr_to_str(buf: &[u8]) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every program named in the attach tables must exist in the eBPF object.
+    ///
+    /// A typo or a rename on the kernel side is otherwise invisible here: the
+    /// lookup fails at attach time and only warns, on a host that happens to
+    /// have the client library installed. This turns that into a build failure.
+    #[test]
+    fn every_sql_uprobe_program_exists_in_the_compiled_ebpf_object() {
+        // The same object `OlopaAgent` embeds and loads at runtime.
+        const EBPF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/olopa-ebpf-bin"));
+
+        for (program, _) in LIBPQ_SQL_UPROBES.iter().chain(LIBMYSQL_SQL_UPROBES) {
+            let needle = program.as_bytes();
+            assert!(
+                EBPF.windows(needle.len()).any(|w| w == needle),
+                "no program named '{program}' in the eBPF object — attaching it would only warn"
+            );
+        }
+    }
+
+    /// Prepared statements need both halves of the pair: the prepare records
+    /// the statement text and the execute is what reports the query. Attaching
+    /// only one makes a prepared workload either invisible or textless.
+    #[test]
+    fn prepared_statement_probes_come_in_prepare_and_execute_pairs() {
+        const PAIRS: &[(&str, &str)] = &[
+            ("PQprepare", "PQexecPrepared"),
+            ("mysql_stmt_prepare", "mysql_stmt_execute"),
+        ];
+
+        let hooked: HashSet<&str> = LIBPQ_SQL_UPROBES
+            .iter()
+            .chain(LIBMYSQL_SQL_UPROBES)
+            .flat_map(|(_, symbols)| symbols.iter().copied())
+            .collect();
+
+        for (prepare, execute) in PAIRS {
+            assert_eq!(
+                hooked.contains(prepare),
+                hooked.contains(execute),
+                "{prepare}/{execute} must be hooked together: the prepare records \
+                 the statement text and the execute is what reports the query"
+            );
+        }
+    }
 
     /// One application call must produce one SQL event. Listing a symbol under
     /// two handlers attaches two probes to the same entry point, so every query
