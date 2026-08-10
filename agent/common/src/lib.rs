@@ -16,9 +16,11 @@
 //!
 //! The decoder dispatches on that tag and then checks the payload length
 //! against the tagged type. It must never dispatch on length alone: sizes are
-//! not unique (`NetEvent`, `SqlEvent`, and `SslEvent` are all 48 bytes;
-//! `ExecEvent` and `DnsEvent` are both 112), and an earlier length-based
-//! decoder silently parsed every `DnsEvent` as a `FileEvent`.
+//! not unique (`NetEvent` and `SslEvent` are both 48 bytes; `ExecEvent` and
+//! `DnsEvent` are both 112), and an earlier length-based decoder silently
+//! parsed every `DnsEvent` as a `FileEvent`. Which sizes happen to collide
+//! shifts as fields are added — `SqlEvent` left the 48-byte group when it
+//! gained `query` — so nothing may start relying on a size being unique.
 #![no_std]
 
 /// Process execution event (`ExecEvent`).
@@ -77,7 +79,19 @@ pub struct NetEvent {
     pub comm: [u8; 16],
 }
 
+/// Bytes of statement text captured by the SQL uprobes.
+///
+/// Enough to cover the table-bearing prefix of most statements while staying
+/// within eBPF stack/copy limits.
+pub const SQL_QUERY_LEN: usize = 128;
+
 /// SQL query event (uprobe on PQexec / mysql_real_query)
+///
+/// `query` holds **raw, unredacted** statement text and may contain literal
+/// values. It exists so userspace can derive table names and a normalized
+/// fingerprint; it is redacted at ring-buffer decode time and must never be
+/// copied into an outbound payload or persisted. See
+/// `olopa::sql_norm::redact_statement`.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SqlEvent {
@@ -85,11 +99,12 @@ pub struct SqlEvent {
     pub pid: u32,
     pub ts_ns: u64,
     pub uid: u32,
-    pub query_hash: u32, // FNV-1a hash of first 128 bytes of query text
+    pub query_hash: u32, // FNV-1a hash of first SQL_QUERY_LEN bytes of query text
     pub db_port: u16,    // 5432 (postgres) or 3306 (mysql); 0 if unknown
     pub query_class: u8, // 0=other 1=select 2=dml 3=ddl 4=admin
     pub _pad: u8,
-    pub comm: [u8; 16], // TASK_COMM_LEN
+    pub comm: [u8; 16],             // TASK_COMM_LEN
+    pub query: [u8; SQL_QUERY_LEN], // NUL-terminated, truncated statement text
 }
 
 /// TLS/OpenSSL encryption event (uprobe on EVP_EncryptUpdate / EVP_DecryptUpdate)

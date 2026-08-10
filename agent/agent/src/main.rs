@@ -12,6 +12,7 @@ mod data;
 mod intel_store;
 mod probe_manager;
 mod runtime_ir;
+mod sql_norm;
 mod transport;
 
 use anyhow::{bail, Context, Result};

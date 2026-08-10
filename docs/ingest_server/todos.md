@@ -99,8 +99,8 @@ Not implemented yet:
 - advanced identity integration beyond static API tokens (for example mTLS identity binding, token rotation/revocation),
 - request size/rate limiting safeguards,
 - idempotency and duplicate suppression using `batch_id`,
-- statement-text capture so `db_query_events.database`/`tables` can be populated
-  (the uprobe currently hashes statements in kernel space),
+- prepared-statement lifecycle correlation (`prepare`/`bind`/`execute`), so table
+  access is attributable when the statement text is not at the execute site,
 - durable pre-flush spool/WAL for crash recovery,
 - retry policy and circuit-breaker logic for ClickHouse,
 - Prometheus/OpenTelemetry metrics/traces,
@@ -189,11 +189,21 @@ Current status:
   and appear in `recent`/`summary`,
 - the agent alert wire is at version 2, carrying statement hash, class, port,
   and process name end to end (`agent/agent/src/agent.rs`),
-- step 2 is partially met: `db_engine`, `db_server`, `operation`, and
-  `statement_fingerprint` are populated; `database` and `tables` serialize as
-  `null`/`[]` because the uprobe hashes statement text in kernel space rather
-  than copying it out. Populating them requires statement capture with
-  redaction — tracked as the remaining work below.
+- step 2 is met: `db_engine`, `db_server`, `operation`, `statement_fingerprint`,
+  `database`, and `tables` are all populated. The uprobe now copies statement
+  text out (`SqlEvent::query`, 128 bytes), and the agent redacts it before
+  deriving anything from it (`agent/agent/src/sql_norm.rs`). Raw text never
+  leaves the decode scope, so no literal reaches ingest.
+
+Two properties of that path are worth keeping in mind when changing it:
+
+- `statement_fingerprint` is now the hash of the *redacted* statement, so the
+  same query shape groups regardless of its literal values. The raw-text hash
+  is retained as the `raw_statement_hash` attribute for continuity with rows
+  written before this change,
+- `database` is only reported when every qualified table reference in the
+  statement agrees on it. A cross-database join yields `null` rather than an
+  arbitrary pick.
 
 #### Epic 1.1 Idempotency and Deduplication
 

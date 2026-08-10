@@ -215,6 +215,11 @@ struct AlertExt {
     ssl_operation: u8,
     dns_query_hash: u32,
     dns_query: String,
+    /// Fingerprint over the redacted statement, so the same statement shape
+    /// with different literals groups together.
+    sql_norm_hash: u32,
+    /// Comma-separated table names derived from the redacted statement.
+    sql_tables: String,
 }
 
 impl DecodedAlert {
@@ -703,9 +708,19 @@ fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
                 ..AlertExt::default()
             });
             let db_port = ext.sql_db_port;
+            let (database, tables) = split_table_refs(&ext.sql_tables);
 
-            attrs.insert("sql_query_class".to_string(), ext.sql_query_class.to_string());
+            attrs.insert(
+                "sql_query_class".to_string(),
+                ext.sql_query_class.to_string(),
+            );
             attrs.insert("db_port".to_string(), db_port.to_string());
+            if ext.sql_norm_hash != 0 {
+                attrs.insert(
+                    "raw_statement_hash".to_string(),
+                    format!("{:08x}", ext.sql_query_hash),
+                );
+            }
 
             batch.db_query_events.push(DbQueryEvent {
                 pid: alert.pid,
@@ -715,10 +730,17 @@ fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
                 comm,
                 db_engine: db_engine_for_port(db_port).to_string(),
                 db_server: (db_port != 0).then(|| format!("unknown:{db_port}")),
-                database: None,
+                database,
                 operation: sql_operation_label(ext.sql_query_class).to_string(),
-                tables: Vec::new(),
-                statement_fingerprint: format!("{:08x}", ext.sql_query_hash),
+                tables,
+                // Prefer the redacted-statement fingerprint so the same query
+                // shape groups regardless of literal values; fall back to the
+                // raw hash for payloads that predate normalization.
+                statement_fingerprint: if ext.sql_norm_hash != 0 {
+                    format!("{:08x}", ext.sql_norm_hash)
+                } else {
+                    format!("{:08x}", ext.sql_query_hash)
+                },
                 attrs,
             });
         }
@@ -759,10 +781,7 @@ fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
                 attrs.insert("dns_query".to_string(), query);
             }
             if let Some(ext) = alert.ext.as_ref() {
-                attrs.insert(
-                    "dns_query_hash".to_string(),
-                    ext.dns_query_hash.to_string(),
-                );
+                attrs.insert("dns_query_hash".to_string(), ext.dns_query_hash.to_string());
             }
             // The queried name stays in `attrs`: `dst_ip` is an IP-typed field
             // downstream, and the uprobe fires before resolution completes.
@@ -794,6 +813,33 @@ fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
             });
         }
     }
+}
+
+/// Split the packed `db.table` list into a database name and bare table names.
+///
+/// A database is only reported when every qualified reference agrees on it —
+/// a cross-database join has no single answer, and guessing one would be worse
+/// than reporting none.
+fn split_table_refs(packed: &str) -> (Option<String>, Vec<String>) {
+    let mut tables = Vec::new();
+    let mut qualifiers = Vec::new();
+
+    for entry in packed.split(',').filter(|s| !s.is_empty()) {
+        match entry.rsplit_once('.') {
+            Some((qualifier, name)) if !qualifier.is_empty() && !name.is_empty() => {
+                qualifiers.push(qualifier.to_string());
+                tables.push(name.to_string());
+            }
+            _ => tables.push(entry.to_string()),
+        }
+    }
+
+    let database = match qualifiers.first() {
+        Some(first) if qualifiers.iter().all(|q| q == first) => Some(first.clone()),
+        _ => None,
+    };
+
+    (database, tables)
 }
 
 /// Map an observed database port to an engine label.
@@ -903,6 +949,11 @@ fn decode_alert_ext(payload: &[u8], mut cursor: usize) -> Option<AlertExt> {
     cursor += 1;
     let dns_end = cursor.checked_add(dns_query_len)?;
     let dns_query = String::from_utf8(payload.get(cursor..dns_end)?.to_vec()).ok()?;
+    cursor = dns_end;
+
+    // The SQL table block is optional within the extension, so payloads from
+    // before it existed still yield every field above.
+    let (sql_norm_hash, sql_tables) = decode_sql_table_block(payload, cursor).unwrap_or_default();
 
     Some(AlertExt {
         comm,
@@ -913,7 +964,20 @@ fn decode_alert_ext(payload: &[u8], mut cursor: usize) -> Option<AlertExt> {
         ssl_operation,
         dns_query_hash,
         dns_query,
+        sql_norm_hash,
+        sql_tables,
     })
+}
+
+/// Parse the optional trailing `[sql_norm_hash][len][tables]` block.
+fn decode_sql_table_block(payload: &[u8], mut cursor: usize) -> Option<(u32, String)> {
+    let norm_hash = u32::from_le_bytes(payload.get(cursor..cursor + 4)?.try_into().ok()?);
+    cursor += 4;
+    let len = *payload.get(cursor)? as usize;
+    cursor += 1;
+    let end = cursor.checked_add(len)?;
+    let tables = String::from_utf8(payload.get(cursor..end)?.to_vec()).ok()?;
+    Some((norm_hash, tables))
 }
 
 fn parse_kv_fields(line: &str) -> HashMap<&str, &str> {

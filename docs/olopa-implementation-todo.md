@@ -60,8 +60,9 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
   - Done: uprobes attached to `libpq` (`PQexec`) and MySQL (`mysql_real_query`) with multi-distro library discovery (`agent/agent/src/probe_manager.rs`).
   - Done: normalized `db_query_events` family carries process identity, db engine/port, statement fingerprint, and operation kind end to end (agent -> ingest -> `recent`/`summary`).
   - Done: alert wire version 2 preserves SQL/TLS/DNS detail across the sender hop instead of collapsing it into `dst_vertex_id`.
+  - Done: statement text is captured (`SqlEvent::query`) and redacted before use, so `database` and `tables` resolve without storing literal values (`agent/agent/src/sql_norm.rs`). Redaction runs first and the raw buffer dies at decode scope; `statement_fingerprint` now hashes the redacted form so a query shape groups across differing literals.
   - Remaining: correlate prepared statement lifecycle (`prepare`/`bind`/`execute`) so table access is visible even when literals are omitted.
-  - Remaining: capture and redact/tokenize statement text so `database` and `tables` can be resolved without storing sensitive literal values.
+  - Remaining: statement capture truncates at 128 bytes, so a table named past that point is missed. Revisit if truncation shows up in practice.
 - [x] Implement TC egress policy enforcement path (beyond pass-through).
   - Added kernel-side TC policy enforcement map (`TC_EGRESS_POLICY`) in `agent/ebpf/src/tc.rs`.
   - TC program now parses IPv4+TCP/UDP egress tuple and returns `TC_ACT_SHOT` on deny policy match.

@@ -156,8 +156,9 @@ pub struct NetEvent {
 ///
 /// Normalized shape so a query is attributable to a process without the caller
 /// having to understand engine-specific wire protocols. `database` and `tables`
-/// are optional because the current uprobe hashes statement text in kernel
-/// space instead of copying it out; senders that cannot resolve them omit them.
+/// stay optional: the agent resolves them from redacted statement text, and a
+/// statement it cannot parse confidently omits them rather than guessing. They
+/// are also absent from senders predating statement capture.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DbQueryEvent {
     /// Process id issuing the query.

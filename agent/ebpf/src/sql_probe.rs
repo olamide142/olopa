@@ -26,13 +26,13 @@ use aya_ebpf::{
     macros::uprobe,
     programs::ProbeContext,
 };
-use olopa_common::{EVENT_KIND_SQL, SqlEvent};
+use olopa_common::{SqlEvent, EVENT_KIND_SQL, SQL_QUERY_LEN};
 
 use crate::EVENTS;
 
 // Scratch buffer size for query text hashing/classification.
 // 128 bytes captures enough of most queries while staying stack-friendly.
-const QUERY_BUF_LEN: usize = 128;
+const QUERY_BUF_LEN: usize = SQL_QUERY_LEN;
 
 /// Uprobe on libpq `PQexec`.
 /// Signature: PQexec(PGconn *conn, const char *query) -> PGresult *
@@ -93,12 +93,22 @@ unsafe fn try_sql_query(ctx: &ProbeContext, query_arg: usize, default_port: u16)
         return 1;
     }
 
-    // Read up to QUERY_BUF_LEN bytes of query text into a stack buffer.
-    let mut buf = [0u8; QUERY_BUF_LEN];
-    let _ = bpf_probe_read_user_str_bytes(query_ptr as *const u8, &mut buf);
+    // Copy statement text straight into the ring-buffer slot: userspace needs
+    // it to resolve table names, and reading it here avoids a second stack
+    // buffer. The text is raw and may contain literals — userspace redacts it
+    // at decode time and never forwards it.
+    //
+    // Zero first: a failed read leaves the slot holding whatever the ring
+    // buffer last had there, which would ship stale bytes from another event.
+    (*event).query = [0u8; QUERY_BUF_LEN];
+    let _ = bpf_probe_read_user_str_bytes(query_ptr as *const u8, &mut (*event).query);
 
-    (*event).query_hash = fnv1a_hash(&buf);
-    (*event).query_class = classify_query(&buf);
+    // Borrow the slot rather than copying it — a by-value read would put a
+    // second QUERY_BUF_LEN buffer on the 512-byte verifier stack, which is the
+    // cost this in-place read exists to avoid.
+    let buf = &(*event).query;
+    (*event).query_hash = fnv1a_hash(buf);
+    (*event).query_class = classify_query(buf);
     (*event).db_port = default_port;
     (*event)._pad = 0;
 
