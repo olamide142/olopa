@@ -1,12 +1,39 @@
-//! SQL query uprobes — hooks on PQexec (libpq) and mysql_real_query (libmysqlclient).
-//!
-//! Both functions take a query string as their second argument (arg index 1):
-//!   PQexec(PGconn *conn, const char *query)
-//!   mysql_real_query(MYSQL *mysql, const char *stmt_str, unsigned long length)
+//! SQL query uprobes — hooks on the libpq and libmysqlclient entry points that
+//! carry statement text.
 //!
 //! Each uprobe fires on entry, reads the query string, computes an FNV-1a hash,
 //! classifies the statement type by leading keyword, and emits a SqlEvent to the
 //! shared ring buffer.
+//!
+//! There are two handlers, differing only in which argument holds the statement:
+//!
+//!   arg 1  PQexec(PGconn *, const char *query)
+//!          PQexecParams(PGconn *, const char *query, int nParams, ...)
+//!          mysql_real_query(MYSQL *, const char *stmt_str, unsigned long len)
+//!          mysql_stmt_prepare(MYSQL_STMT *, const char *stmt_str, unsigned long len)
+//!   arg 2  PQprepare(PGconn *, const char *stmtName, const char *query, ...)
+//!
+//! # Why the `PQsend*` family is deliberately not hooked
+//!
+//! libpq implements each synchronous call on top of its async twin — `PQexec`
+//! runs `PQsendQuery`, `PQexecParams` runs `PQsendQueryParams`. Those internal
+//! calls land on the same function entry a uprobe watches, so hooking both
+//! layers reports one application query twice and inflates every rate-based
+//! rule. Only the top-level API an application calls is hooked. The cost is
+//! that a caller using libpq's async API directly is not seen; that is the
+//! lesser error, because a missing event is visible while a doubled one is not.
+//!
+//! The same reasoning excludes `mysql_query`, which delegates to
+//! `mysql_real_query`.
+//!
+//! # Prepared statements
+//!
+//! `PQprepare` and `mysql_stmt_prepare` are hooked, so a prepared statement's
+//! tables are attributed at prepare time. The matching execute calls
+//! (`PQexecPrepared`, `mysql_stmt_execute`) carry only a statement name or
+//! handle, so they are not yet hooked: counting them needs prepare-time state
+//! keyed by that name. Table visibility is therefore correct for prepared
+//! statements while execution counts are not.
 //!
 //! Query classification (query_class):
 //!   0 = other / unknown
@@ -34,21 +61,28 @@ use crate::EVENTS;
 // 128 bytes captures enough of most queries while staying stack-friendly.
 const QUERY_BUF_LEN: usize = SQL_QUERY_LEN;
 
-/// Uprobe on libpq `PQexec`.
-/// Signature: PQexec(PGconn *conn, const char *query) -> PGresult *
+/// Uprobe for libpq entry points whose statement text is argument 1.
+/// Attached to `PQexec` and `PQexecParams`.
 #[uprobe]
 pub fn uprobe_pqexec(ctx: ProbeContext) -> u32 {
     unsafe { try_sql_query(&ctx, 1_usize, 5432) }
 }
 
-/// Uprobe on libmysqlclient `mysql_real_query`.
-/// Signature: mysql_real_query(MYSQL *mysql, const char *stmt_str, unsigned long length) -> int
+/// Uprobe for libpq `PQprepare`, whose statement text is argument 2 —
+/// argument 1 is the prepared statement's name.
+#[uprobe]
+pub fn uprobe_pqprepare(ctx: ProbeContext) -> u32 {
+    unsafe { try_sql_query(&ctx, 2_usize, 5432) }
+}
+
+/// Uprobe for libmysqlclient entry points whose statement text is argument 1.
+/// Attached to `mysql_real_query` and `mysql_stmt_prepare`.
 #[uprobe]
 pub fn uprobe_mysql_query(ctx: ProbeContext) -> u32 {
     unsafe { try_sql_query(&ctx, 1_usize, 3306) }
 }
 
-/// Common handler for both SQL client uprobes.
+/// Common handler for every SQL client uprobe.
 ///
 /// # Arguments
 /// * `query_arg` — zero-based index of the `const char *query` argument.

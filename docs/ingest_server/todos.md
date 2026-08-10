@@ -99,8 +99,9 @@ Not implemented yet:
 - advanced identity integration beyond static API tokens (for example mTLS identity binding, token rotation/revocation),
 - request size/rate limiting safeguards,
 - idempotency and duplicate suppression using `batch_id`,
-- prepared-statement lifecycle correlation (`prepare`/`bind`/`execute`), so table
-  access is attributable when the statement text is not at the execute site,
+- prepared-statement *execution* counts. Prepare is hooked, so tables are already
+  attributed; `PQexecPrepared`/`mysql_stmt_execute` carry only a name or handle,
+  so counting each execution needs prepare-time state keyed by that name,
 - durable pre-flush spool/WAL for crash recovery,
 - retry policy and circuit-breaker logic for ClickHouse,
 - Prometheus/OpenTelemetry metrics/traces,
