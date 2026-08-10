@@ -47,6 +47,7 @@ Implemented today:
   - `process_exec_events`
   - `file_events`
   - `net_events`
+  - `db_query_events` (schema version 2; optional for version 1 senders)
   - `agent_heartbeats`
 - `ack_batch` returns `AckResponse` with:
   - `accepted`
@@ -98,7 +99,6 @@ Not implemented yet:
 - advanced identity integration beyond static API tokens (for example mTLS identity binding, token rotation/revocation),
 - request size/rate limiting safeguards,
 - idempotency and duplicate suppression using `batch_id`,
-- SQL query event family ingestion (`db_query_events`) for uprobe-derived database telemetry,
 - durable pre-flush spool/WAL for crash recovery,
 - retry policy and circuit-breaker logic for ClickHouse,
 - Prometheus/OpenTelemetry metrics/traces,
@@ -180,6 +180,34 @@ Done criteria:
 
 - ingest accepts and stores DB query telemetry without breaking existing senders,
 - query-event rows are visible in `recent` and `summary` APIs.
+
+Current status:
+
+- steps 1, 3, and 4 are implemented; rows persist as `event_kind = "db_query"`
+  and appear in `recent`/`summary`,
+- the agent alert wire is at version 2, carrying statement hash, class, port,
+  and process name end to end (`agent/agent/src/agent.rs`),
+- step 2 is met: `db_engine`, `db_server`, `operation`, `statement_fingerprint`,
+  `database`, and `tables` are all populated. The uprobe now copies statement
+  text out (`SqlEvent::query`, 128 bytes), and the agent redacts it before
+  deriving anything from it (`agent/agent/src/sql_norm.rs`). Raw text never
+  leaves the decode scope, so no literal reaches ingest.
+
+Two properties of that path are worth keeping in mind when changing it:
+
+- `statement_fingerprint` is now the hash of the *redacted* statement, so the
+  same query shape groups regardless of its literal values. The raw-text hash
+  is retained as the `raw_statement_hash` attribute for continuity with rows
+  written before this change,
+- `database` is only reported when every qualified table reference in the
+  statement agrees on it. A cross-database join yields `null` rather than an
+  arbitrary pick,
+- prepared statements report one row per *execution*, not per prepare. The
+  agent records statement text at `PQprepare`/`mysql_stmt_prepare` and replays
+  it at execute time, so `tables` is populated even though the execute call
+  never carries SQL. An execute whose prepare was not observed still produces a
+  row, with `tables` empty and `statement_fingerprint` `"00000000"` — a zero
+  fingerprint is the explicit marker for "statement text unknown".
 
 #### Epic 1.1 Idempotency and Deduplication
 

@@ -81,6 +81,22 @@ export function toDisplayEvent(row: RecentRow): DisplayEvent {
     };
   }
 
+  if (row.event_kind === "db_query") {
+    const target = [ev.db_engine, ev.database].filter(Boolean).join("/") || "db";
+    const tables = Array.isArray(ev.tables) && ev.tables.length ? ` on ${ev.tables.join(", ")}` : "";
+    // DDL and admin statements are the ones worth surfacing by default.
+    const op = ev.operation || "query";
+    return {
+      ts,
+      host,
+      desc: `${ev.comm || "proc"} ${op} ${target}${tables}`.trim(),
+      sev: op === "ddl" || op === "admin" ? "high" : "med",
+      engine: engineFor(ev),
+      kind: "db_query",
+      rule: "",
+    };
+  }
+
   if (row.event_kind === "process_exec") {
     return {
       ts,

@@ -24,7 +24,7 @@ use aya_ebpf::{
     macros::tracepoint,
     programs::TracePointContext,
 };
-use olopa_common::NetEvent;
+use olopa_common::{EVENT_KIND_NET, NetEvent};
 
 use crate::EVENTS;
 
@@ -90,6 +90,7 @@ unsafe fn try_connect(ctx: &TracePointContext) -> u32 {
 
     let event = entry.as_mut_ptr();
 
+    (*event).kind = EVENT_KIND_NET;
     (*event).ts_ns = bpf_ktime_get_ns();
     // Keep network-byte-order values in the event payload.
     // Userspace is responsible for converting for display.

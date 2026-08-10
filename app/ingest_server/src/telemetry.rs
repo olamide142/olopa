@@ -44,6 +44,11 @@ pub struct IngestBatchRequest {
     /// Network telemetry events.
     #[serde(default)]
     pub net_events: Vec<NetEvent>,
+    /// Database query events derived from SQL client uprobes.
+    ///
+    /// Added in schema version 2; absent from version 1 senders.
+    #[serde(default)]
+    pub db_query_events: Vec<DbQueryEvent>,
     /// Agent heartbeat/health events.
     #[serde(default)]
     pub agent_heartbeats: Vec<AgentHeartbeat>,
@@ -55,6 +60,7 @@ impl IngestBatchRequest {
         self.process_exec_events.len()
             + self.file_events.len()
             + self.net_events.len()
+            + self.db_query_events.len()
             + self.agent_heartbeats.len()
     }
 }
@@ -146,6 +152,46 @@ pub struct NetEvent {
     pub attrs: HashMap<String, String>,
 }
 
+/// Database query event emitted by agent SQL uprobes.
+///
+/// Normalized shape so a query is attributable to a process without the caller
+/// having to understand engine-specific wire protocols. `database` and `tables`
+/// stay optional: the agent resolves them from redacted statement text, and a
+/// statement it cannot parse confidently omits them rather than guessing. They
+/// are also absent from senders predating statement capture.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DbQueryEvent {
+    /// Process id issuing the query.
+    pub pid: u32,
+    /// Thread-group id.
+    pub tgid: u32,
+    /// User id.
+    pub uid: u32,
+    /// Group id.
+    #[serde(default)]
+    pub gid: u32,
+    /// Process command/executable short name.
+    pub comm: String,
+    /// Engine label (`postgresql`/`mysql`/`unknown`).
+    pub db_engine: String,
+    /// Database endpoint as `host:port` when known.
+    #[serde(default)]
+    pub db_server: Option<String>,
+    /// Target database/schema name when resolvable.
+    #[serde(default)]
+    pub database: Option<String>,
+    /// Normalized operation (`select`/`dml`/`ddl`/`admin`/`other`).
+    pub operation: String,
+    /// Tables referenced by the statement when resolvable.
+    #[serde(default)]
+    pub tables: Vec<String>,
+    /// Stable statement hash; never contains literal values.
+    pub statement_fingerprint: String,
+    /// Arbitrary key/value attributes.
+    #[serde(default)]
+    pub attrs: HashMap<String, String>,
+}
+
 /// Agent health/heartbeat payload.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AgentHeartbeat {
@@ -211,7 +257,8 @@ pub struct RecentIngestRow {
     pub host_id: String,
     /// Original batch id if provided by sender.
     pub batch_id: Option<String>,
-    /// Event family label (`process_exec`, `file`, `net`, `agent_heartbeat`).
+    /// Event family label (`process_exec`, `file`, `net`, `db_query`,
+    /// `agent_heartbeat`).
     pub event_kind: String,
     /// Ingest timestamp generated during flush.
     pub ingested_at_unix_ms: u64,
@@ -944,6 +991,30 @@ fn build_persist_rows(
             });
         }
 
+        for event in &batch.payload.db_query_events {
+            let event_json = serde_json::to_value(event)?;
+            let line = serde_json::to_string(&json!({
+                "tenant_id": tenant_id,
+                "host_id": host_id,
+                "schema_version": schema_version,
+                "batch_id": batch_id,
+                "ingested_at_unix_ms": ingested_at_unix_ms,
+                "event_kind": "db_query",
+                "event": event,
+            }))?;
+            rows.push(PersistRow {
+                line,
+                recent: RecentIngestRow {
+                    tenant_id: tenant_id.to_string(),
+                    host_id: host_id.to_string(),
+                    batch_id: batch.payload.batch_id.clone(),
+                    event_kind: "db_query".to_string(),
+                    ingested_at_unix_ms,
+                    event: event_json,
+                },
+            });
+        }
+
         for event in &batch.payload.agent_heartbeats {
             let event_json = serde_json::to_value(event)?;
             let line = serde_json::to_string(&json!({
@@ -1046,6 +1117,7 @@ mod tests {
             }],
             file_events: Vec::new(),
             net_events: Vec::new(),
+            db_query_events: Vec::new(),
             agent_heartbeats: Vec::new(),
         }
     }
@@ -1141,6 +1213,7 @@ mod tests {
             dst_port: Some(443),
             attrs: HashMap::new(),
         });
+        batch.db_query_events.push(sample_db_query_event());
         batch.agent_heartbeats.push(AgentHeartbeat {
             agent_version: "v1".to_string(),
             kernel_version: "k".to_string(),
@@ -1156,11 +1229,82 @@ mod tests {
         }];
 
         let rows = build_persist_rows(&queued).expect("rows");
-        assert_eq!(rows.len(), 4);
+        assert_eq!(rows.len(), 5);
         assert_eq!(rows[0].recent.event_kind, "process_exec");
         assert_eq!(rows[1].recent.event_kind, "file");
         assert_eq!(rows[2].recent.event_kind, "net");
-        assert_eq!(rows[3].recent.event_kind, "agent_heartbeat");
+        assert_eq!(rows[3].recent.event_kind, "db_query");
+        assert_eq!(rows[4].recent.event_kind, "agent_heartbeat");
+
+        let db_row = &rows[3].recent.event;
+        assert_eq!(db_row["db_engine"], "postgresql");
+        assert_eq!(db_row["operation"], "select");
+        assert_eq!(db_row["statement_fingerprint"], "deadbeef");
+    }
+
+    fn sample_db_query_event() -> DbQueryEvent {
+        DbQueryEvent {
+            pid: 900,
+            tgid: 900,
+            uid: 1000,
+            gid: 1000,
+            comm: "psql".to_string(),
+            db_engine: "postgresql".to_string(),
+            db_server: Some("unknown:5432".to_string()),
+            database: None,
+            operation: "select".to_string(),
+            tables: Vec::new(),
+            statement_fingerprint: "deadbeef".to_string(),
+            attrs: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn db_query_events_are_optional_for_v1_senders() {
+        // A schema-version-1 payload has no `db_query_events` key at all.
+        let body = r#"{
+            "tenant_id": "acme",
+            "host_id": "host-01",
+            "schema_version": 1,
+            "process_exec_events": [
+                {"pid":1,"tgid":1,"uid":0,"comm":"bash","filename":"/bin/bash"}
+            ]
+        }"#;
+        let parsed: IngestBatchRequest = serde_json::from_str(body).expect("parse v1 batch");
+        assert!(parsed.db_query_events.is_empty());
+        assert_eq!(parsed.row_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn db_query_rows_reach_recent_and_summary_apis() {
+        let cfg = IngestConfig {
+            queue_maxsize: 8,
+            flush_interval_ms: 30,
+            flush_max_rows: 1000,
+            default_retry_after_ms: 500,
+            suggested_batch_bytes: 4_000_000,
+            recent_events_max: 16,
+            ..IngestConfig::default()
+        };
+        let runtime = Arc::new(IngestRuntime::new(cfg));
+        runtime.start_worker().await;
+
+        let mut batch = test_batch();
+        batch.process_exec_events.clear();
+        batch.db_query_events.push(sample_db_query_event());
+        assert!(runtime.ack_batch(batch).accepted);
+
+        tokio::time::sleep(Duration::from_millis(90)).await;
+
+        let recent = runtime.recent_rows(10).await;
+        assert_eq!(recent.returned, 1);
+        assert_eq!(recent.rows[0].event_kind, "db_query");
+        assert_eq!(recent.rows[0].event["comm"], "psql");
+
+        let summary = runtime.data_summary().await;
+        assert_eq!(summary.by_kind.get("db_query").copied(), Some(1));
+
+        runtime.shutdown().await;
     }
 
     #[test]

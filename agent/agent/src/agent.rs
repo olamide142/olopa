@@ -13,11 +13,15 @@ use anyhow::{Context, Result};
 use aya::{include_bytes_aligned, maps::RingBuf, Ebpf};
 use aya_log::EbpfLogger;
 use log::{debug, info, warn};
-use olopa_common::{DnsEvent, ExecEvent, FileEvent, NetEvent, SqlEvent, SslEvent};
+use olopa_common::{
+    DnsEvent, ExecEvent, FileEvent, NetEvent, SqlEvent, SslEvent, EVENT_KIND_DNS, EVENT_KIND_EXEC,
+    EVENT_KIND_FILE, EVENT_KIND_NET, EVENT_KIND_SQL, EVENT_KIND_SSL,
+};
 use serde::Serialize;
 use tokio::signal;
 
 use crate::budget_tracker::{BudgetTracker, BW, CPU, MEM};
+use crate::sql_norm::{self, SQL_TABLES_LEN};
 
 const DEFAULT_STATUS_PATH: &str = "/tmp/olopa/agent/status.json";
 const DEFAULT_CPU_BUDGET_PCT: f32 = 5.0;
@@ -39,16 +43,51 @@ pub struct IngestEvent {
     pub comm_id: u32,
     pub risk_score: f32,
     // SQL event fields (event_type == 4); zeroed for other event types.
-    pub sql_query_hash: u32,  // FNV-1a hash of query text
-    pub sql_query_class: u8,  // 0=other 1=select 2=dml 3=ddl 4=admin
-    pub sql_db_port: u16,     // 5432 or 3306
+    pub sql_query_hash: u32, // FNV-1a hash of raw query text
+    pub sql_query_class: u8, // 0=other 1=select 2=dml 3=ddl 4=admin
+    pub sql_db_port: u16,    // 5432 or 3306
+    // Derived at decode time from the redacted statement. Raw statement text
+    // is never retained here — see `sql_norm`.
+    pub sql_norm_hash: u32,               // FNV-1a over the redacted statement
+    pub sql_tables: [u8; SQL_TABLES_LEN], // NUL-terminated, comma-separated
     // SSL event fields (event_type == 5); zeroed for other event types.
-    pub ssl_data_len: u32,    // bytes processed in this EVP_Encrypt/DecryptUpdate call
-    pub ssl_operation: u8,    // 0=encrypt 1=decrypt
+    pub ssl_data_len: u32, // bytes processed in this EVP_Encrypt/DecryptUpdate call
+    pub ssl_operation: u8, // 0=encrypt 1=decrypt
     pub _pad_aux: [u8; 2],
     // DNS event fields (event_type == 6); zeroed for other event types.
-    pub dns_query_hash: u32,  // FNV-1a hash of queried hostname
-    pub dns_query: [u8; 64],  // NUL-terminated queried hostname
+    pub dns_query_hash: u32, // FNV-1a hash of queried hostname
+    pub dns_query: [u8; 64], // NUL-terminated queried hostname
+}
+
+// Hand-written because `[u8; 64]` has no std `Default` impl. Lets callers and
+// fixtures set only the fields their event family populates and leave the
+// rest zeroed, which is exactly the ring-buffer decoding contract.
+impl Default for IngestEvent {
+    fn default() -> Self {
+        Self {
+            ts_ns: 0,
+            pid: 0,
+            uid: 0,
+            event_type: 0,
+            vertex_id: 0,
+            dst_vertex_id: 0,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm: [0; 16],
+            comm_id: 0,
+            risk_score: 0.0,
+            sql_query_hash: 0,
+            sql_query_class: 0,
+            sql_db_port: 0,
+            sql_norm_hash: 0,
+            sql_tables: [0; SQL_TABLES_LEN],
+            ssl_data_len: 0,
+            ssl_operation: 0,
+            _pad_aux: [0; 2],
+            dns_query_hash: 0,
+            dns_query: [0; 64],
+        }
+    }
 }
 
 // Minimal sender state queried by housekeeping to decide spool replay behavior.
@@ -571,15 +610,34 @@ impl OlopaAgent {
         RE: RuleEngineLike,
         SN: SenderLike,
     {
-        use core::mem::size_of;
-
         // Drain all currently available ring items before returning.
         let mut stats = IngestLoopStats::default();
         while let Some(item) = ring.next() {
             let bytes: &[u8] = &item;
-            // Decode based on fixed struct byte lengths.
-            let event = if bytes.len() == size_of::<ExecEvent>() {
-                // SAFETY: ring item length is exactly ExecEvent size and layout
+
+            // Dispatch on the leading `kind` tag, never on payload length:
+            // event sizes are not unique (NetEvent/SqlEvent/SslEvent are all
+            // 48 bytes, ExecEvent/DnsEvent both 112), so a length-based chain
+            // silently decodes one family as another.
+            let Some(kind) = read_event_kind(bytes) else {
+                warn!("ringbuf item too short for kind tag: {} bytes", bytes.len());
+                continue;
+            };
+
+            // The length check keeps the pointer cast below sound.
+            let expected = expected_event_size(kind);
+            if expected != Some(bytes.len()) {
+                warn!(
+                    "ringbuf kind={} length mismatch: got {} bytes, expected {:?}; skipping",
+                    kind,
+                    bytes.len(),
+                    expected
+                );
+                continue;
+            }
+
+            let event = if kind == EVENT_KIND_EXEC {
+                // SAFETY: tag says ExecEvent and length matches its size; layout
                 // matches the shared `olopa_common` repr(C) type.
                 let raw = unsafe { &*(bytes.as_ptr() as *const ExecEvent) };
                 log_exec_ingest(raw);
@@ -598,14 +656,16 @@ impl OlopaAgent {
                     sql_query_hash: 0,
                     sql_query_class: 0,
                     sql_db_port: 0,
+                    sql_norm_hash: 0,
+                    sql_tables: [0; SQL_TABLES_LEN],
                     ssl_data_len: 0,
                     ssl_operation: 0,
                     _pad_aux: [0; 2],
                     dns_query_hash: 0,
                     dns_query: [0; 64],
                 }
-            } else if bytes.len() == size_of::<FileEvent>() {
-                // SAFETY: ring item length is exactly FileEvent size.
+            } else if kind == EVENT_KIND_FILE {
+                // SAFETY: tag says FileEvent and length matches its size.
                 let raw = unsafe { &*(bytes.as_ptr() as *const FileEvent) };
                 log_file_ingest(raw);
                 IngestEvent {
@@ -623,14 +683,16 @@ impl OlopaAgent {
                     sql_query_hash: 0,
                     sql_query_class: 0,
                     sql_db_port: 0,
+                    sql_norm_hash: 0,
+                    sql_tables: [0; SQL_TABLES_LEN],
                     ssl_data_len: 0,
                     ssl_operation: 0,
                     _pad_aux: [0; 2],
                     dns_query_hash: 0,
                     dns_query: [0; 64],
                 }
-            } else if bytes.len() == size_of::<NetEvent>() {
-                // SAFETY: ring item length is exactly NetEvent size.
+            } else if kind == EVENT_KIND_NET {
+                // SAFETY: tag says NetEvent and length matches its size.
                 let raw = unsafe { &*(bytes.as_ptr() as *const NetEvent) };
                 log_net_ingest(raw);
                 // Compact destination vertex key for network endpoint.
@@ -650,15 +712,26 @@ impl OlopaAgent {
                     sql_query_hash: 0,
                     sql_query_class: 0,
                     sql_db_port: 0,
+                    sql_norm_hash: 0,
+                    sql_tables: [0; SQL_TABLES_LEN],
                     ssl_data_len: 0,
                     ssl_operation: 0,
                     _pad_aux: [0; 2],
                     dns_query_hash: 0,
                     dns_query: [0; 64],
                 }
-            } else if bytes.len() == size_of::<SqlEvent>() {
-                // SAFETY: ring item length is exactly SqlEvent size.
+            } else if kind == EVENT_KIND_SQL {
+                // SAFETY: tag says SqlEvent and length matches its size.
                 let raw = unsafe { &*(bytes.as_ptr() as *const SqlEvent) };
+
+                // Redact before deriving anything, and let the raw statement
+                // die with this scope: it may hold passwords or PII, and
+                // nothing downstream is allowed to see it.
+                let redacted = sql_norm::redact_statement(cstr_to_str(&raw.query));
+                let tables = sql_norm::extract_tables(&redacted);
+                let sql_tables = sql_norm::pack_tables(&tables);
+                let sql_norm_hash = sql_norm::normalized_fingerprint(&redacted);
+
                 IngestEvent {
                     ts_ns: raw.ts_ns,
                     pid: raw.pid,
@@ -678,14 +751,16 @@ impl OlopaAgent {
                     sql_query_hash: raw.query_hash,
                     sql_query_class: raw.query_class,
                     sql_db_port: raw.db_port,
+                    sql_norm_hash,
+                    sql_tables,
                     ssl_data_len: 0,
                     ssl_operation: 0,
                     _pad_aux: [0; 2],
                     dns_query_hash: 0,
                     dns_query: [0; 64],
                 }
-            } else if bytes.len() == size_of::<SslEvent>() {
-                // SAFETY: ring item length is exactly SslEvent size.
+            } else if kind == EVENT_KIND_SSL {
+                // SAFETY: tag says SslEvent and length matches its size.
                 let raw = unsafe { &*(bytes.as_ptr() as *const SslEvent) };
                 IngestEvent {
                     ts_ns: raw.ts_ns,
@@ -704,14 +779,16 @@ impl OlopaAgent {
                     sql_query_hash: 0,
                     sql_query_class: 0,
                     sql_db_port: 0,
+                    sql_norm_hash: 0,
+                    sql_tables: [0; SQL_TABLES_LEN],
                     ssl_data_len: raw.data_len,
                     ssl_operation: raw.operation,
                     _pad_aux: [0; 2],
                     dns_query_hash: 0,
                     dns_query: [0; 64],
                 }
-            } else if bytes.len() == size_of::<DnsEvent>() {
-                // SAFETY: ring item length is exactly DnsEvent size.
+            } else if kind == EVENT_KIND_DNS {
+                // SAFETY: tag says DnsEvent and length matches its size.
                 let raw = unsafe { &*(bytes.as_ptr() as *const DnsEvent) };
                 IngestEvent {
                     ts_ns: raw.ts_ns,
@@ -731,6 +808,8 @@ impl OlopaAgent {
                     sql_query_hash: 0,
                     sql_query_class: 0,
                     sql_db_port: 0,
+                    sql_norm_hash: 0,
+                    sql_tables: [0; SQL_TABLES_LEN],
                     ssl_data_len: 0,
                     ssl_operation: 0,
                     _pad_aux: [0; 2],
@@ -738,11 +817,9 @@ impl OlopaAgent {
                     dns_query: raw.query,
                 }
             } else {
-                // Unknown payload size: skip for hot-path resilience.
-                warn!(
-                    "ringbuf unknown payload size={} bytes; skipping",
-                    bytes.len()
-                );
+                // Unreachable: `expected_event_size` already rejected any kind
+                // without a known layout. Kept for hot-path resilience.
+                warn!("ringbuf unknown event kind={}; skipping", kind);
                 continue;
             };
 
@@ -1015,26 +1092,74 @@ fn log_net_ingest(e: &NetEvent) {
     );
 }
 
+/// Read the leading `kind` tag from a ring-buffer item.
+///
+/// Returns `None` when the item is too short to carry a tag.
+fn read_event_kind(bytes: &[u8]) -> Option<u32> {
+    let head = bytes.get(..4)?;
+    Some(u32::from_ne_bytes(head.try_into().ok()?))
+}
+
+/// Expected payload length for a tagged event kind.
+///
+/// `None` marks a kind this build has no layout for, which is how forward
+/// compatibility works: a newer probe's events are skipped, not misparsed.
+fn expected_event_size(kind: u32) -> Option<usize> {
+    use core::mem::size_of;
+    match kind {
+        EVENT_KIND_EXEC => Some(size_of::<ExecEvent>()),
+        EVENT_KIND_FILE => Some(size_of::<FileEvent>()),
+        EVENT_KIND_NET => Some(size_of::<NetEvent>()),
+        EVENT_KIND_SQL => Some(size_of::<SqlEvent>()),
+        EVENT_KIND_SSL => Some(size_of::<SslEvent>()),
+        EVENT_KIND_DNS => Some(size_of::<DnsEvent>()),
+        _ => None,
+    }
+}
+
 fn cstr_to_str(buf: &[u8]) -> &str {
     let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
     core::str::from_utf8(&buf[..end]).unwrap_or("<invalid utf8>")
 }
 
 // Versioned binary alert payload encoding for incident fast-lane sends.
-// Layout (little-endian):
+//
+// Fixed header (little-endian), identical across v1 and v2:
 // [magic:4][version:u16][event_type:u8][reserved:u8]
 // [ts_ns:u64][pid:u32][uid:u32][vertex_id:u32][dst_vertex_id:u32][comm_id:u32][risk_score:f32]
 // [rule_id_len:u16][rule_name_len:u16][rule_id:utf8 bytes][rule_name:utf8 bytes]
+//
+// v2 appends a per-family extension block after `rule_name`, so SQL/TLS/DNS
+// probe detail survives the hop into the ingest sender instead of being
+// collapsed into `dst_vertex_id`:
+// [comm_len:u8][comm:utf8 bytes]
+// [sql_query_hash:u32][sql_query_class:u8][sql_db_port:u16]
+// [ssl_data_len:u32][ssl_operation:u8]
+// [dns_query_hash:u32][dns_query_len:u8][dns_query:utf8 bytes]
+// [sql_norm_hash:u32][sql_tables_len:u8][sql_tables:utf8 bytes]
+//
+// The extension is strictly additive: a v1 decoder reads the same header
+// offsets and stops at `rule_name`. Within the extension the trailing SQL
+// table block is itself optional, so a decoder that predates it stops after
+// `dns_query` and still gets every earlier field.
+//
+// `sql_tables` is derived from the *redacted* statement; raw statement text
+// is never encoded here.
 fn encode_alert_payload(event: &IngestEvent, matched_rule: &RuleMatch) -> Vec<u8> {
     const ALERT_MAGIC: [u8; 4] = *b"OLRT";
-    const ALERT_WIRE_VERSION: u16 = 1;
+    const ALERT_WIRE_VERSION: u16 = 2;
 
     let rule_id = matched_rule.rule_id.as_bytes();
     let rule_name = matched_rule.rule_name.as_bytes();
     let rule_id_len = rule_id.len().min(u16::MAX as usize);
     let rule_name_len = rule_name.len().min(u16::MAX as usize);
 
-    let mut out = Vec::with_capacity(40 + rule_id_len + rule_name_len);
+    let comm = cstr_to_str(&event.comm).as_bytes();
+    let comm_len = comm.len().min(u8::MAX as usize);
+    let dns_query = cstr_to_str(&event.dns_query).as_bytes();
+    let dns_query_len = dns_query.len().min(u8::MAX as usize);
+
+    let mut out = Vec::with_capacity(64 + rule_id_len + rule_name_len + comm_len + dns_query_len);
     out.extend_from_slice(&ALERT_MAGIC);
     out.extend_from_slice(&ALERT_WIRE_VERSION.to_le_bytes());
     out.push(event.event_type);
@@ -1050,6 +1175,24 @@ fn encode_alert_payload(event: &IngestEvent, matched_rule: &RuleMatch) -> Vec<u8
     out.extend_from_slice(&(rule_name_len as u16).to_le_bytes());
     out.extend_from_slice(&rule_id[..rule_id_len]);
     out.extend_from_slice(&rule_name[..rule_name_len]);
+
+    // v2 extension block.
+    out.push(comm_len as u8);
+    out.extend_from_slice(&comm[..comm_len]);
+    out.extend_from_slice(&event.sql_query_hash.to_le_bytes());
+    out.push(event.sql_query_class);
+    out.extend_from_slice(&event.sql_db_port.to_le_bytes());
+    out.extend_from_slice(&event.ssl_data_len.to_le_bytes());
+    out.push(event.ssl_operation);
+    out.extend_from_slice(&event.dns_query_hash.to_le_bytes());
+    out.push(dns_query_len as u8);
+    out.extend_from_slice(&dns_query[..dns_query_len]);
+
+    let sql_tables = cstr_to_str(&event.sql_tables).as_bytes();
+    let sql_tables_len = sql_tables.len().min(u8::MAX as usize);
+    out.extend_from_slice(&event.sql_norm_hash.to_le_bytes());
+    out.push(sql_tables_len as u8);
+    out.extend_from_slice(&sql_tables[..sql_tables_len]);
     out
 }
 
@@ -1106,6 +1249,12 @@ mod tests {
         risk_score: f32,
         rule_id: String,
         rule_name: String,
+        comm: String,
+        sql_query_hash: u32,
+        sql_query_class: u8,
+        sql_db_port: u16,
+        sql_tables: String,
+        dns_query: String,
     }
 
     fn decode_alert_payload(payload: &[u8]) -> DecodedAlertPayload {
@@ -1113,7 +1262,7 @@ mod tests {
         assert!(payload.len() >= 40, "payload too short");
         assert_eq!(&payload[0..4], MAGIC, "invalid alert magic");
         let version = u16::from_le_bytes([payload[4], payload[5]]);
-        assert_eq!(version, 1, "unsupported alert version");
+        assert_eq!(version, 2, "unsupported alert version");
 
         let event_type = payload[6];
         let ts_ns = u64::from_le_bytes(payload[8..16].try_into().expect("ts"));
@@ -1137,6 +1286,35 @@ mod tests {
         assert!(end_rule_name <= payload.len(), "invalid rule_name_len");
         let rule_name =
             String::from_utf8(payload[cursor..end_rule_name].to_vec()).expect("rule_name utf8");
+        cursor = end_rule_name;
+
+        // v2 extension block.
+        let comm_len = payload[cursor] as usize;
+        cursor += 1;
+        let comm = String::from_utf8(payload[cursor..cursor + comm_len].to_vec()).expect("comm");
+        cursor += comm_len;
+        let sql_query_hash =
+            u32::from_le_bytes(payload[cursor..cursor + 4].try_into().expect("sql hash"));
+        cursor += 4;
+        let sql_query_class = payload[cursor];
+        cursor += 1;
+        let sql_db_port =
+            u16::from_le_bytes(payload[cursor..cursor + 2].try_into().expect("db port"));
+        cursor += 2;
+        // ssl_data_len(4) + ssl_operation(1) + dns_query_hash(4)
+        cursor += 9;
+        let dns_query_len = payload[cursor] as usize;
+        cursor += 1;
+        let dns_query =
+            String::from_utf8(payload[cursor..cursor + dns_query_len].to_vec()).expect("dns query");
+        cursor += dns_query_len;
+
+        // Trailing SQL table block: norm hash + length-prefixed names.
+        cursor += 4;
+        let sql_tables_len = payload[cursor] as usize;
+        cursor += 1;
+        let sql_tables = String::from_utf8(payload[cursor..cursor + sql_tables_len].to_vec())
+            .expect("sql tables");
 
         DecodedAlertPayload {
             ts_ns,
@@ -1149,6 +1327,12 @@ mod tests {
             risk_score,
             rule_id,
             rule_name,
+            comm,
+            sql_query_hash,
+            sql_query_class,
+            sql_db_port,
+            sql_tables,
+            dns_query,
         }
     }
 
@@ -1189,6 +1373,8 @@ mod tests {
             sql_query_hash: 0,
             sql_query_class: 0,
             sql_db_port: 0,
+            sql_norm_hash: 0,
+            sql_tables: [0; SQL_TABLES_LEN],
             ssl_data_len: 0,
             ssl_operation: 0,
             _pad_aux: [0; 2],
@@ -1210,6 +1396,300 @@ mod tests {
         assert_eq!(decoded.dst_vertex_id, 1);
         assert_eq!(decoded.comm_id, 123);
         assert!((decoded.risk_score - 0.9).abs() < 0.0001);
+
+        let _ = fs::remove_file(path);
+    }
+
+    /// Every probe's event must dispatch to its own kind. Sizes are allowed to
+    /// collide and do, which is exactly why dispatch reads the tag rather than
+    /// the payload length.
+    #[test]
+    fn event_kinds_dispatch_independently_of_colliding_sizes() {
+        use core::mem::size_of;
+        use std::collections::HashSet;
+
+        let sizes = [
+            size_of::<ExecEvent>(),
+            size_of::<FileEvent>(),
+            size_of::<NetEvent>(),
+            size_of::<SqlEvent>(),
+            size_of::<SslEvent>(),
+            size_of::<DnsEvent>(),
+        ];
+        let distinct: HashSet<usize> = sizes.iter().copied().collect();
+        assert!(
+            distinct.len() < sizes.len(),
+            "sizes {sizes:?} are all distinct — if a future change keeps them \
+             unique that is fine, but nothing may start relying on it: \
+             dispatch must stay tag-based"
+        );
+
+        for (kind, size) in [
+            (EVENT_KIND_EXEC, size_of::<ExecEvent>()),
+            (EVENT_KIND_FILE, size_of::<FileEvent>()),
+            (EVENT_KIND_NET, size_of::<NetEvent>()),
+            (EVENT_KIND_SQL, size_of::<SqlEvent>()),
+            (EVENT_KIND_SSL, size_of::<SslEvent>()),
+            (EVENT_KIND_DNS, size_of::<DnsEvent>()),
+        ] {
+            assert_eq!(expected_event_size(kind), Some(size), "kind {kind}");
+        }
+
+        // Unknown kinds are skipped rather than parsed as a known layout.
+        assert_eq!(expected_event_size(9999), None);
+    }
+
+    #[test]
+    fn dns_event_bytes_decode_as_dns_not_file() {
+        // Regression: DnsEvent and ExecEvent share a size, and DnsEvent
+        // previously matched FileEvent's length in a size-based decoder, so
+        // DNS telemetry was parsed as file events.
+        let mut query = [0u8; 64];
+        query[..11].copy_from_slice(b"evil.c2.net");
+        let dns = DnsEvent {
+            kind: EVENT_KIND_DNS,
+            pid: 4242,
+            ts_ns: 99,
+            uid: 0,
+            query_hash: 0xabcd,
+            query_len: 11,
+            _pad: [0; 2],
+            comm: [0; 16],
+            query,
+        };
+
+        // SAFETY: reading a repr(C) POD as its own byte representation.
+        let bytes = unsafe {
+            core::slice::from_raw_parts(
+                &dns as *const DnsEvent as *const u8,
+                core::mem::size_of::<DnsEvent>(),
+            )
+        };
+
+        assert_eq!(read_event_kind(bytes), Some(EVENT_KIND_DNS));
+        assert_eq!(expected_event_size(EVENT_KIND_DNS), Some(bytes.len()));
+        assert_ne!(read_event_kind(bytes), Some(EVENT_KIND_FILE));
+    }
+
+    #[test]
+    fn sql_alert_payload_carries_query_detail_through_wire() {
+        let path = temp_runtime_ir_path();
+        // Rule addresses the SQL field family directly, proving uprobe-derived
+        // DDL is both matchable and preserved across the alert encoding.
+        let json = r#"{
+  "version": 1,
+  "rules": [
+    {
+      "id": "rule:0:sql_ddl",
+      "name": "sql_ddl",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "sql.query_class" },
+          "rhs": { "op": "int", "value": 3 }
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+        let mut comm = [0u8; 16];
+        comm[..4].copy_from_slice(b"psql");
+
+        let event = IngestEvent {
+            ts_ns: 500,
+            pid: 900,
+            uid: 1000,
+            event_type: 4,
+            vertex_id: 900,
+            dst_vertex_id: 0xdead_beef,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm,
+            comm_id: 55,
+            risk_score: 0.85,
+            sql_query_hash: 0xdead_beef,
+            sql_query_class: 3,
+            sql_db_port: 5432,
+            sql_norm_hash: 0,
+            sql_tables: [0; SQL_TABLES_LEN],
+            ssl_data_len: 0,
+            ssl_operation: 0,
+            _pad_aux: [0; 2],
+            dns_query_hash: 0,
+            dns_query: [0; 64],
+        };
+
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1, "sql.query_class rule should match");
+
+        let payload = encode_alert_payload(&event, &matches[0]);
+        let decoded = decode_alert_payload(&payload);
+        assert_eq!(decoded.event_type, 4);
+        assert_eq!(decoded.comm, "psql");
+        assert_eq!(decoded.sql_query_hash, 0xdead_beef);
+        assert_eq!(decoded.sql_query_class, 3);
+        assert_eq!(decoded.sql_db_port, 5432);
+
+        // The same payload must land in the db_query family on the wire.
+        let batches = payload_to_batches_for_tests(&payload, "acme", "host-01");
+        assert_eq!(batches.len(), 1);
+        let db_events = batches[0]["db_query_events"]
+            .as_array()
+            .expect("db_query_events array");
+        assert_eq!(db_events.len(), 1);
+        assert_eq!(db_events[0]["db_engine"], "postgresql");
+        assert_eq!(db_events[0]["operation"], "ddl");
+        assert_eq!(db_events[0]["statement_fingerprint"], "deadbeef");
+        assert_eq!(db_events[0]["comm"], "psql");
+        assert_eq!(db_events[0]["pid"], 900);
+        assert!(batches[0]["process_exec_events"]
+            .as_array()
+            .expect("process array")
+            .is_empty());
+
+        let _ = fs::remove_file(path);
+    }
+
+    /// Full path for a real statement: kernel buffer -> redaction -> table
+    /// extraction -> alert wire -> db_query_events. The literal must not
+    /// appear anywhere in the outbound payload.
+    #[test]
+    fn sql_statement_yields_tables_without_leaking_literals() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "rules": [
+    {
+      "id": "rule:0:any_sql",
+      "name": "any_sql",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "event.event_type" },
+          "rhs": { "op": "int", "value": 4 }
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+
+        let statement = "SELECT * FROM finance.ledger WHERE ssn = '123-45-6789'";
+        let redacted = crate::sql_norm::redact_statement(statement);
+        let tables = crate::sql_norm::extract_tables(&redacted);
+
+        let mut comm = [0u8; 16];
+        comm[..4].copy_from_slice(b"psql");
+        let event = IngestEvent {
+            ts_ns: 10,
+            pid: 900,
+            uid: 1000,
+            event_type: 4,
+            vertex_id: 900,
+            comm,
+            comm_id: 55,
+            risk_score: 0.4,
+            sql_query_hash: 0x1111_1111,
+            sql_query_class: 1,
+            sql_db_port: 5432,
+            sql_norm_hash: crate::sql_norm::normalized_fingerprint(&redacted),
+            sql_tables: crate::sql_norm::pack_tables(&tables),
+            ..Default::default()
+        };
+
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        let payload = encode_alert_payload(&event, &matches[0]);
+
+        let decoded = decode_alert_payload(&payload);
+        assert_eq!(decoded.sql_tables, "finance.ledger");
+
+        let batches = payload_to_batches_for_tests(&payload, "acme", "host-01");
+        let db = &batches[0]["db_query_events"][0];
+        assert_eq!(db["database"], "finance");
+        assert_eq!(db["tables"][0], "ledger");
+        assert_eq!(db["operation"], "select");
+        assert_eq!(db["db_engine"], "postgresql");
+
+        // The SSN must not survive anywhere in the serialized batch.
+        let serialized = serde_json::to_string(&batches[0]).expect("serialize");
+        assert!(
+            !serialized.contains("123-45-6789"),
+            "literal leaked into outbound payload: {serialized}"
+        );
+        assert!(!serialized.contains("ssn = '"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn dns_alert_payload_maps_to_net_family_with_query_name() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "rules": [
+    {
+      "id": "rule:0:any_dns",
+      "name": "any_dns",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "event.event_type" },
+          "rhs": { "op": "int", "value": 6 }
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+        let mut dns_query = [0u8; 64];
+        dns_query[..11].copy_from_slice(b"evil.c2.net");
+        let mut comm = [0u8; 16];
+        comm[..4].copy_from_slice(b"curl");
+
+        let event = IngestEvent {
+            ts_ns: 700,
+            pid: 1200,
+            uid: 0,
+            event_type: 6,
+            vertex_id: 1200,
+            dst_vertex_id: 7,
+            net_dst_ip: 0,
+            net_dst_port: 0,
+            comm,
+            comm_id: 12,
+            risk_score: 0.7,
+            sql_query_hash: 0,
+            sql_query_class: 0,
+            sql_db_port: 0,
+            sql_norm_hash: 0,
+            sql_tables: [0; SQL_TABLES_LEN],
+            ssl_data_len: 0,
+            ssl_operation: 0,
+            _pad_aux: [0; 2],
+            dns_query_hash: 7,
+            dns_query,
+        };
+
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+
+        let payload = encode_alert_payload(&event, &matches[0]);
+        assert_eq!(decode_alert_payload(&payload).dns_query, "evil.c2.net");
+
+        let batches = payload_to_batches_for_tests(&payload, "acme", "host-01");
+        let net_events = batches[0]["net_events"].as_array().expect("net array");
+        assert_eq!(net_events.len(), 1);
+        assert_eq!(net_events[0]["protocol"], "dns");
+        assert_eq!(net_events[0]["dst_port"], 53);
+        assert_eq!(net_events[0]["attrs"]["dns_query"], "evil.c2.net");
+        assert_eq!(net_events[0]["comm"], "curl");
 
         let _ = fs::remove_file(path);
     }
@@ -1315,6 +1795,8 @@ mod tests {
             sql_query_hash: 0,
             sql_query_class: 0,
             sql_db_port: 0,
+            sql_norm_hash: 0,
+            sql_tables: [0; SQL_TABLES_LEN],
             ssl_data_len: 0,
             ssl_operation: 0,
             _pad_aux: [0; 2],
@@ -1418,6 +1900,8 @@ rule "critical_pid_4242" {
             sql_query_hash: 0,
             sql_query_class: 0,
             sql_db_port: 0,
+            sql_norm_hash: 0,
+            sql_tables: [0; SQL_TABLES_LEN],
             ssl_data_len: 0,
             ssl_operation: 0,
             _pad_aux: [0; 2],
@@ -1575,6 +2059,8 @@ rule "critical_pid_4242" {
             sql_query_hash: 0,
             sql_query_class: 0,
             sql_db_port: 0,
+            sql_norm_hash: 0,
+            sql_tables: [0; SQL_TABLES_LEN],
             ssl_data_len: 0,
             ssl_operation: 0,
             _pad_aux: [0; 2],

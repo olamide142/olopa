@@ -56,11 +56,18 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
   - Propagate cgroup fields through agent wire payloads to ingest storage.
   - Extend runtime field resolution so rules can reference cgroup-scoped context.
   - Add cgroup-targeted policy controls (allow/deny/rate limit) and tests for container workloads.
-- [ ] Add SQL query visibility via uprobes for process->table attribution.
-  - Attach uprobes/uretprobes to common SQL client/server symbols (starting with `libpq` and MySQL client APIs).
-  - Emit normalized DB query events carrying process identity, db target, statement fingerprint, operation kind, and resolved table list.
-  - Correlate prepared statement lifecycle (`prepare`/`bind`/`execute`) so table access is visible even when literals are omitted.
-  - Add query text redaction/tokenization safeguards to avoid storing sensitive literal values.
+- [x] Add SQL query visibility via uprobes for process->table attribution.
+  - Done: uprobes attached to `libpq` and MySQL client libraries with multi-distro library discovery (`agent/agent/src/probe_manager.rs`).
+  - Done: normalized `db_query_events` family carries process identity, db engine/port, statement fingerprint, and operation kind end to end (agent -> ingest -> `recent`/`summary`).
+  - Done: alert wire version 2 preserves SQL/TLS/DNS detail across the sender hop instead of collapsing it into `dst_vertex_id`.
+  - Done: statement text is captured (`SqlEvent::query`) and redacted before use, so `database` and `tables` resolve without storing literal values (`agent/agent/src/sql_norm.rs`). Redaction runs first and the raw buffer dies at decode scope; `statement_fingerprint` now hashes the redacted form so a query shape groups across differing literals.
+  - Done: hooked every client entry point that carries statement text — `PQexec`, `PQexecParams`, `mysql_real_query`. Previously only `PQexec` and `mysql_real_query` were hooked, so an application issuing parameterized queries produced no SQL telemetry at all.
+  - Done: prepared statement lifecycle. `PQprepare`/`mysql_stmt_prepare` record statement text into the `PREPARED_STATEMENTS` LRU map without emitting; `PQexecPrepared`/`mysql_stmt_execute` emit an event carrying the recorded text. Each execution is counted once and attributed to its tables, and bound literal values are never seen at all. Records are keyed by connection handle plus name, since a statement name is scoped to a connection.
+  - Known limits, all deliberate:
+    - An execute whose prepare was missed (agent started after a connection pool prepared its statements, or an LRU eviction under >8192 live statements) still emits, with no text and no tables. Dropping it would hide real database activity.
+    - libpq's async API (`PQsendQuery` and friends) is unhooked, because those are the internals of the `PQexec*` family and hooking both would double-count. A caller using the async API directly is not seen.
+    - Statement capture truncates at 128 bytes, so a table named past that point is missed. Revisit if truncation shows up in practice.
+    - The kernel-side prepared-statement path has not been exercised against a live verifier or a real database; it compiles and the programs and map are present in the object, but attach and load need a host with the client libraries and root.
 - [x] Implement TC egress policy enforcement path (beyond pass-through).
   - Added kernel-side TC policy enforcement map (`TC_EGRESS_POLICY`) in `agent/ebpf/src/tc.rs`.
   - TC program now parses IPv4+TCP/UDP egress tuple and returns `TC_ACT_SHOT` on deny policy match.
@@ -86,7 +93,9 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
 - [ ] Add end-to-end integration tests: `oilc -> runtime-ir artifact -> agent eval -> server ingest`.
   - Progress: added `agent::tests::e2e_rule_to_runtime_to_sender_to_ingest_runtime` to validate `oilc` compilation, runtime-ir evaluation, alert payload conversion via HTTP sender logic, and ingest API contract (`/api/v1/ingest/batches` + `/api/v1/ingest/recent`).
   - Note: test is `#[ignore]` by default because it requires local TCP bind + external ingest server process spawn (not available in restricted sandboxes).
-- [ ] Add CI workflows for deterministic checks/tests across `oilc`, `agent`, and `app/server`.
+- [x] Add CI workflows for deterministic checks/tests across `oilc`, `agent`, and `app/server`.
+  - `.github/workflows/ci.yml` runs `oilc`, `agent`, and ingest-server suites plus the gated `e2e-runtime-to-ingest` job.
+  - Follow-up: add lint/format gates and a load/perf smoke job.
 - [ ] Add observability surface: metrics/traces/log correlation across compiler, agent, server.
 
 ## P4 - Platform Targets (Roadmap Features)
@@ -94,6 +103,7 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
 - [ ] Integrate Memgraph-trigger execution path where required by graph rules.
 - [ ] Add rule package/version lifecycle (load, reload, rollback) with compatibility checks.
 - [ ] Add SQL semantic policy support (example: block process X from reading table `finance` on DB Y).
-  - Extend OIL/runtime field model with DB entities (`db.query`, `db.table`, `db.operation`, `db.server`).
+  - Progress: runtime field model already resolves `sql.query_hash`, `sql.query_class`, and `sql.db_port`, so rules can match uprobe-derived SQL today.
+  - Remaining: extend the field model with table-level entities (`db.query`, `db.table`, `db.operation`, `db.server`) once statement capture lands.
   - Add policy evaluation mode transitions: observe -> enforce for staged rollout safety.
   - Define enforcement strategy per engine path (client-library fail-close hook, DB proxy, or native DB plugin) with deterministic rollback.

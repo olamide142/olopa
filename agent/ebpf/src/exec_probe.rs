@@ -16,7 +16,7 @@ use aya_ebpf::{
     maps::HashMap,
     programs::TracePointContext,
 };
-use olopa_common::ExecEvent;
+use olopa_common::{EVENT_KIND_EXEC, ExecEvent};
 
 use crate::EVENTS;
 
@@ -75,6 +75,7 @@ unsafe fn try_execve(ctx: &TracePointContext, filename_ptr_offset: usize) -> u32
 
     let event = entry.as_mut_ptr();
 
+    (*event).kind = EVENT_KIND_EXEC;
     (*event).ts_ns = bpf_ktime_get_ns();
 
     let pid_tgid = bpf_get_current_pid_tgid();

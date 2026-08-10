@@ -28,7 +28,7 @@ pub enum ProbeSelection {
     Net,
     Xdp,
     Tc,
-    /// Uprobes on libpq (PQexec) and libmysqlclient (mysql_real_query).
+    /// Uprobes on the libpq and libmysqlclient entry points carrying statement text.
     Sql,
     /// Uprobes on libssl (EVP_EncryptUpdate / EVP_DecryptUpdate).
     Ssl,
@@ -58,6 +58,36 @@ pub enum ProbeKind {
     /// Uprobe on libc getaddrinfo (DNS resolution entry point).
     DnsUprobe,
 }
+
+/// SQL client entry points to hook, grouped by the eBPF program that reads the
+/// argument position holding statement text.
+///
+/// Grouping is not cosmetic: `PQprepare` takes the statement name first and the
+/// text second, so it needs a handler reading argument 2, while everything on
+/// `uprobe_pqexec` carries text at argument 1. Adding a symbol under the wrong
+/// program makes the probe read the wrong pointer.
+///
+/// Only entry points an application calls directly belong here. libpq builds
+/// `PQexec` on `PQsendQuery` and `PQexecParams` on `PQsendQueryParams`, and
+/// those internal calls land on the same entry a uprobe watches — listing the
+/// `PQsend*` family too would report one query twice. `mysql_query` is excluded
+/// for the same reason: it delegates to `mysql_real_query`.
+/// Prepared statements are split across a pair: the prepare records the text
+/// and the execute reports the query, so both halves must attach for a
+/// prepared workload to be visible.
+const LIBPQ_SQL_UPROBES: &[(&str, &[&str])] = &[
+    ("uprobe_pqexec", &["PQexec", "PQexecParams"]),
+    ("uprobe_pqprepare", &["PQprepare"]),
+    ("uprobe_pqexecprepared", &["PQexecPrepared"]),
+];
+
+/// MySQL client entry points, in the same three roles as libpq's: direct
+/// query, prepare, execute.
+const LIBMYSQL_SQL_UPROBES: &[(&str, &[&str])] = &[
+    ("uprobe_mysql_query", &["mysql_real_query"]),
+    ("uprobe_mysql_stmt_prepare", &["mysql_stmt_prepare"]),
+    ("uprobe_mysql_stmt_execute", &["mysql_stmt_execute"]),
+];
 
 /// Probe manager state.
 ///
@@ -199,24 +229,27 @@ impl ProbeManager {
         ];
 
         if let Some(lib) = find_lib(LIBPQ_CANDIDATES) {
-            match self.attach_uprobe(bpf, "uprobe_pqexec", &lib, "PQexec", None) {
-                Ok(()) => self.record(ProbeKind::SqlUprobe, &format!("pqexec:{lib}")),
-                Err(e) => warn!("skipping PQexec uprobe on {lib}: {e}"),
-            }
+            self.attach_sql_uprobe_table(bpf, LIBPQ_SQL_UPROBES, &lib);
         } else {
             warn!("libpq not found on this host — SQL/PostgreSQL uprobes skipped");
         }
 
         if let Some(lib) = find_lib(LIBMYSQL_CANDIDATES) {
-            match self.attach_uprobe(bpf, "uprobe_mysql_query", &lib, "mysql_real_query", None) {
-                Ok(()) => self.record(ProbeKind::SqlUprobe, &format!("mysql_real_query:{lib}")),
-                Err(e) => warn!("skipping mysql_real_query uprobe on {lib}: {e}"),
-            }
+            self.attach_sql_uprobe_table(bpf, LIBMYSQL_SQL_UPROBES, &lib);
         } else {
             warn!("libmysqlclient not found on this host — SQL/MySQL uprobes skipped");
         }
 
         Ok(())
+    }
+
+    /// Attach every `(program, symbols)` pair in a table to one library.
+    fn attach_sql_uprobe_table(&mut self, bpf: &mut Ebpf, table: &[(&str, &[&str])], lib: &str) {
+        for (program, symbols) in table {
+            for sym in self.attach_uprobe_symbols(bpf, program, lib, symbols, None) {
+                self.record(ProbeKind::SqlUprobe, &format!("{sym}:{lib}"));
+            }
+        }
     }
 
     /// Attach SSL uprobes on libssl (EVP_EncryptUpdate + EVP_DecryptUpdate).
@@ -240,12 +273,24 @@ impl ProbeManager {
             }
         };
 
-        match self.attach_uprobe(bpf, "uprobe_evp_encrypt_update", &lib, "EVP_EncryptUpdate", None) {
+        match self.attach_uprobe(
+            bpf,
+            "uprobe_evp_encrypt_update",
+            &lib,
+            "EVP_EncryptUpdate",
+            None,
+        ) {
             Ok(()) => self.record(ProbeKind::SslUprobe, &format!("EVP_EncryptUpdate:{lib}")),
             Err(e) => warn!("skipping EVP_EncryptUpdate uprobe on {lib}: {e}"),
         }
 
-        match self.attach_uprobe(bpf, "uprobe_evp_decrypt_update", &lib, "EVP_DecryptUpdate", None) {
+        match self.attach_uprobe(
+            bpf,
+            "uprobe_evp_decrypt_update",
+            &lib,
+            "EVP_DecryptUpdate",
+            None,
+        ) {
             Ok(()) => self.record(ProbeKind::SslUprobe, &format!("EVP_DecryptUpdate:{lib}")),
             Err(e) => warn!("skipping EVP_DecryptUpdate uprobe on {lib}: {e}"),
         }
@@ -284,6 +329,55 @@ impl ProbeManager {
         }
 
         Ok(())
+    }
+
+    /// Attach one uprobe program to several symbols in the same library,
+    /// returning the symbols that attached.
+    ///
+    /// A program is loaded into the kernel once and can then be attached to
+    /// many places, which is what lets a single handler cover every entry
+    /// point that passes statement text in the same argument position.
+    ///
+    /// A missing symbol is warned past rather than fatal: client libraries
+    /// vary by version and vendor (MariaDB's libmysqlclient does not expose
+    /// everything MySQL's does), and losing one entry point should not cost
+    /// the others.
+    fn attach_uprobe_symbols(
+        &mut self,
+        bpf: &mut Ebpf,
+        fn_name: &str,
+        lib: &str,
+        syms: &[&str],
+        pid: Option<i32>,
+    ) -> Vec<String> {
+        let prog: &mut UProbe = match bpf
+            .program_mut(fn_name)
+            .with_context(|| format!("uprobe program '{fn_name}' not found in eBPF object"))
+            .and_then(|p| p.try_into().map_err(Into::into))
+        {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("skipping uprobe program '{fn_name}': {e}");
+                return Vec::new();
+            }
+        };
+
+        if let Err(e) = prog.load() {
+            warn!("failed to load uprobe '{fn_name}': {e}");
+            return Vec::new();
+        }
+
+        let mut attached = Vec::new();
+        for sym in syms {
+            match prog.attach(Some(*sym), 0, lib, pid) {
+                Ok(_) => {
+                    info!("uprobe attached: {fn_name} -> {lib}:{sym}");
+                    attached.push((*sym).to_string());
+                }
+                Err(e) => warn!("skipping {sym} uprobe on {lib}: {e}"),
+            }
+        }
+        attached
     }
 
     /// Attach a userspace probe (uprobe) to a symbol in a shared library.
@@ -464,4 +558,109 @@ fn find_lib(candidates: &[&str]) -> Option<String> {
 fn cstr_to_str(buf: &[u8]) -> &str {
     let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
     core::str::from_utf8(&buf[..end]).unwrap_or("<invalid utf8>")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every program named in the attach tables must exist in the eBPF object.
+    ///
+    /// A typo or a rename on the kernel side is otherwise invisible here: the
+    /// lookup fails at attach time and only warns, on a host that happens to
+    /// have the client library installed. This turns that into a build failure.
+    #[test]
+    fn every_sql_uprobe_program_exists_in_the_compiled_ebpf_object() {
+        // The same object `OlopaAgent` embeds and loads at runtime.
+        const EBPF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/olopa-ebpf-bin"));
+
+        for (program, _) in LIBPQ_SQL_UPROBES.iter().chain(LIBMYSQL_SQL_UPROBES) {
+            let needle = program.as_bytes();
+            assert!(
+                EBPF.windows(needle.len()).any(|w| w == needle),
+                "no program named '{program}' in the eBPF object — attaching it would only warn"
+            );
+        }
+    }
+
+    /// Prepared statements need both halves of the pair: the prepare records
+    /// the statement text and the execute is what reports the query. Attaching
+    /// only one makes a prepared workload either invisible or textless.
+    #[test]
+    fn prepared_statement_probes_come_in_prepare_and_execute_pairs() {
+        const PAIRS: &[(&str, &str)] = &[
+            ("PQprepare", "PQexecPrepared"),
+            ("mysql_stmt_prepare", "mysql_stmt_execute"),
+        ];
+
+        let hooked: HashSet<&str> = LIBPQ_SQL_UPROBES
+            .iter()
+            .chain(LIBMYSQL_SQL_UPROBES)
+            .flat_map(|(_, symbols)| symbols.iter().copied())
+            .collect();
+
+        for (prepare, execute) in PAIRS {
+            assert_eq!(
+                hooked.contains(prepare),
+                hooked.contains(execute),
+                "{prepare}/{execute} must be hooked together: the prepare records \
+                 the statement text and the execute is what reports the query"
+            );
+        }
+    }
+
+    /// One application call must produce one SQL event. Listing a symbol under
+    /// two handlers attaches two probes to the same entry point, so every query
+    /// through it reports twice and inflates any rate-based rule — a corruption
+    /// that looks like real traffic rather than like a bug.
+    #[test]
+    fn no_sql_symbol_is_hooked_by_more_than_one_program() {
+        let mut seen: HashSet<&str> = HashSet::new();
+
+        for (_, symbols) in LIBPQ_SQL_UPROBES.iter().chain(LIBMYSQL_SQL_UPROBES) {
+            for sym in *symbols {
+                assert!(
+                    seen.insert(sym),
+                    "{sym} is hooked by two programs — one call would emit two events"
+                );
+            }
+        }
+    }
+
+    /// libpq implements the synchronous API on top of the async one, so a
+    /// `PQsend*` hook fires again for a query already counted at `PQexec*`.
+    /// `mysql_query` delegates to `mysql_real_query` the same way.
+    #[test]
+    fn sql_uprobes_avoid_entry_points_that_delegate_to_hooked_ones() {
+        for (_, symbols) in LIBPQ_SQL_UPROBES.iter().chain(LIBMYSQL_SQL_UPROBES) {
+            for sym in *symbols {
+                assert!(
+                    !sym.starts_with("PQsend"),
+                    "{sym} is reached from the PQexec* family and would double-count"
+                );
+                assert_ne!(
+                    *sym, "mysql_query",
+                    "mysql_query delegates to mysql_real_query and would double-count"
+                );
+            }
+        }
+    }
+
+    /// `PQprepare` takes the statement *name* at argument 1 and the text at
+    /// argument 2, so it must not ride the argument-1 handler — doing so would
+    /// capture statement names as though they were SQL.
+    #[test]
+    fn pqprepare_uses_its_own_argument_position_handler() {
+        let arg1_symbols: Vec<&str> = LIBPQ_SQL_UPROBES
+            .iter()
+            .filter(|(program, _)| *program == "uprobe_pqexec")
+            .flat_map(|(_, symbols)| symbols.iter().copied())
+            .collect();
+
+        assert!(
+            !arg1_symbols.contains(&"PQprepare"),
+            "PQprepare's statement text is at argument 2, not 1"
+        );
+        assert!(arg1_symbols.contains(&"PQexecParams"));
+    }
 }

@@ -10,8 +10,12 @@
 //!   on_openat               — tracepoint: file open
 //!   on_openat2              — tracepoint: file open via openat2
 //!   on_connect              — tracepoint: outbound network connect
-//!   uprobe_pqexec           — uprobe: libpq PQexec (PostgreSQL queries)
+//!   uprobe_pqexec           — uprobe: libpq PQexec / PQexecParams
+//!   uprobe_pqprepare        — uprobe: libpq PQprepare (records text, no event)
+//!   uprobe_pqexecprepared   — uprobe: libpq PQexecPrepared (replays recorded text)
 //!   uprobe_mysql_query      — uprobe: libmysqlclient mysql_real_query
+//!   uprobe_mysql_stmt_prepare — uprobe: mysql_stmt_prepare (records text, no event)
+//!   uprobe_mysql_stmt_execute — uprobe: mysql_stmt_execute (replays recorded text)
 //!   uprobe_evp_encrypt_update — uprobe: libssl EVP_EncryptUpdate
 //!   uprobe_evp_decrypt_update — uprobe: libssl EVP_DecryptUpdate
 //!   uprobe_getaddrinfo      — uprobe: libc getaddrinfo (DNS resolution)
