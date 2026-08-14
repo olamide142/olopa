@@ -2,13 +2,14 @@ use anyhow::Result;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
+use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
-use crate::agent::{SenderLike, SenderStats};
+use crate::agent::{SenderLike, SenderStats, TelemetryWireEvent};
 use crate::data::batcher_compressor::{BatchParser, DictDecompressor};
 
 const ALERT_MAGIC: &[u8; 4] = b"OLRT";
@@ -143,12 +144,8 @@ struct NetEvent {
 }
 
 /// Normalized database query event derived from SQL client uprobes.
-///
-/// The uprobe (`agent/ebpf/src/sql_probe.rs`) hashes the statement text in
-/// kernel space rather than copying it out, so `database` and `tables` are not
-/// resolvable yet — populating them needs the statement-capture/normalization
-/// work tracked as Epic 1.0 step 2. They serialize as `null`/`[]` until then,
-/// keeping the field contract stable for consumers.
+/// Statement text is redacted before this boundary; only its fingerprint and
+/// derived database/table names are serialized.
 #[derive(Debug, Clone, Serialize)]
 struct DbQueryEvent {
     pid: u32,
@@ -570,6 +567,19 @@ fn append_line_to_batch(batch: &mut IngestBatchRequest, line: &str) {
         return;
     }
 
+    if let Some(encoded) = line.strip_prefix("event_v2 ") {
+        match serde_json::from_str::<TelemetryWireEvent>(encoded) {
+            Ok(event) if event.wire_version == 2 => append_telemetry_event(batch, &event),
+            Ok(event) => append_unknown_payload_heartbeat(
+                batch,
+                &format!("unsupported_event_wire_v{}", event.wire_version),
+                line.len(),
+            ),
+            Err(_) => append_unknown_payload_heartbeat(batch, "invalid_event_v2", line.len()),
+        }
+        return;
+    }
+
     if line.starts_with("evt ") {
         append_evt_line(batch, line);
         return;
@@ -591,6 +601,136 @@ fn append_line_to_batch(batch: &mut IngestBatchRequest, line: &str) {
         queue_depth: 0,
         attrs,
     });
+}
+
+fn append_telemetry_event(batch: &mut IngestBatchRequest, event: &TelemetryWireEvent) {
+    let mut attrs = HashMap::new();
+    attrs.insert("ts_ns".to_string(), event.ts_ns.to_string());
+    attrs.insert("risk_score".to_string(), format!("{:.6}", event.risk_score));
+    attrs.insert("vertex_id".to_string(), event.vertex_id.to_string());
+    attrs.insert("dst_vertex_id".to_string(), event.dst_vertex_id.to_string());
+    attrs.insert("comm_id".to_string(), event.comm_id.to_string());
+    attrs.insert("event_type".to_string(), event.event_type.to_string());
+    attrs.insert("wire".to_string(), "event_v2".to_string());
+
+    match event.event_type {
+        EVENT_TYPE_FILE => batch.file_events.push(FileEvent {
+            pid: event.pid,
+            tgid: event.pid,
+            uid: event.uid,
+            gid: 0,
+            comm: event.comm.clone(),
+            operation: "observed".to_string(),
+            path: format!("vertex:{}->{}", event.vertex_id, event.dst_vertex_id),
+            attrs,
+        }),
+        EVENT_TYPE_NET => batch.net_events.push(NetEvent {
+            pid: event.pid,
+            tgid: event.pid,
+            uid: event.uid,
+            gid: 0,
+            comm: event.comm.clone(),
+            direction: "outbound".to_string(),
+            protocol: "unknown".to_string(),
+            src_ip: None,
+            dst_ip: (event.net_dst_ip != 0).then(|| Ipv4Addr::from(event.net_dst_ip).to_string()),
+            src_port: None,
+            dst_port: (event.net_dst_port != 0).then_some(event.net_dst_port),
+            attrs,
+        }),
+        EVENT_TYPE_SQL => {
+            let crate::sql_norm::UnpackedTables { database, tables } =
+                crate::sql_norm::unpack_tables(&event.sql_tables);
+            attrs.insert(
+                "sql_query_class".to_string(),
+                event.sql_query_class.to_string(),
+            );
+            attrs.insert("db_port".to_string(), event.sql_db_port.to_string());
+            if event.sql_norm_hash != 0 {
+                attrs.insert(
+                    "raw_statement_hash".to_string(),
+                    format!("{:08x}", event.sql_query_hash),
+                );
+            }
+            batch.db_query_events.push(DbQueryEvent {
+                pid: event.pid,
+                tgid: event.pid,
+                uid: event.uid,
+                gid: 0,
+                comm: event.comm.clone(),
+                db_engine: db_engine_for_port(event.sql_db_port).to_string(),
+                db_server: (event.sql_db_port != 0)
+                    .then(|| format!("unknown:{}", event.sql_db_port)),
+                database,
+                operation: sql_operation_label(event.sql_query_class).to_string(),
+                tables,
+                statement_fingerprint: if event.sql_norm_hash != 0 {
+                    format!("{:08x}", event.sql_norm_hash)
+                } else {
+                    format!("{:08x}", event.sql_query_hash)
+                },
+                attrs,
+            });
+        }
+        EVENT_TYPE_SSL => {
+            attrs.insert("ssl_data_len".to_string(), event.ssl_data_len.to_string());
+            attrs.insert(
+                "ssl_operation".to_string(),
+                if event.ssl_operation == 0 {
+                    "encrypt".to_string()
+                } else {
+                    "decrypt".to_string()
+                },
+            );
+            batch.net_events.push(NetEvent {
+                pid: event.pid,
+                tgid: event.pid,
+                uid: event.uid,
+                gid: 0,
+                comm: event.comm.clone(),
+                direction: "outbound".to_string(),
+                protocol: "tls".to_string(),
+                src_ip: None,
+                dst_ip: None,
+                src_port: None,
+                dst_port: None,
+                attrs,
+            });
+        }
+        EVENT_TYPE_DNS => {
+            if !event.dns_query.is_empty() {
+                attrs.insert("dns_query".to_string(), event.dns_query.clone());
+            }
+            attrs.insert(
+                "dns_query_hash".to_string(),
+                event.dns_query_hash.to_string(),
+            );
+            batch.net_events.push(NetEvent {
+                pid: event.pid,
+                tgid: event.pid,
+                uid: event.uid,
+                gid: 0,
+                comm: event.comm.clone(),
+                direction: "outbound".to_string(),
+                protocol: "dns".to_string(),
+                src_ip: None,
+                dst_ip: None,
+                src_port: None,
+                dst_port: Some(53),
+                attrs,
+            });
+        }
+        _ => batch.process_exec_events.push(ProcessExecEvent {
+            pid: event.pid,
+            tgid: event.pid,
+            ppid: event.dst_vertex_id,
+            uid: event.uid,
+            gid: 0,
+            comm: event.comm.clone(),
+            filename: "<event>".to_string(),
+            attrs,
+        }),
+    }
 }
 
 fn append_evt_line(batch: &mut IngestBatchRequest, line: &str) {
@@ -708,7 +848,8 @@ fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
                 ..AlertExt::default()
             });
             let db_port = ext.sql_db_port;
-            let (database, tables) = split_table_refs(&ext.sql_tables);
+            let crate::sql_norm::UnpackedTables { database, tables } =
+                crate::sql_norm::unpack_tables(&ext.sql_tables);
 
             attrs.insert(
                 "sql_query_class".to_string(),
@@ -813,33 +954,6 @@ fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
             });
         }
     }
-}
-
-/// Split the packed `db.table` list into a database name and bare table names.
-///
-/// A database is only reported when every qualified reference agrees on it —
-/// a cross-database join has no single answer, and guessing one would be worse
-/// than reporting none.
-fn split_table_refs(packed: &str) -> (Option<String>, Vec<String>) {
-    let mut tables = Vec::new();
-    let mut qualifiers = Vec::new();
-
-    for entry in packed.split(',').filter(|s| !s.is_empty()) {
-        match entry.rsplit_once('.') {
-            Some((qualifier, name)) if !qualifier.is_empty() && !name.is_empty() => {
-                qualifiers.push(qualifier.to_string());
-                tables.push(name.to_string());
-            }
-            _ => tables.push(entry.to_string()),
-        }
-    }
-
-    let database = match qualifiers.first() {
-        Some(first) if qualifiers.iter().all(|q| q == first) => Some(first.clone()),
-        _ => None,
-    };
-
-    (database, tables)
 }
 
 /// Map an observed database port to an engine label.
@@ -1011,6 +1125,141 @@ fn next_batch_id(seq: &mut u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::{encode_telemetry_payload, IngestEvent};
+    use crate::data::batcher_compressor::Batcher;
+    use crate::data::mdkp_scheduler::BudgetSnapshot;
+
+    fn comm_bytes(value: &[u8]) -> [u8; 16] {
+        let mut out = [0u8; 16];
+        out[..value.len()].copy_from_slice(value);
+        out
+    }
+
+    #[test]
+    fn compressed_normal_events_preserve_all_telemetry_families() {
+        let mut batcher = Batcher::new(7, 32);
+        let budget = BudgetSnapshot::default_budgets();
+
+        let process = IngestEvent {
+            event_type: 1,
+            pid: 101,
+            uid: 1001,
+            dst_vertex_id: 10,
+            comm: comm_bytes(b"bash"),
+            ..Default::default()
+        };
+        let file = IngestEvent {
+            event_type: EVENT_TYPE_FILE,
+            pid: 102,
+            uid: 1002,
+            vertex_id: 102,
+            dst_vertex_id: 202,
+            comm: comm_bytes(b"cat"),
+            ..Default::default()
+        };
+        let network = IngestEvent {
+            event_type: EVENT_TYPE_NET,
+            pid: 103,
+            uid: 1003,
+            net_dst_ip: u32::from(Ipv4Addr::new(8, 8, 8, 8)),
+            net_dst_port: 443,
+            comm: comm_bytes(b"curl"),
+            ..Default::default()
+        };
+
+        let mut sql_tables = [0u8; crate::sql_norm::SQL_TABLES_LEN];
+        sql_tables[..14].copy_from_slice(b"finance.ledger");
+        let sql = IngestEvent {
+            event_type: EVENT_TYPE_SQL,
+            pid: 104,
+            uid: 1004,
+            comm: comm_bytes(b"psql"),
+            sql_query_hash: 0x1111_2222,
+            sql_query_class: 3,
+            sql_db_port: 5432,
+            sql_norm_hash: 0xaabb_ccdd,
+            sql_tables,
+            ..Default::default()
+        };
+        let ssl = IngestEvent {
+            event_type: EVENT_TYPE_SSL,
+            pid: 105,
+            uid: 1005,
+            comm: comm_bytes(b"openssl"),
+            ssl_data_len: 4096,
+            ssl_operation: 1,
+            ..Default::default()
+        };
+        let mut dns_query = [0u8; 64];
+        dns_query[..11].copy_from_slice(b"evil.c2.net");
+        let dns = IngestEvent {
+            event_type: EVENT_TYPE_DNS,
+            pid: 106,
+            uid: 1006,
+            comm: comm_bytes(b"resolver"),
+            dns_query_hash: 99,
+            dns_query,
+            ..Default::default()
+        };
+
+        for event in [process, file, network, sql, ssl, dns] {
+            let encoded = encode_telemetry_payload(&event).expect("encode telemetry event");
+            let _ = batcher.push(&encoded, &budget);
+        }
+        let compressed = batcher.flush().expect("flush telemetry batch");
+
+        let cfg = HttpSenderConfig {
+            ingest_url: "http://127.0.0.1:8000/api/v1/ingest/batches".to_string(),
+            tenant_id: "t".to_string(),
+            host_id: "h".to_string(),
+            auth: None,
+        };
+        let mut dec = DictDecompressor::new();
+        let mut seq = 0;
+        let out = payload_to_batches(&compressed.payload, &cfg, &mut dec, &mut seq);
+        let batch = &out[0];
+
+        assert_eq!(batch.process_exec_events.len(), 1);
+        assert_eq!(batch.process_exec_events[0].comm, "bash");
+        assert_eq!(batch.file_events.len(), 1);
+        assert_eq!(batch.file_events[0].comm, "cat");
+        assert_eq!(batch.db_query_events.len(), 1);
+        assert_eq!(
+            batch.db_query_events[0].database.as_deref(),
+            Some("finance")
+        );
+        assert_eq!(batch.db_query_events[0].tables, vec!["ledger"]);
+        assert_eq!(batch.db_query_events[0].operation, "ddl");
+        assert_eq!(batch.db_query_events[0].statement_fingerprint, "aabbccdd");
+
+        assert_eq!(batch.net_events.len(), 3);
+        let ordinary_net = batch
+            .net_events
+            .iter()
+            .find(|event| event.protocol == "unknown")
+            .expect("ordinary network event");
+        assert_eq!(ordinary_net.dst_ip.as_deref(), Some("8.8.8.8"));
+        assert_eq!(ordinary_net.dst_port, Some(443));
+        let tls = batch
+            .net_events
+            .iter()
+            .find(|event| event.protocol == "tls")
+            .expect("tls event");
+        assert_eq!(
+            tls.attrs.get("ssl_data_len").map(String::as_str),
+            Some("4096")
+        );
+        let dns = batch
+            .net_events
+            .iter()
+            .find(|event| event.protocol == "dns")
+            .expect("dns event");
+        assert_eq!(
+            dns.attrs.get("dns_query").map(String::as_str),
+            Some("evil.c2.net")
+        );
+        assert!(batch.agent_heartbeats.is_empty());
+    }
 
     /// Build a legacy (extension-less) alert payload.
     fn v1_alert_payload(event_type: u8, dst_vertex_id: u32) -> Vec<u8> {

@@ -6,10 +6,14 @@ Design intent:
 - Dashboard read endpoints proxy to Rust ingest APIs for now.
 
 Route organisation:
-- routers.dashboard  /           app shell
-- routers.landing    /landing    public marketing page, /install, /downloads
-- routers.docs       /quickstart /agent/config /oil
-- main               /health /api/v1/**  control-plane API
+- routers.dashboard    /           app shell
+- routers.landing      /landing    public marketing page, /install, /downloads
+- routers.docs         /quickstart /agent/config /oil
+- routers.auth         /api/v1/auth/**
+- routers.audit        /api/v1/audit/**
+- routers.rules        /api/v1/rules/**
+- routers.deployments  /api/v1/deployments/**
+- main                 /health /api/v1/**  control-plane API
 """
 
 from __future__ import annotations
@@ -17,20 +21,23 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 import subprocess
 import tempfile
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, HTTPException, Request, Query, status
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
 import httpx
 from pydantic import BaseModel, Field
 
+from .db import init_db
 from .deps import settings, template_root
-from .routers import dashboard, docs, landing
+from .routers import dashboard, docs, landing, auth, audit, rules, deployments
 from app.intel_sync.sync import run_loop, run_sync
 
 logger = logging.getLogger("control_plane")
@@ -58,16 +65,66 @@ def _start_intel_sync_daemon() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialize SQLite/SQLAlchemy schema on startup
+    try:
+        init_db()
+        logger.info("Control plane database tables initialized.")
+    except Exception as exc:
+        logger.error("Database initialization failed: %s", exc)
+
     _start_intel_sync_daemon()
     yield
 
 
 app = FastAPI(title="olopa-control-plane", version="0.1.0", lifespan=lifespan)
+
+# -- Middleware for Request ID tracking ----------------------------------------
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    req_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    request.state.request_id = req_id
+    response = await call_next(request)
+    response.headers["x-request-id"] = req_id
+    return response
+
+
+# -- Standardized Error Handlers -----------------------------------------------
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    req_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    if isinstance(exc.detail, dict) and "code" in exc.detail:
+        payload = exc.detail
+        if "request_id" not in payload:
+            payload["request_id"] = req_id
+    else:
+        payload = {
+            "code": f"HTTP_{exc.status_code}",
+            "message": str(exc.detail),
+            "request_id": req_id,
+        }
+    return JSONResponse(status_code=exc.status_code, content=payload)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    req_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "code": "VALIDATION_ERROR",
+            "message": "Request payload validation failed",
+            "details": exc.errors(),
+            "request_id": req_id,
+        },
+    )
+
+
+# -- Static assets and Router inclusion ---------------------------------------
+
 app.mount("/assets", StaticFiles(directory=str(template_root / "assets")), name="assets")
 
-# Built React console assets (hashed JS/CSS), referenced under the /ui/ base.
-# Only mounted when a build is present so dev checkouts without `npm run build`
-# can still fall back to the legacy template.
 _webdist = template_root.parent / "webdist"
 if _webdist.is_dir():
     app.mount("/ui", StaticFiles(directory=str(_webdist)), name="ui")
@@ -75,6 +132,10 @@ if _webdist.is_dir():
 app.include_router(dashboard.router)
 app.include_router(landing.router)
 app.include_router(docs.router)
+app.include_router(auth.router)
+app.include_router(audit.router)
+app.include_router(rules.router)
+app.include_router(deployments.router)
 
 
 # -- Ingest proxy helpers ------------------------------------------------------
@@ -262,11 +323,7 @@ def _intel_path() -> str:
 
 @app.post("/api/v1/intel/sync", tags=["api"])
 async def intel_sync_now() -> dict:
-    """Trigger an immediate threat-intel feed sync and return the result.
-
-    Runs synchronously in a thread executor so the event loop isn't blocked.
-    The background daemon continues its normal schedule independently.
-    """
+    """Trigger an immediate threat-intel feed sync and return the result."""
     import asyncio
     loop = asyncio.get_event_loop()
     try:
@@ -278,11 +335,7 @@ async def intel_sync_now() -> dict:
 
 @app.get("/api/v1/intel/status", tags=["api"])
 async def intel_status() -> dict:
-    """Return metadata from the current intel.json on disk.
-
-    Does not trigger a new sync.  Returns ``present: false`` when the file
-    has not been written yet (first sync hasn't completed).
-    """
+    """Return metadata from the current intel.json on disk."""
     path = Path(_intel_path())
     if not path.exists():
         return {

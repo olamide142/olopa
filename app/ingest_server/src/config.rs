@@ -64,6 +64,9 @@ pub struct IngestConfig {
     pub suggested_batch_bytes: u32,
     /// Maximum number of recent rows kept in memory for inspection APIs.
     pub recent_events_max: usize,
+    /// Maximum accepted `(tenant, host, batch_id)` keys retained for retry deduplication.
+    /// Set to zero to disable idempotency tracking.
+    pub dedupe_max_entries: usize,
     /// Durable local fallback sink for flattened events.
     pub persist_jsonl_path: String,
     /// Optional ClickHouse HTTP endpoint.
@@ -113,6 +116,7 @@ impl Default for IngestConfig {
             default_retry_after_ms: 500,
             suggested_batch_bytes: 4_000_000,
             recent_events_max: 5_000,
+            dedupe_max_entries: 100_000,
             persist_jsonl_path: "/tmp/olopa/ingest/events.jsonl".to_string(),
             clickhouse_url: None,
             clickhouse_insert_sql: "INSERT INTO olopa.events_raw FORMAT JSONEachRow".to_string(),
@@ -168,6 +172,10 @@ impl ServerConfig {
                 recent_events_max: env_parse_or(
                     "INGEST_RECENT_EVENTS_MAX",
                     ingest_defaults.recent_events_max,
+                ),
+                dedupe_max_entries: env_parse_or(
+                    "INGEST_DEDUPE_MAX_ENTRIES",
+                    ingest_defaults.dedupe_max_entries,
                 ),
                 persist_jsonl_path: env_or(
                     "INGEST_PERSIST_JSONL_PATH",

@@ -2,7 +2,7 @@
 
 // Geographic / session predicates
 predicate unusual_country(user, country) =
-    country not_in user.baseline.countries
+    country not in user.baseline.countries
 
 predicate impossible_travel(user, country, ts) =
     unusual_country(user, country)
@@ -10,10 +10,10 @@ predicate impossible_travel(user, country, ts) =
     and (ts - user.last_login_ts) < 2h
 
 predicate unusual_host(user, host_id) =
-    host_id not_in user.baseline.hosts
+    host_id not in user.baseline.hosts
 
 predicate unusual_hour(user, ts) =
-    ts.hour not_in user.baseline.login_hours
+    ts.hour not in user.baseline.login_hours
 
 //  Process predicates
 predicate is_shell(proc) =
@@ -31,7 +31,7 @@ predicate privileged_shell(proc) =
 predicate living_off_the_land(proc) =
     proc.name in recon_tools
     or proc.name in exfil_tools
-    or (proc.name in shells and proc.parent.name not_in web_servers)
+    or (proc.name in shells and proc.parent.name not in web_servers)
 
 // Network predicates
 predicate external_c2(endpoint) =
@@ -40,7 +40,7 @@ predicate external_c2(endpoint) =
 
 predicate unexpected_external(proc, endpoint) =
     endpoint.is_internal == false
-    and endpoint.domain not_in host(proc.host_id).baseline.domains
+    and endpoint.domain not in host(proc.host_id).baseline.domains
 
 // Secret / credential predicates 
 predicate sensitive_file(file) =

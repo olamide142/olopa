@@ -780,12 +780,20 @@ impl RelevanceScorerLike for RealRelevanceScorer {
 /// Adapter around persistent hot/cold event storage.
 struct RealEventStore {
     inner: EventStore,
+    events: Vec<IngestEvent>,
 }
 
 impl Default for RealEventStore {
     fn default() -> Self {
+        Self::with_capacity(1_000_000)
+    }
+}
+
+impl RealEventStore {
+    fn with_capacity(capacity: usize) -> Self {
         Self {
-            inner: EventStore::with_capacity(1_000_000),
+            inner: EventStore::with_capacity(capacity),
+            events: Vec::with_capacity(capacity),
         }
     }
 }
@@ -811,6 +819,8 @@ impl EventStoreLike for RealEventStore {
         };
 
         let id = self.inner.push(hot, cold)?;
+        debug_assert_eq!(id, self.events.len());
+        self.events.push(event);
         info!(
             "ingest->store event_id={} type={} pid={} risk={:.3}",
             id, event.event_type, event.pid, event.risk_score
@@ -820,16 +830,7 @@ impl EventStoreLike for RealEventStore {
 
     /// Serialize one stored event into transport-ready bytes.
     fn serialize_event(&self, event_id: usize) -> Option<Vec<u8>> {
-        // Bootstrap wire format: plain text line; replace with protobuf later.
-        let hot = self.inner.hot_events().get(event_id)?;
-        let cold = self.inner.cold_event(event_id)?;
-        Some(
-            format!(
-                "evt ts={} pid={} uid={} risk={:.3} src={} dst={} comm={}",
-                hot.ts_ns, hot.pid, cold.uid, hot.risk_score, hot.pid, cold.ppid, cold.comm_id
-            )
-            .into_bytes(),
-        )
+        crate::agent::encode_telemetry_payload(self.events.get(event_id)?)
     }
 
     /// Return event ids that have not yet been scheduled.
@@ -840,6 +841,48 @@ impl EventStoreLike for RealEventStore {
     /// Return last valid event id.
     fn last_event_id(&self) -> usize {
         self.inner.hot_events().len().saturating_sub(1)
+    }
+}
+
+#[cfg(test)]
+mod event_store_transport_tests {
+    use super::*;
+
+    #[test]
+    fn real_event_store_keeps_family_fields_for_scheduler_serialization() {
+        let mut tables = [0u8; crate::sql_norm::SQL_TABLES_LEN];
+        tables[..14].copy_from_slice(b"finance.ledger");
+        let mut comm = [0u8; 16];
+        comm[..4].copy_from_slice(b"psql");
+        let event = IngestEvent {
+            event_type: 4,
+            pid: 4242,
+            uid: 1001,
+            comm,
+            sql_query_hash: 0x1111_2222,
+            sql_query_class: 3,
+            sql_db_port: 5432,
+            sql_norm_hash: 0xaabb_ccdd,
+            sql_tables: tables,
+            ..Default::default()
+        };
+
+        let mut store = RealEventStore::with_capacity(4);
+        let event_id = store.push(event).expect("store event");
+        let encoded = store.serialize_event(event_id).expect("serialize event");
+        let json = std::str::from_utf8(&encoded)
+            .expect("utf8 wire record")
+            .strip_prefix("event_v2 ")
+            .expect("typed wire prefix");
+        let decoded: crate::agent::TelemetryWireEvent =
+            serde_json::from_str(json).expect("decode typed wire event");
+
+        assert_eq!(decoded.event_type, 4);
+        assert_eq!(decoded.comm, "psql");
+        assert_eq!(decoded.sql_query_class, 3);
+        assert_eq!(decoded.sql_db_port, 5432);
+        assert_eq!(decoded.sql_tables, "finance.ledger");
+        assert_eq!(decoded.sql_norm_hash, 0xaabb_ccdd);
     }
 }
 
@@ -917,6 +960,9 @@ impl GraphLike for RealGraph {
             1 => EdgeKind::Spawned,
             2 => EdgeKind::ReadFile,
             3 => EdgeKind::ConnectedTo,
+            4 => EdgeKind::DataFlow,
+            5 => EdgeKind::ConnectedTo,
+            6 => EdgeKind::ResolvedDns,
             _ => EdgeKind::DataFlow,
         };
 

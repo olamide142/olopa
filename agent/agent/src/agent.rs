@@ -17,7 +17,7 @@ use olopa_common::{
     DnsEvent, ExecEvent, FileEvent, NetEvent, SqlEvent, SslEvent, EVENT_KIND_DNS, EVENT_KIND_EXEC,
     EVENT_KIND_FILE, EVENT_KIND_NET, EVENT_KIND_SQL, EVENT_KIND_SSL,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::signal;
 
 use crate::budget_tracker::{BudgetTracker, BW, CPU, MEM};
@@ -88,6 +88,73 @@ impl Default for IngestEvent {
             dns_query: [0; 64],
         }
     }
+}
+
+/// Versioned scheduler telemetry record carried inside compressed batches.
+///
+/// This is intentionally separate from the alert wire format: alerts take the
+/// fast lane, while this record preserves every event-family field selected by
+/// the budgeted telemetry scheduler.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct TelemetryWireEvent {
+    pub wire_version: u16,
+    pub event_type: u8,
+    pub ts_ns: u64,
+    pub pid: u32,
+    pub uid: u32,
+    pub vertex_id: u32,
+    pub dst_vertex_id: u32,
+    pub net_dst_ip: u32,
+    pub net_dst_port: u16,
+    pub comm: String,
+    pub comm_id: u32,
+    pub risk_score: f32,
+    pub sql_query_hash: u32,
+    pub sql_query_class: u8,
+    pub sql_db_port: u16,
+    pub sql_norm_hash: u32,
+    pub sql_tables: String,
+    pub ssl_data_len: u32,
+    pub ssl_operation: u8,
+    pub dns_query_hash: u32,
+    pub dns_query: String,
+}
+
+impl From<&IngestEvent> for TelemetryWireEvent {
+    fn from(event: &IngestEvent) -> Self {
+        Self {
+            wire_version: 2,
+            event_type: event.event_type,
+            ts_ns: event.ts_ns,
+            pid: event.pid,
+            uid: event.uid,
+            vertex_id: event.vertex_id,
+            dst_vertex_id: event.dst_vertex_id,
+            net_dst_ip: event.net_dst_ip,
+            net_dst_port: event.net_dst_port,
+            comm: cstr_to_str(&event.comm).to_string(),
+            comm_id: event.comm_id,
+            risk_score: event.risk_score,
+            sql_query_hash: event.sql_query_hash,
+            sql_query_class: event.sql_query_class,
+            sql_db_port: event.sql_db_port,
+            sql_norm_hash: event.sql_norm_hash,
+            sql_tables: cstr_to_str(&event.sql_tables).to_string(),
+            ssl_data_len: event.ssl_data_len,
+            ssl_operation: event.ssl_operation,
+            dns_query_hash: event.dns_query_hash,
+            dns_query: cstr_to_str(&event.dns_query).to_string(),
+        }
+    }
+}
+
+pub(crate) fn encode_telemetry_payload(event: &IngestEvent) -> Option<Vec<u8>> {
+    const PREFIX: &[u8] = b"event_v2 ";
+    let encoded = serde_json::to_vec(&TelemetryWireEvent::from(event)).ok()?;
+    let mut out = Vec::with_capacity(PREFIX.len() + encoded.len());
+    out.extend_from_slice(PREFIX);
+    out.extend_from_slice(&encoded);
+    Some(out)
 }
 
 // Minimal sender state queried by housekeeping to decide spool replay behavior.

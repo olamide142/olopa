@@ -315,6 +315,60 @@ pub fn pack_tables(tables: &[TableRef]) -> [u8; SQL_TABLES_LEN] {
     out
 }
 
+/// The packed table list, split back into the shape consumers report.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnpackedTables {
+    /// Database/schema qualifier, when the statement names exactly one.
+    pub database: Option<String>,
+    /// Bare table names, qualifier stripped.
+    pub tables: Vec<String>,
+}
+
+/// Reverse [`pack_tables`]: split `db.table,db.other` into a database name and
+/// bare table names.
+///
+/// A database is only reported when every qualified reference agrees on it — a
+/// cross-database join has no single answer, and guessing one would be worse
+/// than reporting none.
+///
+/// This is the one place the packed form is interpreted. Both the outbound
+/// `DbQueryEvent` and the rule-engine `sql.database`/`sql.tables` fields read
+/// it, so a rule cannot match on a name that differs from the one stored.
+pub fn unpack_tables(packed: &str) -> UnpackedTables {
+    let mut tables = Vec::new();
+    let mut qualifiers = Vec::new();
+
+    for entry in packed.split(',').filter(|s| !s.is_empty()) {
+        match entry.rsplit_once('.') {
+            Some((qualifier, name)) if !qualifier.is_empty() && !name.is_empty() => {
+                qualifiers.push(qualifier.to_string());
+                tables.push(name.to_string());
+            }
+            _ => tables.push(entry.to_string()),
+        }
+    }
+
+    let database = match qualifiers.first() {
+        Some(first) if qualifiers.iter().all(|q| q == first) => Some(first.clone()),
+        _ => None,
+    };
+
+    UnpackedTables { database, tables }
+}
+
+/// [`unpack_tables`] over the fixed-size buffer [`pack_tables`] produces,
+/// stopping at the NUL terminator.
+pub fn unpack_tables_bytes(packed: &[u8]) -> UnpackedTables {
+    let end = packed.iter().position(|b| *b == 0).unwrap_or(packed.len());
+    match core::str::from_utf8(&packed[..end]) {
+        Ok(text) => unpack_tables(text),
+        // Table names are ASCII identifiers by construction, so invalid UTF-8
+        // means the buffer is not what we packed. Report nothing rather than
+        // a salvaged fragment.
+        Err(_) => UnpackedTables::default(),
+    }
+}
+
 /// FNV-1a over the redacted statement, so the same statement shape with
 /// different literal values yields one stable fingerprint.
 pub fn normalized_fingerprint(redacted: &str) -> u32 {

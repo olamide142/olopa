@@ -1,7 +1,7 @@
 use crate::ast::{
     ActionStmt, CorrelateJoin, Expr, OilDuration, Program, RuleBody, RuleDecl, SourceSpec,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// MIR (mid-level IR) root.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -141,6 +141,10 @@ pub enum MirExpr {
         name: String,
         args: Vec<MirExpr>,
     },
+    Project {
+        base: Box<MirExpr>,
+        field: String,
+    },
     Add {
         lhs: Box<MirExpr>,
         rhs: Box<MirExpr>,
@@ -258,11 +262,304 @@ pub fn classify_rule(rule: &RuleDecl) -> RuleClass {
 ///
 /// This stage performs structural lowering only (no optimization/rewrite).
 pub fn lower_program(program: &Program) -> MirProgram {
+    let sets = program
+        .sets
+        .iter()
+        .map(|set| {
+            (
+                set.name.node.clone(),
+                set.values
+                    .iter()
+                    .map(|value| lower_expr(&value.node))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let predicates = program
+        .predicates
+        .iter()
+        .map(|predicate| {
+            (
+                predicate.name.node.clone(),
+                (
+                    predicate
+                        .params
+                        .iter()
+                        .map(|param| param.node.clone())
+                        .collect::<Vec<_>>(),
+                    lower_expr(&predicate.body.node),
+                ),
+            )
+        })
+        .collect::<HashMap<_, _>>();
     let mut rules = Vec::with_capacity(program.rules.len());
     for (idx, rule) in program.rules.iter().enumerate() {
-        rules.push(lower_rule(rule, idx));
+        let mut lowered = lower_rule(rule, idx);
+        expand_rule_symbols(&mut lowered, &sets, &predicates);
+        rules.push(lowered);
     }
     MirProgram { rules }
+}
+
+const MAX_PREDICATE_EXPANSION_DEPTH: usize = 32;
+
+type MirPredicateDefinitions = HashMap<String, (Vec<String>, MirExpr)>;
+
+fn expand_rule_symbols(
+    rule: &mut MirRule,
+    sets: &HashMap<String, Vec<MirExpr>>,
+    predicates: &MirPredicateDefinitions,
+) {
+    for predicate in &mut rule.predicates {
+        predicate.expr = expand_expr_symbols(predicate.expr.clone(), sets, predicates, 0);
+    }
+    for join in &mut rule.joins {
+        if let Some(on) = &mut join.on {
+            *on = expand_expr_symbols(on.clone(), sets, predicates, 0);
+        }
+    }
+    for requirement in &mut rule.require {
+        requirement.expr = expand_expr_symbols(requirement.expr.clone(), sets, predicates, 0);
+    }
+    for binding in &mut rule.lets {
+        binding.value = expand_expr_symbols(binding.value.clone(), sets, predicates, 0);
+    }
+    for modifier in &mut rule.score.modifiers {
+        if let Some(condition) = &mut modifier.condition {
+            *condition = expand_expr_symbols(condition.clone(), sets, predicates, 0);
+        }
+    }
+    for emit in &mut rule.emit {
+        for arg in &mut emit.args {
+            *arg = expand_expr_symbols(arg.clone(), sets, predicates, 0);
+        }
+    }
+    for branch in &mut rule.respond.branches {
+        if let Some(condition) = &mut branch.condition {
+            *condition = expand_expr_symbols(condition.clone(), sets, predicates, 0);
+        }
+    }
+}
+
+fn expand_expr_symbols(
+    expr: MirExpr,
+    sets: &HashMap<String, Vec<MirExpr>>,
+    predicates: &MirPredicateDefinitions,
+    depth: usize,
+) -> MirExpr {
+    if depth >= MAX_PREDICATE_EXPANSION_DEPTH {
+        return MirExpr::Unsupported {
+            kind: "predicate expansion depth exceeded".to_string(),
+        };
+    }
+    match expr {
+        MirExpr::Field { path } => sets
+            .get(&path)
+            .cloned()
+            .map(MirExpr::List)
+            .unwrap_or(MirExpr::Field { path }),
+        MirExpr::Call { name, args } => {
+            let args = args
+                .into_iter()
+                .map(|arg| expand_expr_symbols(arg, sets, predicates, depth))
+                .collect::<Vec<_>>();
+            let Some((params, body)) = predicates.get(&name) else {
+                return MirExpr::Call { name, args };
+            };
+            if params.len() != args.len() {
+                return MirExpr::Call { name, args };
+            }
+            let substitutions = params.iter().cloned().zip(args).collect::<HashMap<_, _>>();
+            let substituted = substitute_predicate_params(body.clone(), &substitutions);
+            expand_expr_symbols(substituted, sets, predicates, depth + 1)
+        }
+        MirExpr::Project { base, field } => MirExpr::Project {
+            base: Box::new(expand_expr_symbols(*base, sets, predicates, depth)),
+            field,
+        },
+        MirExpr::List(items) => MirExpr::List(
+            items
+                .into_iter()
+                .map(|item| expand_expr_symbols(item, sets, predicates, depth))
+                .collect(),
+        ),
+        MirExpr::And { lhs, rhs } => MirExpr::And {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            rhs: Box::new(expand_expr_symbols(*rhs, sets, predicates, depth)),
+        },
+        MirExpr::Or { lhs, rhs } => MirExpr::Or {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            rhs: Box::new(expand_expr_symbols(*rhs, sets, predicates, depth)),
+        },
+        MirExpr::Not { expr } => MirExpr::Not {
+            expr: Box::new(expand_expr_symbols(*expr, sets, predicates, depth)),
+        },
+        MirExpr::Eq { lhs, rhs } => MirExpr::Eq {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            rhs: Box::new(expand_expr_symbols(*rhs, sets, predicates, depth)),
+        },
+        MirExpr::Ne { lhs, rhs } => MirExpr::Ne {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            rhs: Box::new(expand_expr_symbols(*rhs, sets, predicates, depth)),
+        },
+        MirExpr::Lt { lhs, rhs } => MirExpr::Lt {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            rhs: Box::new(expand_expr_symbols(*rhs, sets, predicates, depth)),
+        },
+        MirExpr::Gt { lhs, rhs } => MirExpr::Gt {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            rhs: Box::new(expand_expr_symbols(*rhs, sets, predicates, depth)),
+        },
+        MirExpr::Le { lhs, rhs } => MirExpr::Le {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            rhs: Box::new(expand_expr_symbols(*rhs, sets, predicates, depth)),
+        },
+        MirExpr::Ge { lhs, rhs } => MirExpr::Ge {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            rhs: Box::new(expand_expr_symbols(*rhs, sets, predicates, depth)),
+        },
+        MirExpr::Add { lhs, rhs } => MirExpr::Add {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            rhs: Box::new(expand_expr_symbols(*rhs, sets, predicates, depth)),
+        },
+        MirExpr::Sub { lhs, rhs } => MirExpr::Sub {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            rhs: Box::new(expand_expr_symbols(*rhs, sets, predicates, depth)),
+        },
+        MirExpr::Mul { lhs, rhs } => MirExpr::Mul {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            rhs: Box::new(expand_expr_symbols(*rhs, sets, predicates, depth)),
+        },
+        MirExpr::Div { lhs, rhs } => MirExpr::Div {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            rhs: Box::new(expand_expr_symbols(*rhs, sets, predicates, depth)),
+        },
+        MirExpr::In { lhs, rhs } => MirExpr::In {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            rhs: rhs
+                .into_iter()
+                .flat_map(
+                    |item| match expand_expr_symbols(item, sets, predicates, depth) {
+                        MirExpr::List(items) => items,
+                        item => vec![item],
+                    },
+                )
+                .collect(),
+        },
+        MirExpr::StartsWith { lhs, rhs } => {
+            let lhs = expand_expr_symbols(*lhs, sets, predicates, depth);
+            match expand_expr_symbols(*rhs, sets, predicates, depth) {
+                // `path under named_set` lowers to StartsWith before symbol
+                // expansion. Preserve its intended "any prefix" semantics
+                // instead of stringifying the entire expanded list at runtime.
+                MirExpr::List(prefixes) => prefixes
+                    .into_iter()
+                    .map(|prefix| MirExpr::StartsWith {
+                        lhs: Box::new(lhs.clone()),
+                        rhs: Box::new(prefix),
+                    })
+                    .reduce(|left, right| MirExpr::Or {
+                        lhs: Box::new(left),
+                        rhs: Box::new(right),
+                    })
+                    .unwrap_or(MirExpr::Bool(false)),
+                rhs => MirExpr::StartsWith {
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+            }
+        }
+        MirExpr::EndsWith { lhs, rhs } => MirExpr::EndsWith {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            rhs: Box::new(expand_expr_symbols(*rhs, sets, predicates, depth)),
+        },
+        MirExpr::Contains { lhs, rhs } => MirExpr::Contains {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            rhs: Box::new(expand_expr_symbols(*rhs, sets, predicates, depth)),
+        },
+        MirExpr::Matches { lhs, pattern } => MirExpr::Matches {
+            lhs: Box::new(expand_expr_symbols(*lhs, sets, predicates, depth)),
+            pattern,
+        },
+        literal => literal,
+    }
+}
+
+fn substitute_predicate_params(
+    mut expr: MirExpr,
+    substitutions: &HashMap<String, MirExpr>,
+) -> MirExpr {
+    fn visit(expr: &mut MirExpr, substitutions: &HashMap<String, MirExpr>) {
+        match expr {
+            MirExpr::Field { path } => {
+                let replacement = substitutions.iter().find_map(|(param, argument)| {
+                    if path == param {
+                        Some(argument.clone())
+                    } else {
+                        path.strip_prefix(&format!("{param}."))
+                            .map(|tail| project_argument(argument.clone(), tail))
+                    }
+                });
+                if let Some(replacement) = replacement {
+                    *expr = replacement;
+                }
+            }
+            MirExpr::List(items) | MirExpr::Call { args: items, .. } => {
+                for item in items {
+                    visit(item, substitutions);
+                }
+            }
+            MirExpr::Project { base, .. }
+            | MirExpr::Not { expr: base }
+            | MirExpr::Matches { lhs: base, .. } => visit(base, substitutions),
+            MirExpr::And { lhs, rhs }
+            | MirExpr::Or { lhs, rhs }
+            | MirExpr::Eq { lhs, rhs }
+            | MirExpr::Ne { lhs, rhs }
+            | MirExpr::Lt { lhs, rhs }
+            | MirExpr::Gt { lhs, rhs }
+            | MirExpr::Le { lhs, rhs }
+            | MirExpr::Ge { lhs, rhs }
+            | MirExpr::Add { lhs, rhs }
+            | MirExpr::Sub { lhs, rhs }
+            | MirExpr::Mul { lhs, rhs }
+            | MirExpr::Div { lhs, rhs }
+            | MirExpr::StartsWith { lhs, rhs }
+            | MirExpr::EndsWith { lhs, rhs }
+            | MirExpr::Contains { lhs, rhs } => {
+                visit(lhs, substitutions);
+                visit(rhs, substitutions);
+            }
+            MirExpr::In { lhs, rhs } => {
+                visit(lhs, substitutions);
+                for item in rhs {
+                    visit(item, substitutions);
+                }
+            }
+            MirExpr::Bool(_)
+            | MirExpr::Null
+            | MirExpr::Int(_)
+            | MirExpr::Float(_)
+            | MirExpr::Duration(_)
+            | MirExpr::Str(_)
+            | MirExpr::Unsupported { .. } => {}
+        }
+    }
+
+    visit(&mut expr, substitutions);
+    expr
+}
+
+fn project_argument(argument: MirExpr, tail: &str) -> MirExpr {
+    match argument {
+        MirExpr::Field { path } => MirExpr::Field {
+            path: format!("{path}.{tail}"),
+        },
+        other => tail.split('.').fold(other, |base, field| MirExpr::Project {
+            base: Box::new(base),
+            field: field.to_string(),
+        }),
+    }
 }
 
 /// Backward-compatible alias while downstream code migrates.
@@ -532,6 +829,9 @@ fn validate_expr_unsupported(
                 );
             }
         }
+        MirExpr::Project { base, .. } => {
+            validate_expr_unsupported(base, &format!("{path}.base"), rule_name, diagnostics);
+        }
         MirExpr::Matches { lhs, pattern: _ } => {
             validate_expr_unsupported(lhs, &format!("{path}.lhs"), rule_name, diagnostics);
         }
@@ -707,11 +1007,7 @@ fn lower_source(src: &SourceSpec) -> MirSource {
 }
 
 fn lower_rule_sources(rule: &RuleDecl) -> Vec<MirSource> {
-    if !rule.sources.is_empty() {
-        return rule.sources.iter().map(lower_source).collect();
-    }
-
-    match &rule.body.node {
+    let body_sources = match &rule.body.node {
         RuleBody::Match(m) => m
             .steps
             .iter()
@@ -740,7 +1036,24 @@ fn lower_rule_sources(rule: &RuleDecl) -> Vec<MirSource> {
             })
             .collect(),
         RuleBody::Graph(g) => vec![lower_source(&g.source)],
+    };
+
+    if rule.sources.is_empty() {
+        return body_sources;
     }
+
+    // `from` declares subscriptions, while correlate/match arms bind the
+    // aliases used by expressions. Preserve both pieces in MIR. Without this,
+    // a rule with `from ssl.event` and `correlate ssl.event as s` emits only an
+    // alias-less source, leaving runtime lowering unable to canonicalize
+    // `s.pid` to `ssl.pid`.
+    let mut sources = rule.sources.iter().map(lower_source).collect::<Vec<_>>();
+    for (source, binding) in sources.iter_mut().zip(body_sources) {
+        if source.alias.is_none() {
+            source.alias = binding.alias;
+        }
+    }
+    sources
 }
 
 fn lower_expr(expr: &Expr) -> MirExpr {
@@ -763,11 +1076,14 @@ fn lower_expr(expr: &Expr) -> MirExpr {
             MirExpr::Field { path } => MirExpr::Field {
                 path: format!("{path}.{field}"),
             },
-            MirExpr::Call { name, args } if can_project_call_to_field(&name, &args) => {
-                MirExpr::Field {
-                    path: format!("{name}.{field}"),
-                }
-            }
+            call @ MirExpr::Call { .. } => MirExpr::Project {
+                base: Box::new(call),
+                field: field.clone(),
+            },
+            project @ MirExpr::Project { .. } => MirExpr::Project {
+                base: Box::new(project),
+                field: field.clone(),
+            },
             _ => MirExpr::Unsupported {
                 kind: format!("{expr:?}"),
             },
@@ -854,6 +1170,30 @@ fn lower_expr(expr: &Expr) -> MirExpr {
             name: "unusual_for".to_string(),
             args: vec![lower_expr(&val.node), MirExpr::Str(entity.clone())],
         },
+        Expr::Count(inner) => MirExpr::Call {
+            name: "count".to_string(),
+            args: vec![lower_expr(&inner.node)],
+        },
+        Expr::Max(inner) => MirExpr::Call {
+            name: "max".to_string(),
+            args: vec![lower_expr(&inner.node)],
+        },
+        Expr::Min(inner) => MirExpr::Call {
+            name: "min".to_string(),
+            args: vec![lower_expr(&inner.node)],
+        },
+        Expr::Sum(inner) => MirExpr::Call {
+            name: "sum".to_string(),
+            args: vec![lower_expr(&inner.node)],
+        },
+        Expr::Avg(inner) => MirExpr::Call {
+            name: "avg".to_string(),
+            args: vec![lower_expr(&inner.node)],
+        },
+        Expr::Distinct(inner) => MirExpr::Call {
+            name: "distinct".to_string(),
+            args: vec![lower_expr(&inner.node)],
+        },
         Expr::Matches { lhs, pattern } => MirExpr::Matches {
             lhs: Box::new(lower_expr(&lhs.node)),
             pattern: pattern.clone(),
@@ -875,14 +1215,7 @@ fn lower_expr(expr: &Expr) -> MirExpr {
                 }),
             }
         }
-        other => MirExpr::Unsupported {
-            kind: format!("{other:?}"),
-        },
     }
-}
-
-fn can_project_call_to_field(name: &str, _args: &[MirExpr]) -> bool {
-    !name.trim().is_empty()
 }
 
 #[cfg(test)]
@@ -1005,7 +1338,7 @@ rule "r" {
     }
 
     #[test]
-    fn lower_member_chain_on_call_into_field_path() {
+    fn lower_member_chain_on_call_preserves_call_arguments() {
         let program = parse_program(
             r#"
 rule "r" {
@@ -1019,12 +1352,71 @@ rule "r" {
         let mir = lower_program(&program);
         let expr = &mir.rules[0].predicates[0].expr;
         match expr {
-            MirExpr::Eq { lhs, rhs: _ } => match lhs.as_ref() {
-                MirExpr::Field { path } => assert_eq!(path, "host.baseline.domains"),
-                other => panic!("expected MirExpr::Field on lhs, got {other:?}"),
-            },
+            MirExpr::Eq { lhs, rhs: _ } => {
+                let MirExpr::Project { base, field } = lhs.as_ref() else {
+                    panic!("expected outer projection, got {lhs:?}");
+                };
+                assert_eq!(field, "domains");
+                assert!(
+                    matches!(base.as_ref(), MirExpr::Project { field, .. } if field == "baseline")
+                );
+            }
             other => panic!("expected MirExpr::Eq, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn expands_local_predicate_calls_and_named_sets_into_mir() {
+        let program = parse_program(
+            r#"
+set shells = ["bash", "sh"]
+predicate interactive(proc) = proc.name in shells and proc.uid == 0
+
+rule "r" {
+  from endpoint.process
+  correlate process.spawn as p
+  where interactive(p)
+  respond alert high
+}
+"#,
+        );
+        let mir = lower_program(&program);
+        let MirExpr::And { lhs, rhs } = &mir.rules[0].predicates[0].expr else {
+            panic!("expected expanded predicate body");
+        };
+        let MirExpr::In {
+            lhs: membership_lhs,
+            rhs: membership_rhs,
+        } = lhs.as_ref()
+        else {
+            panic!("expected expanded membership expression");
+        };
+        assert!(matches!(membership_lhs.as_ref(), MirExpr::Field { path } if path == "p.name"));
+        assert_eq!(membership_rhs.len(), 2);
+        assert!(matches!(rhs.as_ref(), MirExpr::Eq { .. }));
+    }
+
+    #[test]
+    fn expands_under_named_set_as_any_prefix() {
+        let program = parse_program(
+            r#"
+set temp_roots = ["/tmp", "/var/tmp"]
+predicate from_temp(path) = path under temp_roots
+
+rule "r" {
+  from endpoint.process
+  correlate process.spawn as p
+  where from_temp(p.name)
+  respond alert high
+}
+"#,
+        );
+        let mir = lower_program(&program);
+        let MirExpr::Or { lhs, rhs } = &mir.rules[0].predicates[0].expr else {
+            panic!("expected one prefix comparison per named-set member");
+        };
+        assert!(matches!(lhs.as_ref(), MirExpr::StartsWith { .. }));
+        assert!(matches!(rhs.as_ref(), MirExpr::StartsWith { .. }));
     }
 
     #[test]

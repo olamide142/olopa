@@ -7,9 +7,9 @@
 //! - Flushed rows are persisted to ClickHouse (optional) with JSONL fallback.
 //! - Operational counters expose queue depth and flush health.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -215,6 +215,9 @@ pub struct AgentHeartbeat {
 pub struct AckResponse {
     /// Whether batch was accepted into server queue.
     pub accepted: bool,
+    /// True when an already-accepted batch id was acknowledged without enqueueing it again.
+    #[serde(default)]
+    pub duplicate: bool,
     /// Number of rejected rows/batches for this request.
     pub rejected: u32,
     /// Backoff hint when rejected/throttled.
@@ -237,6 +240,8 @@ pub struct IngestStatsResponse {
     pub max_queue: usize,
     /// Total accepted batches.
     pub accepted_total: u64,
+    /// Total retry batches acknowledged without enqueueing duplicate rows.
+    pub duplicate_total: u64,
     /// Total rejected batches.
     pub rejected_total: u64,
     /// Total rows flushed successfully.
@@ -326,6 +331,37 @@ struct QueuedBatch {
     payload: IngestBatchRequest,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct BatchDedupeKey {
+    tenant_id: String,
+    host_id: String,
+    batch_id: String,
+}
+
+#[derive(Default)]
+struct BatchDedupeState {
+    seen: HashSet<BatchDedupeKey>,
+    order: VecDeque<BatchDedupeKey>,
+}
+
+impl BatchDedupeState {
+    fn contains(&self, key: &BatchDedupeKey) -> bool {
+        self.seen.contains(key)
+    }
+
+    fn remember(&mut self, key: BatchDedupeKey, max_entries: usize) {
+        if max_entries == 0 || !self.seen.insert(key.clone()) {
+            return;
+        }
+        self.order.push_back(key);
+        while self.seen.len() > max_entries {
+            if let Some(expired) = self.order.pop_front() {
+                self.seen.remove(&expired);
+            }
+        }
+    }
+}
+
 /// Ingest runtime owning queue, flush worker, persistence hooks, and metrics.
 pub struct IngestRuntime {
     /// Runtime config snapshot.
@@ -347,6 +383,8 @@ pub struct IngestRuntime {
     queued: AtomicUsize,
     /// Accepted batch counter.
     accepted_total: AtomicU64,
+    /// Duplicate retry counter.
+    duplicate_total: AtomicU64,
     /// Rejected batch counter.
     rejected_total: AtomicU64,
     /// Flushed row counter.
@@ -357,6 +395,8 @@ pub struct IngestRuntime {
     last_flush_at_unix_ms: AtomicU64,
     /// In-memory recent rows + aggregates exposed by inspection APIs.
     state: Mutex<IngestInMemoryState>,
+    /// Bounded accepted batch-id index. A synchronous mutex keeps check + enqueue + insert atomic.
+    dedupe: StdMutex<BatchDedupeState>,
 }
 
 impl IngestRuntime {
@@ -395,11 +435,13 @@ impl IngestRuntime {
             shutdown_tx,
             queued: AtomicUsize::new(0),
             accepted_total: AtomicU64::new(0),
+            duplicate_total: AtomicU64::new(0),
             rejected_total: AtomicU64::new(0),
             flushed_total: AtomicU64::new(0),
             failed_flush_total: AtomicU64::new(0),
             last_flush_at_unix_ms: AtomicU64::new(0),
             state: Mutex::new(IngestInMemoryState::default()),
+            dedupe: StdMutex::new(BatchDedupeState::default()),
         }
     }
 
@@ -724,11 +766,49 @@ impl IngestRuntime {
             self.rejected_total.fetch_add(1, Ordering::Relaxed);
             return AckResponse {
                 accepted: false,
+                duplicate: false,
                 rejected: 1,
                 retry_after_ms: self.cfg.default_retry_after_ms,
                 suggested_batch_bytes: self.cfg.suggested_batch_bytes,
                 throttle_ratio: 0.0,
                 message: Some("empty batch".to_string()),
+            };
+        }
+
+        let dedupe_key = if self.cfg.dedupe_max_entries == 0 {
+            None
+        } else {
+            batch.batch_id.as_deref().and_then(|batch_id| {
+                let batch_id = batch_id.trim();
+                (!batch_id.is_empty()).then(|| BatchDedupeKey {
+                    tenant_id: batch.tenant_id.clone(),
+                    host_id: batch.host_id.clone(),
+                    batch_id: batch_id.to_string(),
+                })
+            })
+        };
+        // Keep this guard through `try_send`: concurrent retries cannot both
+        // pass the membership check before the accepted key is recorded.
+        let mut dedupe = dedupe_key.as_ref().map(|_| {
+            self.dedupe
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        });
+        if dedupe_key
+            .as_ref()
+            .zip(dedupe.as_ref())
+            .is_some_and(|(key, state)| state.contains(key))
+        {
+            self.duplicate_total.fetch_add(1, Ordering::Relaxed);
+            let queued = self.queued.load(Ordering::Relaxed);
+            return AckResponse {
+                accepted: true,
+                duplicate: true,
+                rejected: 0,
+                retry_after_ms: 0,
+                suggested_batch_bytes: self.cfg.suggested_batch_bytes,
+                throttle_ratio: throttle_ratio(queued, self.cfg.queue_maxsize),
+                message: Some("duplicate batch_id already accepted".to_string()),
             };
         }
 
@@ -738,10 +818,14 @@ impl IngestRuntime {
         };
         match self.tx.try_send(queued_batch) {
             Ok(()) => {
+                if let (Some(key), Some(state)) = (dedupe_key, dedupe.as_mut()) {
+                    state.remember(key, self.cfg.dedupe_max_entries);
+                }
                 self.accepted_total.fetch_add(1, Ordering::Relaxed);
                 let queued = self.queued.fetch_add(1, Ordering::Relaxed) + 1;
                 AckResponse {
                     accepted: true,
+                    duplicate: false,
                     rejected: 0,
                     retry_after_ms: 0,
                     suggested_batch_bytes: self.cfg.suggested_batch_bytes,
@@ -754,6 +838,7 @@ impl IngestRuntime {
                 let queued = self.queued.load(Ordering::Relaxed);
                 AckResponse {
                     accepted: false,
+                    duplicate: false,
                     rejected: 1,
                     retry_after_ms: self.cfg.default_retry_after_ms,
                     suggested_batch_bytes: (self.cfg.suggested_batch_bytes / 2).max(500_000),
@@ -765,6 +850,7 @@ impl IngestRuntime {
                 self.rejected_total.fetch_add(1, Ordering::Relaxed);
                 AckResponse {
                     accepted: false,
+                    duplicate: false,
                     rejected: 1,
                     retry_after_ms: self.cfg.default_retry_after_ms,
                     suggested_batch_bytes: 0,
@@ -782,6 +868,7 @@ impl IngestRuntime {
             queued: self.queued.load(Ordering::Relaxed),
             max_queue: self.cfg.queue_maxsize,
             accepted_total: self.accepted_total.load(Ordering::Relaxed),
+            duplicate_total: self.duplicate_total.load(Ordering::Relaxed),
             rejected_total: self.rejected_total.load(Ordering::Relaxed),
             flushed_total: self.flushed_total.load(Ordering::Relaxed),
             failed_flush_total: self.failed_flush_total.load(Ordering::Relaxed),
@@ -1156,9 +1243,105 @@ mod tests {
         let first = runtime.ack_batch(test_batch());
         assert!(first.accepted);
 
-        let second = runtime.ack_batch(test_batch());
+        let mut second_batch = test_batch();
+        second_batch.batch_id = Some("test-batch-2".to_string());
+        let second = runtime.ack_batch(second_batch);
         assert!(!second.accepted);
         assert_eq!(second.rejected, 1);
+    }
+
+    #[test]
+    fn duplicate_batch_id_is_acknowledged_without_requeueing() {
+        let runtime = IngestRuntime::new(IngestConfig {
+            queue_maxsize: 4,
+            dedupe_max_entries: 16,
+            ..IngestConfig::default()
+        });
+
+        let first = runtime.ack_batch(test_batch());
+        let duplicate = runtime.ack_batch(test_batch());
+
+        assert!(first.accepted);
+        assert!(!first.duplicate);
+        assert!(duplicate.accepted);
+        assert!(duplicate.duplicate);
+        assert_eq!(duplicate.rejected, 0);
+        let stats = runtime.stats();
+        assert_eq!(stats.queued, 1);
+        assert_eq!(stats.accepted_total, 1);
+        assert_eq!(stats.duplicate_total, 1);
+    }
+
+    #[test]
+    fn batch_id_scope_includes_tenant_and_host() {
+        let runtime = IngestRuntime::new(IngestConfig {
+            queue_maxsize: 4,
+            dedupe_max_entries: 16,
+            ..IngestConfig::default()
+        });
+        let first = test_batch();
+        let mut other_host = test_batch();
+        other_host.host_id = "host-02".to_string();
+
+        assert!(!runtime.ack_batch(first).duplicate);
+        assert!(!runtime.ack_batch(other_host).duplicate);
+        assert_eq!(runtime.stats().queued, 2);
+    }
+
+    #[test]
+    fn dedupe_index_is_bounded_and_evicts_oldest_key() {
+        let runtime = IngestRuntime::new(IngestConfig {
+            queue_maxsize: 4,
+            dedupe_max_entries: 1,
+            ..IngestConfig::default()
+        });
+        let first = test_batch();
+        let mut second = test_batch();
+        second.batch_id = Some("test-batch-2".to_string());
+
+        assert!(!runtime.ack_batch(first.clone()).duplicate);
+        assert!(!runtime.ack_batch(second).duplicate);
+        assert!(
+            !runtime.ack_batch(first).duplicate,
+            "oldest key should be accepted again after bounded eviction"
+        );
+        assert_eq!(runtime.stats().queued, 3);
+    }
+
+    #[test]
+    fn concurrent_retries_enqueue_exactly_once() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        const RETRIES: usize = 8;
+        let runtime = Arc::new(IngestRuntime::new(IngestConfig {
+            queue_maxsize: RETRIES + 1,
+            dedupe_max_entries: 16,
+            ..IngestConfig::default()
+        }));
+        let barrier = Arc::new(Barrier::new(RETRIES));
+        let handles = (0..RETRIES)
+            .map(|_| {
+                let runtime = Arc::clone(&runtime);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    runtime.ack_batch(test_batch())
+                })
+            })
+            .collect::<Vec<_>>();
+        let acknowledgements = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("retry thread"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            acknowledgements.iter().filter(|ack| !ack.duplicate).count(),
+            1
+        );
+        assert!(acknowledgements.iter().all(|ack| ack.accepted));
+        assert_eq!(runtime.stats().queued, 1);
+        assert_eq!(runtime.stats().duplicate_total, (RETRIES - 1) as u64);
     }
 
     #[tokio::test]

@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::ast::Program;
+
 // Stage-0 prelude context injected into semantic passes.
 //
 // Why this exists:
@@ -10,6 +12,8 @@ use std::collections::{HashMap, HashSet};
 /// Stage-0 stdlib prelude context.
 #[derive(Debug, Clone, Default)]
 pub struct PreludeContext {
+    // Parsed stdlib set/predicate bodies used by MIR symbol expansion.
+    pub builtin_program: Program,
     // Predicate names available globally without `use`.
     pub builtin_predicates: HashSet<String>,
     // Set names available globally without `use`.
@@ -18,8 +22,12 @@ pub struct PreludeContext {
     pub builtin_callables: HashSet<String>,
     // Typed callable contracts used by type-checker.
     // Example: baseline.image(image_id: Str) -> BaselineProfile
-    pub builtin_callable_signatures: HashMap<String, CallableSignature>,
+    pub builtin_callable_signatures: CallableSignatures,
 }
+
+/// One callable name may expose multiple signatures. Declaration order is
+/// retained so diagnostics and runtime artifacts stay deterministic.
+pub type CallableSignatures = HashMap<String, Vec<CallableSignature>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CallableSignature {
@@ -35,6 +43,7 @@ pub struct CallableParam {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallableTypeRef {
+    Any,
     Str,
     Int,
     Float,
@@ -180,7 +189,7 @@ pub fn parse_builtin_callables(source: &str) -> Result<HashSet<String>, Vec<Prel
 /// - callable baseline.image(image_id: Str) -> BaselineProfile
 pub fn parse_builtin_callable_signatures(
     source: &str,
-) -> Result<HashMap<String, CallableSignature>, Vec<PreludeError>> {
+) -> Result<CallableSignatures, Vec<PreludeError>> {
     let mut out = HashMap::new();
     let mut errs = Vec::new();
 
@@ -194,7 +203,16 @@ pub fn parse_builtin_callable_signatures(
         if let Some(rest) = trimmed.strip_prefix("callable ") {
             match parse_callable_decl(rest.trim()) {
                 Ok((name, sig)) => {
-                    out.insert(name, sig);
+                    let overloads = out.entry(name).or_insert_with(Vec::new);
+                    if overloads.contains(&sig) {
+                        errs.push(PreludeError {
+                            line: line_no,
+                            col: 1,
+                            message: "duplicate callable signature".to_string(),
+                        });
+                    } else {
+                        overloads.push(sig);
+                    }
                 }
                 Err(msg) => errs.push(PreludeError {
                     line: line_no,
@@ -325,6 +343,7 @@ fn parse_callable_type_ref(raw: &str) -> Result<CallableTypeRef, String> {
     }
 
     match raw {
+        "Any" => Ok(CallableTypeRef::Any),
         "Str" => Ok(CallableTypeRef::Str),
         "Int" => Ok(CallableTypeRef::Int),
         "Float" => Ok(CallableTypeRef::Float),
@@ -380,9 +399,12 @@ callable baseline.workload
 callable baseline.image(image_id: Str) -> BaselineProfile
 callable baseline.workload(namespace: Str, name: Str) -> BaselineProfile
 callable baseline.flags(tags: Set<Str>, host: Nullable<Host>, maybe_path: Path?) -> BaselineProfile
+callable baseline.image(image_ids: Set<Str>) -> BaselineProfile
 "#;
         let sigs = parse_builtin_callable_signatures(src).expect("prelude callable sig parse");
-        let image_sig = sigs.get("baseline.image").expect("image sig");
+        let image_overloads = sigs.get("baseline.image").expect("image overloads");
+        assert_eq!(image_overloads.len(), 2);
+        let image_sig = &image_overloads[0];
         assert_eq!(
             image_sig.returns,
             Some(CallableTypeRef::Entity("BaselineProfile".to_string()))
@@ -391,7 +413,7 @@ callable baseline.flags(tags: Set<Str>, host: Nullable<Host>, maybe_path: Path?)
         assert_eq!(image_sig.params[0].name, "image_id");
         assert_eq!(image_sig.params[0].ty, CallableTypeRef::Str);
 
-        let workload_sig = sigs.get("baseline.workload").expect("workload sig");
+        let workload_sig = &sigs.get("baseline.workload").expect("workload sig")[0];
         assert_eq!(
             workload_sig.returns,
             Some(CallableTypeRef::Entity("BaselineProfile".to_string()))
@@ -400,7 +422,7 @@ callable baseline.flags(tags: Set<Str>, host: Nullable<Host>, maybe_path: Path?)
         assert_eq!(workload_sig.params[0].name, "namespace");
         assert_eq!(workload_sig.params[1].name, "name");
 
-        let flags_sig = sigs.get("baseline.flags").expect("flags sig");
+        let flags_sig = &sigs.get("baseline.flags").expect("flags sig")[0];
         assert_eq!(flags_sig.params.len(), 3);
         assert_eq!(
             flags_sig.params[0].ty,
