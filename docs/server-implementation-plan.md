@@ -19,19 +19,20 @@ SurrealDB is the primary graph + inference store. ClickHouse remains optional fa
 
 Implemented already:
 
-- HTTP ingest/read APIs in Rust with bounded queue + async flush worker
+- HTTP ingest/read APIs in Rust with a bounded, partitioned flush pipeline
 - Token auth + tenant scoping on ingest/read endpoints
 - Persistence chain: SurrealDB (optional) -> ClickHouse (optional fallback) -> JSONL
 - In-memory recent/summary indexes by tenant/host/kind
+- Fsynced pre-acknowledgement WAL, restart replay, persistent idempotency, and safe compaction
+- Request/rate limits, restricted CORS, production auth validation, readiness, and Prometheus metrics
+- Jittered sink retries, circuit breakers, JSONL fallback, and dead-letter persistence
 
 Known gaps still open:
 
-- request size + rate limiting
-- readiness/sink health endpoint
-- idempotency/dedup (`tenant_id + host_id + batch_id`)
-- durable pre-flush WAL/spool
-- retry/circuit-breaker policy for sink writes
-- end-to-end control plane integration
+- managed sink schema migrations and version gates
+- OpenTelemetry trace export across ingest and control-plane calls
+- end-to-end control-plane integration
+- optional Kafka fan-out if future load tests justify it
 
 ---
 

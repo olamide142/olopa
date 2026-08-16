@@ -35,6 +35,8 @@ pub const EVENT_KIND_SQL: u32 = 4;
 pub const EVENT_KIND_SSL: u32 = 5;
 /// DNS resolution event (`DnsEvent`).
 pub const EVENT_KIND_DNS: u32 = 6;
+/// TC egress enforcement verdict event (`TcEvent`).
+pub const EVENT_KIND_TC: u32 = 7;
 
 /// Process execution event (execve / execveat syscall)
 #[repr(C)]
@@ -43,6 +45,8 @@ pub struct ExecEvent {
     pub kind: u32, // EVENT_KIND_EXEC
     pub pid: u32,
     pub ts_ns: u64,
+    /// Stable cgroup-v2 identifier returned by `bpf_get_current_cgroup_id`.
+    pub cgroup_id: u64,
     pub ppid: u32,
     pub uid: u32,
     pub gid: u32,
@@ -58,6 +62,7 @@ pub struct FileEvent {
     pub kind: u32, // EVENT_KIND_FILE
     pub pid: u32,
     pub ts_ns: u64,
+    pub cgroup_id: u64,
     pub uid: u32,
     pub flags: u32, // O_RDONLY / O_WRONLY / O_RDWR etc.
     pub comm: [u8; 16],
@@ -71,6 +76,7 @@ pub struct NetEvent {
     pub kind: u32, // EVENT_KIND_NET
     pub pid: u32,
     pub ts_ns: u64,
+    pub cgroup_id: u64,
     pub uid: u32,
     pub dst_ip: u32, // IPv4 big-endian
     pub dst_port: u16,
@@ -98,6 +104,7 @@ pub struct SqlEvent {
     pub kind: u32, // EVENT_KIND_SQL
     pub pid: u32,
     pub ts_ns: u64,
+    pub cgroup_id: u64,
     pub uid: u32,
     pub query_hash: u32, // FNV-1a hash of first SQL_QUERY_LEN bytes of query text
     pub db_port: u16,    // 5432 (postgres) or 3306 (mysql); 0 if unknown
@@ -114,6 +121,7 @@ pub struct SslEvent {
     pub kind: u32, // EVENT_KIND_SSL
     pub pid: u32,
     pub ts_ns: u64,
+    pub cgroup_id: u64,
     pub uid: u32,
     pub data_len: u32, // input bytes processed in this call
     pub operation: u8, // 0=encrypt 1=decrypt
@@ -132,6 +140,7 @@ pub struct DnsEvent {
     pub kind: u32, // EVENT_KIND_DNS
     pub pid: u32,
     pub ts_ns: u64,
+    pub cgroup_id: u64,
     pub uid: u32,
     pub query_hash: u32, // FNV-1a hash of `query` up to NUL
     pub query_len: u16,  // byte length of query string (capped at 63)
@@ -153,17 +162,27 @@ pub struct XdpStats {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct TcEvent {
-    pub ts_ns: u64,
+    pub kind: u32, // EVENT_KIND_TC
     pub pid: u32,
+    pub ts_ns: u64,
+    pub cgroup_id: u64,
+    pub uid: u32,
     pub dst_ip: u32,
     pub dst_port: u16,
     pub proto: u8,
     pub direction: u8, // 0 = ingress, 1 = egress
+    pub verdict: u8,   // 0 = allow, 1 = deny
+    pub _pad: [u8; 3],
+    pub comm: [u8; 16],
 }
+
+pub const TC_VERDICT_ALLOW: u8 = 0;
+pub const TC_VERDICT_DENY: u8 = 1;
 
 /// TC egress policy key used by kernel/userspace shared policy maps.
 ///
-/// Matching is exact on all fields (`pid + ip + port + proto`).
+/// Matching supports process, cgroup, and global scopes. A zero `pid` or
+/// `cgroup_id` is a wildcard inserted intentionally by userspace.
 ///
 /// Fields are normalized for stable userspace insertion and kernel lookup:
 /// - `dst_ip` uses canonical `u32::from(Ipv4Addr)` form (for example `1.2.3.4 -> 0x01020304`).
@@ -173,6 +192,7 @@ pub struct TcEvent {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct TcEgressPolicyKey {
+    pub cgroup_id: u64,
     pub pid: u32,
     pub dst_ip: u32,
     pub dst_port: u16,
@@ -188,6 +208,25 @@ pub const TC_POLICY_ACTION_ALLOW: u8 = 0;
 ///
 /// TC enforcement path maps this to `TC_ACT_SHOT`.
 pub const TC_POLICY_ACTION_DENY: u8 = 1;
+/// Rate-limit decision. Parameters are stored in `TC_EGRESS_RATE_CONFIG`.
+pub const TC_POLICY_ACTION_RATE_LIMIT: u8 = 2;
+
+/// Packet token-bucket configuration for a TC policy key.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct TcRateLimitConfig {
+    pub packets_per_second: u32,
+    pub burst: u32,
+}
+
+/// Mutable kernel token-bucket state for a rate-limited TC policy key.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TcRateLimitState {
+    pub last_refill_ns: u64,
+    pub tokens: u32,
+    pub _pad: u32,
+}
 
 // Safety: all fields are plain integer types — safe to send across the
 // kernel/userspace boundary via the ring buffer.
@@ -201,6 +240,10 @@ unsafe impl aya::Pod for NetEvent {}
 unsafe impl aya::Pod for TcEvent {}
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for TcEgressPolicyKey {}
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for TcRateLimitConfig {}
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for TcRateLimitState {}
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for XdpStats {}
 #[cfg(feature = "user")]

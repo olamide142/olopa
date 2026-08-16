@@ -145,7 +145,7 @@ fn emit_value_expr(expr: &MirExpr) -> String {
         }
         MirExpr::Null => "null".to_string(),
         MirExpr::Field { path } => emit_field_path(path),
-        MirExpr::Call { .. } => "null".to_string(),
+        MirExpr::Call { .. } | MirExpr::Project { .. } => "null".to_string(),
         MirExpr::List(items) => {
             let items = items
                 .iter()

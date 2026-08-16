@@ -21,12 +21,13 @@
 
 use aya_ebpf::{
     helpers::{
-        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_ns,
+        bpf_get_current_cgroup_id, bpf_get_current_comm, bpf_get_current_pid_tgid,
+        bpf_get_current_uid_gid, bpf_ktime_get_ns,
     },
     macros::uprobe,
     programs::ProbeContext,
 };
-use olopa_common::{EVENT_KIND_SSL, SslEvent};
+use olopa_common::{SslEvent, EVENT_KIND_SSL};
 
 use crate::EVENTS;
 
@@ -62,6 +63,7 @@ unsafe fn try_ssl_event(ctx: &ProbeContext, operation: u8) -> u32 {
 
     (*event).kind = EVENT_KIND_SSL;
     (*event).ts_ns = bpf_ktime_get_ns();
+    (*event).cgroup_id = bpf_get_current_cgroup_id();
 
     let pid_tgid = bpf_get_current_pid_tgid();
     (*event).pid = (pid_tgid >> 32) as u32;

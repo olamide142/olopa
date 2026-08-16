@@ -25,16 +25,17 @@ pub use mid::{
 pub use parser::{ParseError, Parser};
 pub use prelude::{
     parse_builtin_callable_signatures, parse_builtin_callables, parse_builtin_predicates,
-    parse_builtin_sets, CallableParam, CallableSignature, CallableTypeRef, PreludeContext,
-    PreludeError,
+    parse_builtin_sets, CallableParam, CallableSignature, CallableSignatures, CallableTypeRef,
+    PreludeContext, PreludeError,
 };
 pub use resolver::{
     resolve_program, resolve_program_with_globals, resolve_program_with_schema, ExternalRef,
     ExternalSymbolSource, ResolveOutput, ResolvedCall, ResolvedCallKind, SymbolTable,
 };
 pub use runtime_ir::{
-    lower_runtime_program, runtime_fields_from_schema, RuntimeExpr, RuntimeField, RuntimeFieldType,
-    RuntimeProgram, RuntimeRule,
+    lower_runtime_program, runtime_callables_from_prelude, runtime_fields_from_schema,
+    RuntimeCallable, RuntimeCallableParam, RuntimeCallableType, RuntimeExpr, RuntimeField,
+    RuntimeFieldType, RuntimeProgram, RuntimeRule,
 };
 pub use schema::{
     parse_schema, EntitySchema, FieldSchema, FieldType, PrimitiveType, RootSchema, SchemaRegistry,
@@ -125,7 +126,7 @@ pub fn compile(source: &str, config: &CompilerConfig) -> Result<CompileOutput, V
     let (schema, prelude) = load_stage0(config)?;
     let (tokens, program) = lex_and_parse(source)?;
     Ok(finalize_unit(
-        tokens, program, schema, prelude, None, config,
+        tokens, program, schema, prelude, None, None, config,
     ))
 }
 
@@ -172,6 +173,7 @@ pub fn compile_many(inputs: Vec<CompileUnitInput>, config: &CompilerConfig) -> C
 
     // Pass 2: build cross-file declarations and duplicate diagnostics.
     let (global_symbols, mut project_diagnostics) = build_global_symbols(&parsed_units);
+    let project_definitions = build_project_definitions(&parsed_units);
 
     // Pass 3: resolve each parsed unit against global + prelude + schema.
     for (id, tokens, program) in parsed_units {
@@ -181,6 +183,7 @@ pub fn compile_many(inputs: Vec<CompileUnitInput>, config: &CompilerConfig) -> C
             schema.clone(),
             prelude.clone(),
             Some(&global_symbols),
+            Some(&project_definitions),
             config,
         );
         unit_results.push(CompileUnitResult {
@@ -228,6 +231,7 @@ fn load_stage0(
             })
             .collect::<Vec<_>>()
     })?;
+    let (_, builtin_predicate_program) = lex_and_parse(builtin_predicates_src)?;
 
     // Stage 0C: Load built-in set declarations.
     let builtin_sets_src = include_str!("oil_stdlib/src/builtins.oil");
@@ -241,6 +245,7 @@ fn load_stage0(
             })
             .collect::<Vec<_>>()
     })?;
+    let (_, builtin_set_program) = lex_and_parse(builtin_sets_src)?;
     // Stage 0D: Load built-in callable declarations.
     let builtin_callables_src = include_str!("oil_stdlib/src/callables.oil");
     let builtin_callables = parse_builtin_callables(builtin_callables_src).map_err(|errs| {
@@ -265,9 +270,16 @@ fn load_stage0(
                 .collect::<Vec<_>>()
         })?;
 
+    let builtin_program = ast::Program {
+        predicates: builtin_predicate_program.predicates,
+        sets: builtin_set_program.sets,
+        ..ast::Program::default()
+    };
+
     Ok((
         schema,
         PreludeContext {
+            builtin_program,
             builtin_predicates,
             builtin_sets,
             builtin_callables,
@@ -309,6 +321,7 @@ fn finalize_unit(
     schema: SchemaRegistry,
     prelude: PreludeContext,
     global_symbols: Option<&SymbolTable>,
+    project_definitions: Option<&ast::Program>,
     config: &CompilerConfig,
 ) -> CompileOutput {
     // Stage 3: Name resolution using schema + prelude (+ optional global symbols).
@@ -338,7 +351,22 @@ fn finalize_unit(
 
     // Stage 5: Lower AST into MIR when MIR consumers are enabled (validation/codegen/runtime IR).
     let mir = if config.run_mir || config.run_codegen {
-        Some(lower_program(&program))
+        let mut lowering_program = prelude.builtin_program.clone();
+        // Project and local definitions intentionally follow stdlib
+        // definitions. Local declarations come last so a unit can override a
+        // project/stdlib definition deterministically.
+        if let Some(project) = project_definitions {
+            lowering_program.sets.extend(project.sets.iter().cloned());
+            lowering_program
+                .predicates
+                .extend(project.predicates.iter().cloned());
+        }
+        lowering_program.sets.extend(program.sets.iter().cloned());
+        lowering_program
+            .predicates
+            .extend(program.predicates.iter().cloned());
+        lowering_program.rules = program.rules.clone();
+        Some(lower_program(&lowering_program))
     } else {
         None
     };
@@ -361,12 +389,15 @@ fn finalize_unit(
     // Stage 8: Build runtime IR from MIR for downstream runtime execution/serialization.
     // Runtime IR is withheld on MIR errors to enforce the hard compile gate.
     let runtime_fields = runtime_ir::runtime_fields_from_schema(&schema);
+    let runtime_callables =
+        runtime_ir::runtime_callables_from_prelude(&prelude.builtin_callable_signatures);
     let runtime_ir = if mir_has_errors {
         None
     } else {
         mir.as_ref().map(|mir| {
             let mut program = lower_runtime_program(mir);
             program.fields = runtime_fields.clone();
+            program.callables = runtime_callables.clone();
             program
         })
     };
@@ -410,6 +441,22 @@ fn finalize_unit(
         codegen,
         diagnostics,
     }
+}
+
+/// Collect executable set/predicate bodies for cross-file MIR expansion.
+///
+/// The resolver's global symbol table only records names. Runtime lowering
+/// needs the corresponding declaration bodies as well, otherwise a predicate
+/// declared in one source unit remains an unknown runtime callable in another.
+fn build_project_definitions(units: &[(String, Vec<lexer::Token>, ast::Program)]) -> ast::Program {
+    let mut definitions = ast::Program::default();
+    for (_id, _tokens, program) in units {
+        definitions.sets.extend(program.sets.iter().cloned());
+        definitions
+            .predicates
+            .extend(program.predicates.iter().cloned());
+    }
+    definitions
 }
 
 fn build_global_symbols(
@@ -467,6 +514,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn compile_emits_typed_callable_contracts() {
+        let src = r#"
+rule "long_dns_name" {
+  from dns.query
+  correlate dns.query as q
+  where len(q.domain.value) > 40
+  respond alert medium
+}
+"#;
+        let out = compile(src, &CompilerConfig::default()).expect("compile");
+        let runtime = out.runtime_ir.expect("runtime ir");
+        let len_overloads = runtime
+            .callables
+            .iter()
+            .filter(|callable| callable.name == "len")
+            .collect::<Vec<_>>();
+        assert_eq!(len_overloads.len(), 2);
+        let len = len_overloads
+            .iter()
+            .find(|callable| callable.params[0].value_type == RuntimeCallableType::Str)
+            .expect("string len callable contract");
+        assert_eq!(len.params.len(), 1);
+        assert_eq!(len.params[0].name, "value");
+        assert_eq!(len.params[0].value_type, RuntimeCallableType::Str);
+        assert_eq!(len.returns, Some(RuntimeCallableType::Int));
+
+        let count = runtime
+            .callables
+            .iter()
+            .find(|callable| callable.name == "count")
+            .expect("count callable contract");
+        assert_eq!(count.params[0].value_type, RuntimeCallableType::Any);
+
+        let is_shell = runtime
+            .callables
+            .iter()
+            .find(|callable| callable.name == "is_shell")
+            .expect("is_shell callable contract");
+        assert_eq!(
+            is_shell.params[0].value_type,
+            RuntimeCallableType::Entity("Process".to_string())
+        );
+    }
+
+    #[test]
     fn compile_keeps_runtime_ir_for_unknown_callable_calls() {
         let src = r#"
 rule "unsupported_expr_gate" {
@@ -488,5 +580,74 @@ rule "unsupported_expr_gate" {
             out.runtime_ir.is_some(),
             "runtime IR should still be emitted when resolver emits warnings only"
         );
+    }
+
+    #[test]
+    fn compile_expands_stdlib_predicate_bodies_and_sets_for_runtime() {
+        let src = r#"
+rule "stdlib_shell" {
+  from endpoint.process
+  correlate process.spawn as p
+  where is_shell(p)
+  respond alert high
+}
+"#;
+        let out = compile(src, &CompilerConfig::default()).expect("compile");
+        let runtime = out.runtime_ir.expect("runtime ir");
+        let RuntimeExpr::In { lhs, rhs } = &runtime.rules[0].predicates[0] else {
+            panic!(
+                "stdlib predicate should be expanded before runtime emission: {:?}",
+                runtime.rules[0].predicates[0]
+            );
+        };
+        assert!(matches!(lhs.as_ref(), RuntimeExpr::Field { path } if path == "process.name"));
+        assert!(rhs.len() >= 10);
+        assert!(rhs
+            .iter()
+            .any(|item| matches!(item, RuntimeExpr::Str { value } if value == "bash")));
+    }
+
+    #[test]
+    fn compile_many_expands_predicates_and_sets_declared_in_another_unit() {
+        let definitions = r#"
+set approved_shells = ["bash", "zsh"]
+predicate approved(proc) = proc.name in approved_shells
+"#;
+        let rule = r#"
+rule "cross_file_predicate" {
+  from endpoint.process
+  correlate process.spawn as p
+  where approved(p)
+  respond alert high
+}
+"#;
+        let output = compile_many(
+            vec![
+                CompileUnitInput {
+                    id: "definitions".to_string(),
+                    source: definitions.to_string(),
+                },
+                CompileUnitInput {
+                    id: "rule".to_string(),
+                    source: rule.to_string(),
+                },
+            ],
+            &CompilerConfig::default(),
+        );
+        assert!(output.project_diagnostics.is_empty());
+        let rule_unit = output
+            .units
+            .iter()
+            .find(|unit| unit.id == "rule")
+            .and_then(|unit| unit.output.as_ref())
+            .expect("compiled rule unit");
+        let runtime = rule_unit.runtime_ir.as_ref().expect("runtime ir");
+        let RuntimeExpr::In { rhs, .. } = &runtime.rules[0].predicates[0] else {
+            panic!("cross-file predicate should be expanded into membership");
+        };
+        assert_eq!(rhs.len(), 2);
+        assert!(rhs
+            .iter()
+            .any(|item| matches!(item, RuntimeExpr::Str { value } if value == "bash")));
     }
 }

@@ -7,20 +7,22 @@
 //! - handle graceful shutdown and worker drain.
 
 mod config;
+mod durability;
 mod telemetry;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use anyhow::Context;
-use axum::extract::{Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::extract::{DefaultBodyLimit, Query, State};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::{ArgAction, Parser};
 use serde::{Deserialize, Serialize};
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -28,7 +30,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use crate::config::{parse_auth_tokens, AuthConfig, AuthTokenScope, ServerConfig};
 use crate::telemetry::{
     AckResponse, IngestBatchRequest, IngestDataSummaryResponse, IngestRuntime, IngestStatsResponse,
-    RecentIngestResponse,
+    ReadinessResponse, RecentIngestResponse,
 };
 
 /// Shared application state injected into route handlers.
@@ -38,6 +40,8 @@ struct AppState {
     runtime: Arc<IngestRuntime>,
     /// API authn/authz state.
     auth: Arc<AuthState>,
+    /// Per-tenant/host token buckets for admission control.
+    rate_limiter: Arc<RateLimiter>,
 }
 
 /// Command line overrides for ingest server runtime configuration.
@@ -142,6 +146,12 @@ struct EffectiveServerConfig {
     port: u16,
     auth_enabled: bool,
     auth_token_count: usize,
+    production_mode: bool,
+    cors_allowed_origins: Vec<String>,
+    max_request_body_bytes: usize,
+    rate_limit_per_second: u32,
+    rate_limit_burst: u32,
+    rate_limit_max_keys: usize,
     ingest: EffectiveIngestConfig,
 }
 
@@ -154,6 +164,17 @@ struct EffectiveIngestConfig {
     default_retry_after_ms: u32,
     suggested_batch_bytes: u32,
     recent_events_max: usize,
+    dedupe_max_entries: usize,
+    wal_path: String,
+    dedupe_path: String,
+    flush_workers: usize,
+    wal_compact_after_commits: usize,
+    sink_retry_max_attempts: u32,
+    sink_retry_initial_ms: u64,
+    sink_retry_max_ms: u64,
+    circuit_failure_threshold: u32,
+    circuit_open_ms: u64,
+    dead_letter_path: String,
     persist_jsonl_path: String,
     clickhouse_enabled: bool,
     clickhouse_url: Option<String>,
@@ -183,6 +204,12 @@ impl EffectiveServerConfig {
             port: cfg.port,
             auth_enabled: cfg.auth.enabled(),
             auth_token_count: cfg.auth.tokens.len(),
+            production_mode: cfg.production_mode,
+            cors_allowed_origins: cfg.cors_allowed_origins.clone(),
+            max_request_body_bytes: cfg.max_request_body_bytes,
+            rate_limit_per_second: cfg.rate_limit_per_second,
+            rate_limit_burst: cfg.rate_limit_burst,
+            rate_limit_max_keys: cfg.rate_limit_max_keys,
             ingest: EffectiveIngestConfig {
                 queue_maxsize: cfg.ingest.queue_maxsize,
                 flush_interval_ms: cfg.ingest.flush_interval_ms,
@@ -190,6 +217,17 @@ impl EffectiveServerConfig {
                 default_retry_after_ms: cfg.ingest.default_retry_after_ms,
                 suggested_batch_bytes: cfg.ingest.suggested_batch_bytes,
                 recent_events_max: cfg.ingest.recent_events_max,
+                dedupe_max_entries: cfg.ingest.dedupe_max_entries,
+                wal_path: cfg.ingest.wal_path.clone(),
+                dedupe_path: cfg.ingest.dedupe_path.clone(),
+                flush_workers: cfg.ingest.flush_workers,
+                wal_compact_after_commits: cfg.ingest.wal_compact_after_commits,
+                sink_retry_max_attempts: cfg.ingest.sink_retry_max_attempts,
+                sink_retry_initial_ms: cfg.ingest.sink_retry_initial_ms,
+                sink_retry_max_ms: cfg.ingest.sink_retry_max_ms,
+                circuit_failure_threshold: cfg.ingest.circuit_failure_threshold,
+                circuit_open_ms: cfg.ingest.circuit_open_ms,
+                dead_letter_path: cfg.ingest.dead_letter_path.clone(),
                 persist_jsonl_path: cfg.ingest.persist_jsonl_path.clone(),
                 clickhouse_enabled: cfg.ingest.clickhouse_url.is_some(),
                 clickhouse_url: cfg.ingest.clickhouse_url.clone(),
@@ -400,6 +438,60 @@ struct AuthState {
     tokens: std::collections::HashMap<String, AuthPrincipal>,
 }
 
+struct RateBucket {
+    tokens: f64,
+    updated_at: Instant,
+}
+
+struct RateLimiter {
+    rate_per_second: f64,
+    burst: f64,
+    max_keys: usize,
+    buckets: Mutex<HashMap<(String, String), RateBucket>>,
+}
+
+impl RateLimiter {
+    fn new(rate_per_second: u32, burst: u32, max_keys: usize) -> Self {
+        Self {
+            rate_per_second: rate_per_second as f64,
+            burst: burst as f64,
+            max_keys: max_keys.max(1),
+            buckets: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn allow(&self, tenant_id: &str, host_id: &str) -> bool {
+        let now = Instant::now();
+        let mut buckets = self
+            .buckets
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let key = (tenant_id.to_string(), host_id.to_string());
+        if !buckets.contains_key(&key) && buckets.len() >= self.max_keys {
+            if let Some(oldest) = buckets
+                .iter()
+                .min_by_key(|(_, bucket)| bucket.updated_at)
+                .map(|(key, _)| key.clone())
+            {
+                buckets.remove(&oldest);
+            }
+        }
+        let bucket = buckets.entry(key).or_insert(RateBucket {
+            tokens: self.burst,
+            updated_at: now,
+        });
+        let elapsed = now.duration_since(bucket.updated_at).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * self.rate_per_second).min(self.burst);
+        bucket.updated_at = now;
+        if bucket.tokens < 1.0 {
+            false
+        } else {
+            bucket.tokens -= 1.0;
+            true
+        }
+    }
+}
+
 impl AuthState {
     fn from_config(cfg: &AuthConfig) -> Self {
         let mut tokens = std::collections::HashMap::new();
@@ -459,6 +551,7 @@ async fn main() -> anyhow::Result<()> {
         );
         return Ok(());
     }
+    cfg.validate().map_err(anyhow::Error::msg)?;
     if cfg.ingest.surreal_url.is_some() {
         info!(
             jsonl_path = %cfg.ingest.persist_jsonl_path,
@@ -482,24 +575,20 @@ async fn main() -> anyhow::Result<()> {
             "ingest persistence configured: jsonl"
         );
     }
-    let runtime = Arc::new(IngestRuntime::new(cfg.ingest.clone()));
+    let runtime = Arc::new(IngestRuntime::try_new(cfg.ingest.clone()).map_err(anyhow::Error::msg)?);
     runtime.start_worker().await;
 
     let state = AppState {
         runtime: Arc::clone(&runtime),
         auth: Arc::new(AuthState::from_config(&cfg.auth)),
+        rate_limiter: Arc::new(RateLimiter::new(
+            cfg.rate_limit_per_second,
+            cfg.rate_limit_burst,
+            cfg.rate_limit_max_keys,
+        )),
     };
 
-    let app = Router::new()
-        .route("/", get(root_ok))
-        .route("/health", get(health))
-        .route("/api/v1/ingest/batches", post(ingest_batch))
-        .route("/api/v1/ingest/stats", get(ingest_stats))
-        .route("/api/v1/ingest/recent", get(ingest_recent))
-        .route("/api/v1/ingest/summary", get(ingest_summary))
-        .with_state(state)
-        .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive());
+    let app = build_app(state, &cfg)?;
 
     let addr: SocketAddr = format!("{}:{}", cfg.host, cfg.port)
         .parse()
@@ -517,6 +606,23 @@ async fn main() -> anyhow::Result<()> {
 
     runtime.shutdown().await;
     Ok(())
+}
+
+fn build_app(state: AppState, cfg: &ServerConfig) -> anyhow::Result<Router> {
+    let cors = build_cors_layer(&cfg.cors_allowed_origins)?;
+    Ok(Router::new()
+        .route("/", get(root_ok))
+        .route("/health", get(health))
+        .route("/ready", get(ready))
+        .route("/metrics", get(metrics))
+        .route("/api/v1/ingest/batches", post(ingest_batch))
+        .route("/api/v1/ingest/stats", get(ingest_stats))
+        .route("/api/v1/ingest/recent", get(ingest_recent))
+        .route("/api/v1/ingest/summary", get(ingest_summary))
+        .with_state(state)
+        .layer(DefaultBodyLimit::max(cfg.max_request_body_bytes))
+        .layer(TraceLayer::new_for_http())
+        .layer(cors))
 }
 
 /// Configure process-wide tracing subscriber with optional CLI override.
@@ -540,6 +646,37 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }
 
+async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ReadinessResponse>) {
+    let response = state.runtime.readiness().await;
+    let status = if response.ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (status, Json(response))
+}
+
+async fn metrics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<([(HeaderName, HeaderValue); 1], String), (StatusCode, Json<ApiErrorResponse>)> {
+    let principal = state.auth.authenticate(&headers)?;
+    if !matches!(principal, AuthPrincipal::Global) {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "insufficient_scope",
+            "metrics endpoint requires a global-scope token",
+        ));
+    }
+    Ok((
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
+        )],
+        state.runtime.prometheus_metrics(),
+    ))
+}
+
 /// Minimal root endpoint for simple load balancer probes.
 async fn root_ok() -> &'static str {
     "Ok"
@@ -553,7 +690,62 @@ async fn ingest_batch(
 ) -> ApiResult<AckResponse> {
     let principal = state.auth.authenticate(&headers)?;
     ensure_tenant_allowed(&principal, &body.tenant_id)?;
-    Ok(Json(state.runtime.ack_batch(body)))
+    if !state.rate_limiter.allow(&body.tenant_id, &body.host_id) {
+        return Err(api_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "tenant/host ingest rate exceeded",
+        ));
+    }
+    let runtime = Arc::clone(&state.runtime);
+    let ack = tokio::task::spawn_blocking(move || runtime.ack_batch(body))
+        .await
+        .map_err(|err| {
+            api_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "acceptance_worker_failed",
+                format!("durable acceptance worker failed: {err}"),
+            )
+        })?;
+    Ok(Json(ack))
+}
+
+fn build_cors_layer(origins: &[String]) -> anyhow::Result<CorsLayer> {
+    let allowed = origins
+        .iter()
+        .map(|origin| {
+            if origin.trim() == "*" {
+                anyhow::bail!("wildcard CORS origin is not allowed; configure explicit origins");
+            }
+            let parsed = reqwest::Url::parse(origin)
+                .with_context(|| format!("invalid CORS origin URL '{origin}'"))?;
+            if !matches!(parsed.scheme(), "http" | "https")
+                || parsed.host_str().is_none()
+                || parsed.path() != "/"
+                || parsed.query().is_some()
+                || parsed.fragment().is_some()
+            {
+                anyhow::bail!(
+                    "CORS origin must be an http(s) scheme, host, and optional port only: '{origin}'"
+                );
+            }
+            origin
+                .parse::<HeaderValue>()
+                .with_context(|| format!("invalid CORS origin '{origin}'"))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let layer = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            HeaderName::from_static("x-api-key"),
+        ]);
+    Ok(if allowed.is_empty() {
+        layer
+    } else {
+        layer.allow_origin(AllowOrigin::list(allowed))
+    })
 }
 
 /// Stats endpoint for queue depth and flush counters.
@@ -740,7 +932,9 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
     use axum::http::HeaderValue;
+    use tower::ServiceExt;
 
     #[test]
     fn extracts_bearer_and_x_api_key_tokens() {
@@ -775,5 +969,75 @@ mod tests {
         let principal = AuthPrincipal::TenantSet(["acme".to_string()].into_iter().collect());
         let resolved = resolve_tenant_filter(&principal, None).expect("resolve tenant");
         assert_eq!(resolved.as_deref(), Some("acme"));
+    }
+
+    #[test]
+    fn tenant_host_rate_limiter_enforces_burst_and_refills() {
+        let limiter = RateLimiter::new(1_000, 2, 8);
+        assert!(limiter.allow("acme", "host"));
+        assert!(limiter.allow("acme", "host"));
+        assert!(!limiter.allow("acme", "host"));
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert!(limiter.allow("acme", "host"));
+        assert!(limiter.allow("acme", "other-host"));
+    }
+
+    #[test]
+    fn cors_configuration_is_restricted_and_rejects_invalid_origins() {
+        assert!(build_cors_layer(&[]).is_ok());
+        assert!(build_cors_layer(&["https://console.example".to_string()]).is_ok());
+        assert!(build_cors_layer(&["*".to_string()]).is_err());
+        assert!(build_cors_layer(&["console.example".to_string()]).is_err());
+        assert!(build_cors_layer(&["https://console.example/path".to_string()]).is_err());
+        assert!(build_cors_layer(&["bad\norigin".to_string()]).is_err());
+    }
+
+    #[tokio::test]
+    async fn http_boundary_rejects_oversized_and_malformed_json() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("olopa-ingest-http-{nonce}"));
+        let mut cfg = ServerConfig::from_env();
+        cfg.auth = AuthConfig::default();
+        cfg.max_request_body_bytes = 64;
+        cfg.ingest.flush_workers = 1;
+        cfg.ingest.wal_path = base.with_extension("wal").to_string_lossy().into_owned();
+        cfg.ingest.dedupe_path = base.with_extension("dedupe").to_string_lossy().into_owned();
+        cfg.ingest.persist_jsonl_path = base.with_extension("jsonl").to_string_lossy().into_owned();
+        cfg.ingest.dead_letter_path = base.with_extension("dlq").to_string_lossy().into_owned();
+        let runtime = Arc::new(IngestRuntime::try_new(cfg.ingest.clone()).expect("runtime"));
+        runtime.start_worker().await;
+        let state = AppState {
+            runtime: Arc::clone(&runtime),
+            auth: Arc::new(AuthState::from_config(&cfg.auth)),
+            rate_limiter: Arc::new(RateLimiter::new(10, 10, 10)),
+        };
+        let app = build_app(state, &cfg).expect("router");
+
+        let oversized = app
+            .clone()
+            .oneshot(
+                axum::http::Request::post("/api/v1/ingest/batches")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("x".repeat(65)))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        let malformed = app
+            .oneshot(
+                axum::http::Request::post("/api/v1/ingest/batches")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{bad json"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert!(malformed.status().is_client_error());
+        runtime.shutdown().await;
     }
 }

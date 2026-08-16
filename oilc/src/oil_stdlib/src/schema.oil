@@ -37,6 +37,7 @@ entity Process {
     elevated: Bool,
     host_id: Str,
     container_id: Str?,
+    cgroup_id: Int?,
     command_line: Str?,
     parent: Process?,
     user: User?,
@@ -138,6 +139,11 @@ entity NetworkEndpoint {
 }
 
 entity DnsQuery {
+    pid: Int,
+    uid: Int,
+    process_name: Str,
+    // FNV-1a hash of the queried hostname.
+    query_hash: Int,
     domain: DnsDomain,
 }
 
@@ -148,6 +154,8 @@ entity DnsDomain {
 
 entity ContainerContext {
     container_id: Str,
+    cgroup_id: Int,
+    cgroup_path: Str?,
     pod_uid: Str?,
     exists: Bool,
     orchestrator: Str?,
@@ -296,6 +304,15 @@ entity SqlEvent {
     query_hash: Int,
     // Well-known port of the target database (5432 for PostgreSQL, 3306 for MySQL).
     db_port: Int,
+    // Tables the statement touches, resolved from the *redacted* statement.
+    // Literal values are stripped before names are read, so matching on a
+    // table never exposes a value from the query.
+    // Empty when the statement could not be parsed confidently, or when a
+    // prepared statement executes without its prepare having been observed.
+    tables: Set<Str>,
+    // Database/schema the statement targets, when every qualified table
+    // reference agrees on one. Null for a cross-database join.
+    database: Str?,
 }
 
 // --- TLS/OpenSSL encryption events (uprobe on libssl) ------------------------

@@ -19,13 +19,14 @@
 
 use aya_ebpf::{
     helpers::{
-        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_ns,
-        bpf_probe_read_user, bpf_probe_read_user_str_bytes,
+        bpf_get_current_cgroup_id, bpf_get_current_comm, bpf_get_current_pid_tgid,
+        bpf_get_current_uid_gid, bpf_ktime_get_ns, bpf_probe_read_user,
+        bpf_probe_read_user_str_bytes,
     },
     macros::tracepoint,
     programs::TracePointContext,
 };
-use olopa_common::{EVENT_KIND_FILE, FileEvent};
+use olopa_common::{FileEvent, EVENT_KIND_FILE};
 
 use crate::EVENTS;
 
@@ -53,6 +54,7 @@ unsafe fn try_openat(ctx: &TracePointContext, openat2: bool) -> u32 {
 
     (*event).kind = EVENT_KIND_FILE;
     (*event).ts_ns = bpf_ktime_get_ns();
+    (*event).cgroup_id = bpf_get_current_cgroup_id();
 
     let pid_tgid = bpf_get_current_pid_tgid();
     (*event).pid = (pid_tgid >> 32) as u32;

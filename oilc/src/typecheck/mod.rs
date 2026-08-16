@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
+#[cfg(test)]
 use std::collections::HashMap;
 use std::ops::Range;
 
 use crate::ast::{CmpOp, Expr, Program, RuleBody, RuleDecl, Spanned};
-use crate::prelude::{CallableSignature, CallableTypeRef};
+use crate::prelude::{CallableSignature, CallableSignatures, CallableTypeRef};
 use crate::schema::{FieldType, PrimitiveType, SchemaRegistry};
 
 type Span = Range<usize>;
@@ -58,7 +59,7 @@ enum Ty {
 pub fn typecheck_program(
     program: &Program,
     schema: &SchemaRegistry,
-    callable_signatures: &HashMap<String, CallableSignature>,
+    callable_signatures: &CallableSignatures,
 ) -> TypecheckOutput {
     // Typechecker is non-fatal today: it emits diagnostics but does not fail compile.
     let mut tc = Typechecker {
@@ -78,7 +79,7 @@ struct Typechecker<'a> {
     // Typed schema loaded at Stage-0.
     schema: &'a SchemaRegistry,
     // Callable return-type contracts loaded from stdlib prelude.
-    callable_signatures: &'a HashMap<String, CallableSignature>,
+    callable_signatures: &'a CallableSignatures,
     // Collected diagnostics for this compilation unit.
     diagnostics: Vec<TypeDiagnostic>,
 }
@@ -382,13 +383,38 @@ impl<'a> Typechecker<'a> {
                         }
                     }
                     Ty::Entity(self.schema.roots[name].entity.clone())
-                } else if let Some(sig) = self.callable_signatures.get(name) {
+                } else if let Some(overloads) = self.callable_signatures.get(name) {
+                    let sig = select_callable_signature(overloads, &arg_types)
+                        .or_else(|| {
+                            overloads
+                                .iter()
+                                .find(|signature| signature.params.len() == arg_types.len())
+                        })
+                        .unwrap_or(&overloads[0]);
                     if arg_types.len() != sig.params.len() {
+                        let mut arities = overloads
+                            .iter()
+                            .map(|signature| signature.params.len())
+                            .collect::<Vec<_>>();
+                        arities.sort_unstable();
+                        arities.dedup();
+                        let expected = if arities.len() == 1 {
+                            arities[0].to_string()
+                        } else {
+                            format!(
+                                "one of [{}]",
+                                arities
+                                    .iter()
+                                    .map(usize::to_string)
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        };
                         self.diag(
                             format!(
                                 "callable '{}' expects {} argument(s), got {}",
                                 name,
-                                sig.params.len(),
+                                expected,
                                 arg_types.len()
                             ),
                             expr.span.clone(),
@@ -433,7 +459,7 @@ impl<'a> Typechecker<'a> {
                             continue;
                         }
                         let expected_ty = callable_type_ref_to_ty(&param.ty);
-                        if !type_compatible(arg_ty, &expected_ty) && *arg_ty != Ty::Unknown {
+                        if !callable_param_accepts(&param.ty, arg_ty) && *arg_ty != Ty::Unknown {
                             self.diag(
                                 format!(
                                     "callable '{}' argument '{}' expects {:?}, got {:?}",
@@ -705,6 +731,68 @@ fn type_compatible(a: &Ty, b: &Ty) -> bool {
     }
 }
 
+fn select_callable_signature<'a>(
+    overloads: &'a [CallableSignature],
+    arg_types: &[Ty],
+) -> Option<&'a CallableSignature> {
+    let mut best: Option<(&CallableSignature, usize)> = None;
+    for signature in overloads {
+        let matches = signature.params.len() == arg_types.len()
+            && signature
+                .params
+                .iter()
+                .zip(arg_types)
+                .all(|(param, actual)| {
+                    *actual == Ty::Unknown || callable_param_accepts(&param.ty, actual)
+                });
+        if !matches {
+            continue;
+        }
+        let specificity = signature
+            .params
+            .iter()
+            .map(|param| callable_type_specificity(&param.ty))
+            .sum();
+        if best.is_none_or(|(_, best_specificity)| specificity > best_specificity) {
+            best = Some((signature, specificity));
+        }
+    }
+    best.map(|(signature, _)| signature)
+}
+
+fn callable_type_specificity(value_type: &CallableTypeRef) -> usize {
+    match value_type {
+        CallableTypeRef::Any => 0,
+        CallableTypeRef::Set(inner) | CallableTypeRef::Nullable(inner) => {
+            1 + callable_type_specificity(inner)
+        }
+        _ => 4,
+    }
+}
+
+/// Match concrete types against generic callable references. `Any` is a true
+/// wildcard, including when nested in collection/nullable wrappers.
+fn callable_param_accepts(expected: &CallableTypeRef, actual: &Ty) -> bool {
+    match expected {
+        CallableTypeRef::Any => true,
+        CallableTypeRef::Set(inner) => match actual {
+            Ty::Set(actual_inner) | Ty::List(actual_inner) => {
+                callable_param_accepts(inner, actual_inner)
+            }
+            Ty::Nullable(actual_inner) => callable_param_accepts(expected, actual_inner),
+            _ => false,
+        },
+        CallableTypeRef::Nullable(inner) => {
+            matches!(actual, Ty::Null)
+                || match actual {
+                    Ty::Nullable(actual_inner) => callable_param_accepts(inner, actual_inner),
+                    _ => callable_param_accepts(inner, actual),
+                }
+        }
+        _ => type_compatible(actual, &callable_type_ref_to_ty(expected)),
+    }
+}
+
 fn is_numeric(t: &Ty) -> bool {
     matches!(t, Ty::Int | Ty::Float | Ty::Duration)
 }
@@ -735,6 +823,7 @@ fn is_root_lookup_key_ty(t: &Ty) -> bool {
 
 fn callable_type_ref_to_ty(t: &CallableTypeRef) -> Ty {
     match t {
+        CallableTypeRef::Any => Ty::Unknown,
         CallableTypeRef::Str => Ty::Str,
         CallableTypeRef::Int => Ty::Int,
         CallableTypeRef::Float => Ty::Float,
@@ -763,7 +852,8 @@ fn unknown_entity_in_callable_type_ref(
         CallableTypeRef::Set(inner) | CallableTypeRef::Nullable(inner) => {
             unknown_entity_in_callable_type_ref(inner, schema)
         }
-        CallableTypeRef::Str
+        CallableTypeRef::Any
+        | CallableTypeRef::Str
         | CallableTypeRef::Int
         | CallableTypeRef::Float
         | CallableTypeRef::Bool
@@ -840,6 +930,10 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let program = parser.parse().expect("parse");
         let schema = parse_schema(include_str!("../oil_stdlib/src/schema.oil")).expect("schema");
+        let callables = callables
+            .into_iter()
+            .map(|(name, signature)| (name, vec![signature]))
+            .collect();
         typecheck_program(&program, &schema, &callables)
     }
 
@@ -1224,6 +1318,29 @@ rule "r2" {
             "expected extra-argument diagnostic, got: {:?}",
             out_extra.diagnostics
         );
+    }
+
+    #[test]
+    fn overload_selection_prefers_concrete_signature_over_any() {
+        let overloads = vec![
+            CallableSignature {
+                params: vec![crate::prelude::CallableParam {
+                    name: "value".to_string(),
+                    ty: CallableTypeRef::Any,
+                }],
+                returns: Some(CallableTypeRef::Int),
+            },
+            CallableSignature {
+                params: vec![crate::prelude::CallableParam {
+                    name: "value".to_string(),
+                    ty: CallableTypeRef::Str,
+                }],
+                returns: Some(CallableTypeRef::Str),
+            },
+        ];
+
+        let selected = select_callable_signature(&overloads, &[Ty::Str]).expect("overload");
+        assert_eq!(selected.returns, Some(CallableTypeRef::Str));
     }
 
     #[test]

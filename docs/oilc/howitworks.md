@@ -46,21 +46,32 @@ Outputs:
 
 ### 2.2 Stage 1: Lexing
 
-Implemented in `oilc/src/lexer/mod.rs`.
+Implemented by Pest in `oilc/src/parser/oil.pest`, with the compatibility adapter
+in `oilc/src/lexer/pest_lexer.rs`.
 
-- Stateful UTF-8 scanner with byte spans.
+- Pest is the authoritative source recognizer/tokenizer; the former handwritten
+  UTF-8 scanner has been removed.
 - Emits `Token { kind, span }`.
 - Preserves newlines as tokens for parser clause boundaries.
 - Handles line (`#`, `//`) and block (`/* ... */`) comments.
 - Supports durations (`500ms`, `10m`, `1h`, etc.).
 
+The stable token representation is retained temporarily so the existing AST
+construction and diagnostic recovery code can migrate grammar production by
+grammar production without changing the compiler's public output.
+
 ### 2.3 Stage 2: Parsing
 
 Implemented in `oilc/src/parser/mod.rs`.
 
-- Recursive-descent parser with non-fatal error accumulation.
+- Pest owns source recognition; the current AST adapter consumes Pest-produced
+  tokens and retains non-fatal error accumulation.
 - Expression parsing uses Pratt precedence.
 - Produces AST types from `oilc/src/ast/*`.
+
+The stdlib schema is independently parsed by the typed Pest grammar in
+`oilc/src/schema/schema.pest`; duplicate root/entity/field checks run after the
+syntax parse.
 
 Top-level declarations parsed today:
 
@@ -213,7 +224,7 @@ The active compiler path (`lib.rs` pipeline + lexer/parser/resolver/typecheck/mi
 
 Observed locally:
 
-- `cargo test --manifest-path oilc/Cargo.toml` passed (52 tests).
+- `cargo test --manifest-path oilc/Cargo.toml` passed after the Pest migration.
 - Tests cover parser recovery, resolver/typecheck semantics, MIR lowering, runtime IR shape, and Cypher snapshots.
 
 No obvious "AI slop" patterns were found in active-path logic (for example: contradictory APIs, dead branches inside executed modules, or placeholder stubs being invoked).

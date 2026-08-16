@@ -9,14 +9,14 @@
 
 use aya_ebpf::{
     helpers::{
-        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_ns,
-        bpf_probe_read_user_str_bytes,
+        bpf_get_current_cgroup_id, bpf_get_current_comm, bpf_get_current_pid_tgid,
+        bpf_get_current_uid_gid, bpf_ktime_get_ns, bpf_probe_read_user_str_bytes,
     },
     macros::{map, tracepoint},
     maps::HashMap,
     programs::TracePointContext,
 };
-use olopa_common::{EVENT_KIND_EXEC, ExecEvent};
+use olopa_common::{ExecEvent, EVENT_KIND_EXEC};
 
 use crate::EVENTS;
 
@@ -77,6 +77,7 @@ unsafe fn try_execve(ctx: &TracePointContext, filename_ptr_offset: usize) -> u32
 
     (*event).kind = EVENT_KIND_EXEC;
     (*event).ts_ns = bpf_ktime_get_ns();
+    (*event).cgroup_id = bpf_get_current_cgroup_id();
 
     let pid_tgid = bpf_get_current_pid_tgid();
     let pid = (pid_tgid >> 32) as u32;

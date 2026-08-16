@@ -1,0 +1,79 @@
+// Pest owns source tokenization for OIL. Newlines remain significant because
+// several clause forms use them as boundaries; horizontal whitespace and
+// comments are skipped automatically.
+WHITESPACE = _{ " " | "\t" | "\r" }
+COMMENT = _{ line_comment | block_comment }
+
+line_comment = _{ "//" ~ (!"\n" ~ ANY)* | "#" ~ (!"\n" ~ ANY)* }
+block_comment = _{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
+
+program = { SOI ~ token* ~ EOI }
+
+token = _{
+      newline
+    | string
+    | duration
+    | float
+    | integer
+    | identifier
+    | arrow
+    | fat_arrow
+    | range
+    | eq
+    | ne
+    | le
+    | ge
+    | assign
+    | lt
+    | gt
+    | plus
+    | minus
+    | star
+    | slash
+    | comma
+    | colon
+    | semicolon
+    | at
+    | dot
+    | lbrace
+    | rbrace
+    | lparen
+    | rparen
+    | lbracket
+    | rbracket
+}
+
+newline = { "\n" }
+string = @{ "\"" ~ ("\\" ~ ANY | !"\"" ~ ANY)* ~ "\"" }
+duration = @{ ASCII_DIGIT+ ~ ("ns" | "us" | "ms" | "s" | "m" | "h" | "d") }
+float = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+integer = @{ ASCII_DIGIT+ }
+identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+arrow = { "->" }
+fat_arrow = { "=>" }
+range = { ".." }
+eq = { "==" }
+ne = { "!=" }
+le = { "<=" }
+ge = { ">=" }
+assign = { "=" }
+lt = { "<" }
+gt = { ">" }
+plus = { "+" }
+minus = { "-" }
+star = { "*" }
+// Comments have precedence through Pest's automatic COMMENT skipping. The
+// lookahead makes malformed comment openers fail instead of becoming `/`, `*`.
+slash = { "/" ~ !("/" | "*") }
+comma = { "," }
+colon = { ":" }
+semicolon = { ";" }
+at = { "@" }
+dot = { "." }
+lbrace = { "{" }
+rbrace = { "}" }
+lparen = { "(" }
+rparen = { ")" }
+lbracket = { "[" }
+rbracket = { "]" }

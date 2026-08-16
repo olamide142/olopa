@@ -8,10 +8,12 @@
 
 mod agent;
 mod budget_tracker;
+mod cgroup;
 mod data;
 mod intel_store;
 mod probe_manager;
 mod runtime_ir;
+mod secure_connect;
 mod sql_norm;
 mod transport;
 
@@ -19,7 +21,10 @@ use anyhow::{bail, Context, Result};
 use aya::maps::HashMap as BpfHashMap;
 use clap::{ArgAction, Args, Parser, Subcommand};
 use log::{info, warn};
-use olopa_common::{TcEgressPolicyKey, TC_POLICY_ACTION_DENY};
+use olopa_common::{
+    TcEgressPolicyKey, TcRateLimitConfig, TC_POLICY_ACTION_ALLOW, TC_POLICY_ACTION_DENY,
+    TC_POLICY_ACTION_RATE_LIMIT,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
@@ -217,17 +222,23 @@ async fn main() -> Result<()> {
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_INTEL_PATH.to_string());
     intel_store::init(std::path::Path::new(&intel_path));
+    cgroup::init();
 
     // 1) Load eBPF object and attach selected probes.
     let mut agent = OlopaAgent::new()?;
     let mut probe_manager = ProbeManager::new();
     probe_manager.attach_selected(agent.bpf_mut(), &iface, &probe_selections)?;
+    if probe_selections.contains(&ProbeSelection::Xdp) {
+        install_xdp_blocklist_from_env(agent.bpf_mut())?;
+    } else if std::env::var("OLOPA_XDP_BLOCK_IPS").is_ok() {
+        warn!("OLOPA_XDP_BLOCK_IPS is set but xdp probe was not selected");
+    }
     if probe_selections.contains(&ProbeSelection::Tc) {
         install_tc_deny_rules_from_env(agent.bpf_mut())?;
-    } else if std::env::var("OLOPA_TC_DENY_RULES").is_ok() {
-        warn!(
-            "OLOPA_TC_DENY_RULES is set but tc probe was not selected; deny rules are not enforced"
-        );
+    } else if std::env::var("OLOPA_TC_DENY_RULES").is_ok()
+        || std::env::var("OLOPA_TC_POLICY_RULES").is_ok()
+    {
+        warn!("TC policy environment is set but tc probe was not selected; rules are not enforced");
     }
     info!(
         "olopa initialized and probes attached | probe_events={}",
@@ -254,8 +265,12 @@ async fn main() -> Result<()> {
     let mut rule_engine = ActiveRuleEngine::from_env()?;
     let mut scheduler = RealScheduler::default();
     let mut batcher = RealBatcher::default();
-    let mut sender = HttpIngestSender::from_env();
+    let mut sender = HttpIngestSender::from_env().context("initialize durable HTTP sender")?;
     let mut budget_tracker = BudgetTracker::new();
+
+    // Secure Connect runs beside the sensor loop and shares the durable spool
+    // so tunnel/posture events reach ingest over the existing transport.
+    secure_connect::spawn_from_env(Some(sender.handle()));
 
     // 3) Main runtime loops live inside agent.run(...).
     agent
@@ -287,6 +302,9 @@ struct EffectiveCliConfig {
     ingest_host_id: String,
     ingest_auth: &'static str,
     status_path: String,
+    secure_connect_enabled: bool,
+    secure_connect_control_url: Option<String>,
+    secure_connect_interface: String,
 }
 
 impl EffectiveCliConfig {
@@ -327,6 +345,10 @@ impl EffectiveCliConfig {
             ingest_host_id,
             ingest_auth,
             status_path,
+            secure_connect_enabled: env_flag("OLOPA_SC_ENABLED"),
+            secure_connect_control_url: env_non_empty("OLOPA_SC_CONTROL_URL"),
+            secure_connect_interface: env_non_empty("OLOPA_SC_INTERFACE")
+                .unwrap_or_else(|| "olopa0".to_string()),
         }
     }
 }
@@ -612,6 +634,36 @@ fn print_status(opt: StatusOpt) -> Result<()> {
         format_u64_grouped(snapshot.firewall.approve)
     );
 
+    println!("{}", separator(color));
+    println!("{}", heading(color, "secure connect"));
+    match secure_connect::read_health_from_env() {
+        Some(health) if health.enabled => {
+            println!("state {:?}", health.state);
+            println!(
+                "device {} session {} interface {}",
+                health.device_id.as_deref().unwrap_or("unassigned"),
+                health.session_id.as_deref().unwrap_or("none"),
+                health.interface.as_deref().unwrap_or("none")
+            );
+            println!(
+                "profile v{} handshake={} rx={} tx={} reconnects={}",
+                health.profile_version,
+                health.last_handshake_unix,
+                format_u64_grouped(health.bytes_rx),
+                format_u64_grouped(health.bytes_tx),
+                format_u64_grouped(health.reconnect_count)
+            );
+            println!(
+                "apply={}ms revoke={}ms kill-switch={}ms",
+                health.policy_apply_ms, health.revoke_apply_ms, health.kill_switch_apply_ms
+            );
+            if let Some(error) = health.last_error {
+                println!("{} {}", glyph_warn(color), error);
+            }
+        }
+        _ => println!("disabled"),
+    }
+
     Ok(())
 }
 
@@ -780,12 +832,20 @@ impl RelevanceScorerLike for RealRelevanceScorer {
 /// Adapter around persistent hot/cold event storage.
 struct RealEventStore {
     inner: EventStore,
+    events: Vec<IngestEvent>,
 }
 
 impl Default for RealEventStore {
     fn default() -> Self {
+        Self::with_capacity(1_000_000)
+    }
+}
+
+impl RealEventStore {
+    fn with_capacity(capacity: usize) -> Self {
         Self {
-            inner: EventStore::with_capacity(1_000_000),
+            inner: EventStore::with_capacity(capacity),
+            events: Vec::with_capacity(capacity),
         }
     }
 }
@@ -811,6 +871,8 @@ impl EventStoreLike for RealEventStore {
         };
 
         let id = self.inner.push(hot, cold)?;
+        debug_assert_eq!(id, self.events.len());
+        self.events.push(event);
         info!(
             "ingest->store event_id={} type={} pid={} risk={:.3}",
             id, event.event_type, event.pid, event.risk_score
@@ -820,16 +882,7 @@ impl EventStoreLike for RealEventStore {
 
     /// Serialize one stored event into transport-ready bytes.
     fn serialize_event(&self, event_id: usize) -> Option<Vec<u8>> {
-        // Bootstrap wire format: plain text line; replace with protobuf later.
-        let hot = self.inner.hot_events().get(event_id)?;
-        let cold = self.inner.cold_event(event_id)?;
-        Some(
-            format!(
-                "evt ts={} pid={} uid={} risk={:.3} src={} dst={} comm={}",
-                hot.ts_ns, hot.pid, cold.uid, hot.risk_score, hot.pid, cold.ppid, cold.comm_id
-            )
-            .into_bytes(),
-        )
+        crate::agent::encode_telemetry_payload(self.events.get(event_id)?)
     }
 
     /// Return event ids that have not yet been scheduled.
@@ -843,22 +896,72 @@ impl EventStoreLike for RealEventStore {
     }
 }
 
+#[cfg(test)]
+mod event_store_transport_tests {
+    use super::*;
+
+    #[test]
+    fn real_event_store_keeps_family_fields_for_scheduler_serialization() {
+        let mut tables = [0u8; crate::sql_norm::SQL_TABLES_LEN];
+        tables[..14].copy_from_slice(b"finance.ledger");
+        let mut comm = [0u8; 16];
+        comm[..4].copy_from_slice(b"psql");
+        let event = IngestEvent {
+            event_type: 4,
+            pid: 4242,
+            uid: 1001,
+            comm,
+            sql_query_hash: 0x1111_2222,
+            sql_query_class: 3,
+            sql_db_port: 5432,
+            sql_norm_hash: 0xaabb_ccdd,
+            sql_tables: tables,
+            ..Default::default()
+        };
+
+        let mut store = RealEventStore::with_capacity(4);
+        let event_id = store.push(event).expect("store event");
+        let encoded = store.serialize_event(event_id).expect("serialize event");
+        let json = std::str::from_utf8(&encoded)
+            .expect("utf8 wire record")
+            .strip_prefix("event_v2 ")
+            .expect("typed wire prefix");
+        let decoded: crate::agent::TelemetryWireEvent =
+            serde_json::from_str(json).expect("decode typed wire event");
+
+        assert_eq!(decoded.event_type, 4);
+        assert_eq!(decoded.comm, "psql");
+        assert_eq!(decoded.sql_query_class, 3);
+        assert_eq!(decoded.sql_db_port, 5432);
+        assert_eq!(decoded.sql_tables, "finance.ledger");
+        assert_eq!(decoded.sql_norm_hash, 0xaabb_ccdd);
+    }
+}
+
 /// Adapter around RCU CSR graph plus optional periodic graph dump writer.
 struct RealGraph {
     inner: Arc<CsrGraph>,
     graph_dumper: Option<GraphDumpWriter>,
     recent_events: VecDeque<GraphDumpEvent>,
     last_span_by_pid: HashMap<u32, u64>,
+    vertex_index: HashMap<(NodeLabel, u32), u32>,
+    next_vertex_id: u32,
+    max_nodes: u32,
+    capacity_warning_emitted: bool,
     next_span_id: u64,
 }
 
 impl Default for RealGraph {
     fn default() -> Self {
         Self {
-            inner: Arc::new(CsrGraph::new(65_536, 262_144)),
+            inner: Arc::new(CsrGraph::new(0, 262_144)),
             graph_dumper: None,
             recent_events: VecDeque::with_capacity(MAX_DUMP_EVENTS),
             last_span_by_pid: HashMap::new(),
+            vertex_index: HashMap::new(),
+            next_vertex_id: 0,
+            max_nodes: graph_max_nodes(),
+            capacity_warning_emitted: false,
             next_span_id: 1,
         }
     }
@@ -868,18 +971,63 @@ impl RealGraph {
     /// Construct graph adapter with JSON dump support enabled.
     fn with_dump(path: PathBuf, min_interval: Duration) -> Self {
         Self {
-            inner: Arc::new(CsrGraph::new(65_536, 262_144)),
+            inner: Arc::new(CsrGraph::new(0, 262_144)),
             graph_dumper: Some(GraphDumpWriter::new(path, min_interval)),
             recent_events: VecDeque::with_capacity(MAX_DUMP_EVENTS),
             last_span_by_pid: HashMap::new(),
+            vertex_index: HashMap::new(),
+            next_vertex_id: 0,
+            max_nodes: graph_max_nodes(),
+            capacity_warning_emitted: false,
             next_span_id: 1,
         }
     }
 
+    fn resolve_vertex(
+        &mut self,
+        label: NodeLabel,
+        raw_id: u32,
+        ts_ns: u64,
+        risk_score: f32,
+        is_internal: bool,
+    ) -> Option<u32> {
+        let key = (label, raw_id);
+        if let Some(id) = self.vertex_index.get(&key).copied() {
+            self.inner.update_risk(id, risk_score, ts_ns);
+            return Some(id);
+        }
+        if self.next_vertex_id >= self.max_nodes {
+            if !self.capacity_warning_emitted {
+                warn!(
+                    "graph compact vertex allocator reached OLOPA_GRAPH_MAX_NODES={} (new entities will be skipped)",
+                    self.max_nodes
+                );
+                self.capacity_warning_emitted = true;
+            }
+            return None;
+        }
+        let id = self.next_vertex_id;
+        self.next_vertex_id = self.next_vertex_id.saturating_add(1);
+        self.vertex_index.insert(key, id);
+        self.inner.write_node(
+            id,
+            crate::data::csr_graph::NodeProps {
+                first_seen_ns: ts_ns,
+                last_seen_ns: ts_ns,
+                risk_score,
+                page_rank: 0.0,
+                label,
+                is_internal,
+                is_canary: false,
+                community_id: 0,
+                _pad: [0; 4],
+            },
+        );
+        Some(id)
+    }
+
     /// Cache an event for graph dump rendering and event lineage visualization.
-    fn record_event(&mut self, event: &IngestEvent) {
-        let graph_source_id = normalize_graph_vertex(event.vertex_id);
-        let graph_target_id = normalize_graph_vertex(event.dst_vertex_id);
+    fn record_event(&mut self, event: &IngestEvent, graph_source_id: u32, graph_target_id: u32) {
         let span_id = self.next_span_id;
         self.next_span_id = self.next_span_id.saturating_add(1);
         let parent_span_id = self.last_span_by_pid.insert(event.pid, span_id);
@@ -917,6 +1065,9 @@ impl GraphLike for RealGraph {
             1 => EdgeKind::Spawned,
             2 => EdgeKind::ReadFile,
             3 => EdgeKind::ConnectedTo,
+            4 => EdgeKind::DataFlow,
+            5 => EdgeKind::ConnectedTo,
+            6 => EdgeKind::ResolvedDns,
             _ => EdgeKind::DataFlow,
         };
 
@@ -929,12 +1080,45 @@ impl GraphLike for RealGraph {
             bytes: 0,
         };
 
-        self.inner.write_edge(
-            normalize_graph_vertex(event.vertex_id),
-            normalize_graph_vertex(event.dst_vertex_id),
-            props,
+        let target_label = match event.event_type {
+            1 => NodeLabel::Process,
+            2 => NodeLabel::File,
+            3 | 5 | 7 => NodeLabel::NetworkEndpoint,
+            4 => NodeLabel::Host,
+            6 => NodeLabel::DomainName,
+            _ => NodeLabel::Host,
+        };
+        let target_raw_id = match event.event_type {
+            3 | 5 | 7 if event.net_dst_ip != 0 => event.net_dst_ip,
+            4 if event.sql_query_hash != 0 => event.sql_query_hash,
+            6 if event.dns_query_hash != 0 => event.dns_query_hash,
+            _ => event.dst_vertex_id,
+        };
+        let target_internal = match event.event_type {
+            3 | 5 | 7 if event.net_dst_ip != 0 => {
+                let ip = Ipv4Addr::from(event.net_dst_ip);
+                ip.is_private() || ip.is_loopback() || ip.is_link_local()
+            }
+            _ => true,
+        };
+        let source = self.resolve_vertex(
+            NodeLabel::Process,
+            event.pid,
+            event.ts_ns,
+            event.risk_score,
+            true,
         );
-        self.record_event(event);
+        let target = self.resolve_vertex(
+            target_label,
+            target_raw_id,
+            event.ts_ns,
+            event.risk_score,
+            target_internal,
+        );
+        if let (Some(source), Some(target)) = (source, target) {
+            self.inner.write_edge(source, target, props);
+            self.record_event(event, source, target);
+        }
         if let Some(dumper) = self.graph_dumper.as_mut() {
             if let Err(err) = dumper.maybe_dump(&self.inner, &self.recent_events) {
                 warn!("graph dump write failed: {}", err);
@@ -1042,12 +1226,44 @@ impl RuleEngineLike for SimpleRuleEngine {
     }
 }
 
-/// Active rule engine mode for the running process.
-enum ActiveRuleEngine {
+/// Concrete rule engine currently serving evaluations.
+enum RuleEngineMode {
     // Compiler-emitted runtime IR evaluator.
     RuntimeIr(RuntimeIrRuleEngine),
     // Minimal fallback matcher when runtime IR cannot be loaded.
     Simple(SimpleRuleEngine),
+}
+
+/// Reloadable rule engine wrapper. New artifacts are fully parsed and contract
+/// validated before the active evaluator is swapped, so a partial or invalid
+/// deployment cannot interrupt the last known-good policy.
+struct ActiveRuleEngine {
+    current: RuleEngineMode,
+    previous: Option<(RuntimeIrRuleEngine, u64)>,
+    path: PathBuf,
+    /// Fingerprint of the evaluator currently serving traffic.
+    fingerprint: Option<u64>,
+    /// Last successfully loaded on-disk fingerprint; used to avoid undoing an
+    /// explicit rollback until a genuinely new artifact is deployed.
+    observed_fingerprint: Option<u64>,
+    generation: u64,
+    last_check: Instant,
+    check_interval: Duration,
+    rollback_signal: PathBuf,
+    status_path: PathBuf,
+}
+
+#[derive(Serialize)]
+struct RuleDeploymentStatus<'a> {
+    version: u8,
+    generation: u64,
+    artifact_path: &'a str,
+    artifact_fingerprint: Option<String>,
+    rule_count: usize,
+    fallback_active: bool,
+    previous_available: bool,
+    updated_at_unix_ms: u64,
+    last_error: Option<&'a str>,
 }
 
 impl ActiveRuleEngine {
@@ -1065,7 +1281,27 @@ impl ActiveRuleEngine {
                     path,
                     engine.rule_count()
                 );
-                Ok(Self::RuntimeIr(engine))
+                let fingerprint = artifact_fingerprint(std::path::Path::new(&path)).ok();
+                let active = Self {
+                    current: RuleEngineMode::RuntimeIr(engine),
+                    previous: None,
+                    path: PathBuf::from(path),
+                    fingerprint,
+                    observed_fingerprint: fingerprint,
+                    generation: 1,
+                    last_check: Instant::now(),
+                    check_interval: Duration::from_millis(
+                        env_parse_or("OLOPA_RUNTIME_IR_RELOAD_MS", 1_000u64).max(100),
+                    ),
+                    rollback_signal: env_non_empty("OLOPA_RUNTIME_IR_ROLLBACK_SIGNAL")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| PathBuf::from("/var/lib/olopa/runtime-ir.rollback")),
+                    status_path: env_non_empty("OLOPA_RULE_STATUS_PATH")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| PathBuf::from("/tmp/olopa/agent/rules.json")),
+                };
+                active.write_rule_status(None);
+                Ok(active)
             }
             Err(e) => {
                 if allow_simple_fallback {
@@ -1073,7 +1309,26 @@ impl ActiveRuleEngine {
                     warn!(
                         "rule engine using SimpleRuleEngine fallback (OLOPA_ALLOW_SIMPLE_RULE_FALLBACK=1)"
                     );
-                    Ok(Self::Simple(SimpleRuleEngine))
+                    let active = Self {
+                        current: RuleEngineMode::Simple(SimpleRuleEngine),
+                        previous: None,
+                        path: PathBuf::from(path),
+                        fingerprint: None,
+                        observed_fingerprint: None,
+                        generation: 1,
+                        last_check: Instant::now(),
+                        check_interval: Duration::from_millis(
+                            env_parse_or("OLOPA_RUNTIME_IR_RELOAD_MS", 1_000u64).max(100),
+                        ),
+                        rollback_signal: env_non_empty("OLOPA_RUNTIME_IR_ROLLBACK_SIGNAL")
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| PathBuf::from("/var/lib/olopa/runtime-ir.rollback")),
+                        status_path: env_non_empty("OLOPA_RULE_STATUS_PATH")
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| PathBuf::from("/tmp/olopa/agent/rules.json")),
+                    };
+                    active.write_rule_status(Some(&e.to_string()));
+                    Ok(active)
                 } else {
                     bail!(
                         "failed to load runtime-ir from {} (set OLOPA_ALLOW_SIMPLE_RULE_FALLBACK=1 to force simple fallback): {}",
@@ -1084,6 +1339,149 @@ impl ActiveRuleEngine {
             }
         }
     }
+
+    fn maybe_reload(&mut self) {
+        if self.last_check.elapsed() < self.check_interval {
+            return;
+        }
+        self.last_check = Instant::now();
+
+        if self.rollback_signal.exists() {
+            if let Some((previous, previous_fingerprint)) = self.previous.take() {
+                let displaced =
+                    match std::mem::replace(&mut self.current, RuleEngineMode::RuntimeIr(previous))
+                    {
+                        RuleEngineMode::RuntimeIr(engine) => {
+                            self.fingerprint.map(|fingerprint| (engine, fingerprint))
+                        }
+                        RuleEngineMode::Simple(_) => None,
+                    };
+                self.previous = displaced;
+                self.generation = self.generation.saturating_add(1);
+                self.fingerprint = Some(previous_fingerprint);
+                info!(
+                    "rule engine rollback activated generation={}",
+                    self.generation
+                );
+                self.write_rule_status(None);
+            } else {
+                warn!("rule rollback requested but no previous artifact is available");
+                self.write_rule_status(Some("rollback requested without previous artifact"));
+            }
+            if let Err(err) = fs::remove_file(&self.rollback_signal) {
+                warn!(
+                    "failed removing rule rollback signal {}: {}",
+                    self.rollback_signal.display(),
+                    err
+                );
+            }
+            return;
+        }
+
+        let fingerprint = match artifact_fingerprint(&self.path) {
+            Ok(fingerprint) => fingerprint,
+            Err(err) => {
+                self.write_rule_status(Some(&err.to_string()));
+                return;
+            }
+        };
+        if self.observed_fingerprint == Some(fingerprint) {
+            return;
+        }
+
+        match RuntimeIrRuleEngine::from_file(&self.path) {
+            Ok(next) => {
+                let next_count = next.rule_count();
+                let displaced =
+                    std::mem::replace(&mut self.current, RuleEngineMode::RuntimeIr(next));
+                self.previous = match displaced {
+                    RuleEngineMode::RuntimeIr(engine) => self
+                        .fingerprint
+                        .map(|previous_fingerprint| (engine, previous_fingerprint)),
+                    RuleEngineMode::Simple(_) => None,
+                };
+                self.fingerprint = Some(fingerprint);
+                self.observed_fingerprint = Some(fingerprint);
+                self.generation = self.generation.saturating_add(1);
+                info!(
+                    "rule engine hot reload activated generation={} rules={} fingerprint={:016x}",
+                    self.generation, next_count, fingerprint
+                );
+                self.write_rule_status(None);
+            }
+            Err(err) => {
+                warn!(
+                    "rule engine rejected replacement artifact {}; keeping generation {}: {}",
+                    self.path.display(),
+                    self.generation,
+                    err
+                );
+                self.write_rule_status(Some(&err.to_string()));
+            }
+        }
+    }
+
+    fn write_rule_status(&self, last_error: Option<&str>) {
+        let (rule_count, fallback_active) = match &self.current {
+            RuleEngineMode::RuntimeIr(engine) => (engine.rule_count(), false),
+            RuleEngineMode::Simple(_) => (1, true),
+        };
+        let artifact_path = self.path.to_string_lossy();
+        let fingerprint = self.fingerprint.map(|value| format!("{value:016x}"));
+        let status = RuleDeploymentStatus {
+            version: 1,
+            generation: self.generation,
+            artifact_path: &artifact_path,
+            artifact_fingerprint: fingerprint,
+            rule_count,
+            fallback_active,
+            previous_available: self.previous.is_some(),
+            updated_at_unix_ms: now_unix_ns() / 1_000_000,
+            last_error,
+        };
+        if let Some(parent) = self.status_path.parent() {
+            if let Err(err) = fs::create_dir_all(parent) {
+                warn!("failed creating rule status directory: {}", err);
+                return;
+            }
+        }
+        let temp = self.status_path.with_extension("tmp");
+        let body = match serde_json::to_vec_pretty(&status) {
+            Ok(body) => body,
+            Err(err) => {
+                warn!("failed serializing rule status: {}", err);
+                return;
+            }
+        };
+        if let Err(err) = fs::write(&temp, body).and_then(|_| fs::rename(&temp, &self.status_path))
+        {
+            warn!(
+                "failed writing rule status {}: {}",
+                self.status_path.display(),
+                err
+            );
+        }
+    }
+}
+
+fn artifact_fingerprint(path: &std::path::Path) -> Result<u64> {
+    let bytes = fs::read(path)
+        .with_context(|| format!("read runtime artifact fingerprint from {}", path.display()))?;
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    Ok(hash)
+}
+
+fn env_parse_or<T>(key: &str, default: T) -> T
+where
+    T: std::str::FromStr,
+{
+    env_non_empty(key)
+        .and_then(|value| value.parse::<T>().ok())
+        .unwrap_or(default)
 }
 
 /// Read permissive boolean environment flag values (`1/true/yes/on`).
@@ -1097,23 +1495,68 @@ fn env_flag(key: &str) -> bool {
     }
 }
 
+/// Populate the XDP exact IPv4 source blocklist.
+///
+/// `OLOPA_XDP_BLOCK_IPS` is a comma-separated list such as
+/// `198.51.100.10,203.0.113.7`. Invalid values fail startup so a partially
+/// applied threat policy is never mistaken for complete enforcement.
+fn install_xdp_blocklist_from_env(bpf: &mut aya::Ebpf) -> Result<()> {
+    let raw = match std::env::var("OLOPA_XDP_BLOCK_IPS") {
+        Ok(raw) => raw,
+        Err(_) => return Ok(()),
+    };
+    let mut addresses = Vec::new();
+    for token in raw
+        .split(',')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        addresses.push(
+            token
+                .parse::<Ipv4Addr>()
+                .with_context(|| format!("invalid IPv4 '{}' in OLOPA_XDP_BLOCK_IPS", token))?,
+        );
+    }
+    if addresses.is_empty() {
+        return Ok(());
+    }
+
+    let map_data = bpf
+        .map_mut("XDP_BLOCKLIST_V4")
+        .context("XDP_BLOCKLIST_V4 map not found in loaded eBPF object")?;
+    let mut blocklist: BpfHashMap<_, u32, u8> =
+        BpfHashMap::try_from(map_data).context("failed to open XDP_BLOCKLIST_V4 map")?;
+    for address in addresses {
+        blocklist
+            .insert(u32::from(address), 1, 0)
+            .with_context(|| format!("failed to insert XDP block IP {}", address))?;
+        info!("xdp-policy deny installed source_ip={}", address);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy)]
 /// Parsed userspace representation of one deny rule from `OLOPA_TC_DENY_RULES`.
 struct TcDenyRule {
     /// Process id to match in TC enforcement key.
     pid: u32,
+    /// Stable cgroup id to match; zero is a wildcard.
+    cgroup_id: u64,
     /// Canonical IPv4 `u32` form (`u32::from(Ipv4Addr)`).
     dst_ip: u32,
     /// Host-order destination port.
     dst_port: u16,
     /// Layer-4 protocol number (6=tcp, 17=udp).
     proto: u8,
+    action: u8,
+    rate: Option<TcRateLimitConfig>,
 }
 
 impl TcDenyRule {
     /// Convert parsed userspace rule into shared map key format.
     fn as_policy_key(self) -> TcEgressPolicyKey {
         TcEgressPolicyKey {
+            cgroup_id: self.cgroup_id,
             pid: self.pid,
             dst_ip: self.dst_ip,
             dst_port: self.dst_port,
@@ -1126,21 +1569,21 @@ impl TcDenyRule {
 /// Load deny policy rules from environment into the kernel TC policy map.
 ///
 /// Env format:
-/// - `OLOPA_TC_DENY_RULES='pid=123,ip=1.2.3.4,port=443,proto=tcp;pid=77,ip=8.8.8.8,port=53,proto=udp'`
+/// - `OLOPA_TC_DENY_RULES='pid=123,ip=1.2.3.4,port=443;cgroup=9981,ip=8.8.8.8,port=53,proto=udp'`
 ///
 /// Behavior:
 /// - Missing env var: no-op.
 /// - Parse errors: startup fails loudly to avoid silently partial policy.
 /// - Successful parse: each rule inserted with deny action byte.
 fn install_tc_deny_rules_from_env(bpf: &mut aya::Ebpf) -> Result<()> {
-    let raw = match std::env::var("OLOPA_TC_DENY_RULES") {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
+    let mut rules = match std::env::var("OLOPA_TC_DENY_RULES") {
+        Ok(raw) => parse_tc_deny_rules(&raw)?,
+        Err(_) => Vec::new(),
     };
-
-    let rules = parse_tc_deny_rules(&raw)?;
+    if let Ok(raw) = std::env::var("OLOPA_TC_POLICY_RULES") {
+        rules.extend(parse_tc_policy_rules(&raw)?);
+    }
     if rules.is_empty() {
-        warn!("OLOPA_TC_DENY_RULES is set but no rules were parsed");
         return Ok(());
     }
 
@@ -1150,26 +1593,55 @@ fn install_tc_deny_rules_from_env(bpf: &mut aya::Ebpf) -> Result<()> {
     let mut policy_map: BpfHashMap<_, TcEgressPolicyKey, u8> =
         BpfHashMap::try_from(map_data).context("failed to open TC_EGRESS_POLICY map")?;
 
-    for rule in rules {
+    for rule in &rules {
         let key = rule.as_policy_key();
-        policy_map
-            .insert(key, TC_POLICY_ACTION_DENY, 0)
-            .with_context(|| {
-                format!(
-                    "failed to insert tc deny rule pid={} dst_ip={} dst_port={} proto={}",
-                    rule.pid,
-                    Ipv4Addr::from(rule.dst_ip),
-                    rule.dst_port,
-                    rule.proto
-                )
-            })?;
+        policy_map.insert(key, rule.action, 0).with_context(|| {
+            format!(
+                "failed to insert tc deny rule pid={} cgroup={} dst_ip={} dst_port={} proto={}",
+                rule.pid,
+                rule.cgroup_id,
+                Ipv4Addr::from(rule.dst_ip),
+                rule.dst_port,
+                rule.proto
+            )
+        })?;
         info!(
-            "tc-policy deny installed pid={} dst={}:{} proto={}",
+            "tc-policy action={} installed pid={} cgroup={} dst={}:{} proto={}",
+            tc_action_name(rule.action),
             rule.pid,
+            rule.cgroup_id,
             Ipv4Addr::from(rule.dst_ip),
             rule.dst_port,
             rule.proto
         );
+    }
+    drop(policy_map);
+
+    let rate_rules = rules
+        .iter()
+        .filter_map(|rule| rule.rate.map(|rate| (rule, rate)));
+    let mut rate_map = if rules.iter().any(|rule| rule.rate.is_some()) {
+        Some(
+            BpfHashMap::<_, TcEgressPolicyKey, TcRateLimitConfig>::try_from(
+                bpf.map_mut("TC_EGRESS_RATE_CONFIG")
+                    .context("TC_EGRESS_RATE_CONFIG map not found in loaded eBPF object")?,
+            )
+            .context("failed to open TC_EGRESS_RATE_CONFIG map")?,
+        )
+    } else {
+        None
+    };
+    if let Some(rate_map) = rate_map.as_mut() {
+        for (rule, rate) in rate_rules {
+            rate_map
+                .insert(rule.as_policy_key(), rate, 0)
+                .with_context(|| {
+                    format!(
+                        "failed to insert tc rate limit pid={} cgroup={} pps={} burst={}",
+                        rule.pid, rule.cgroup_id, rate.packets_per_second, rate.burst
+                    )
+                })?;
+        }
     }
 
     Ok(())
@@ -1178,13 +1650,23 @@ fn install_tc_deny_rules_from_env(bpf: &mut aya::Ebpf) -> Result<()> {
 /// Parse deny rule spec string into normalized rule structs.
 ///
 /// Grammar (semicolon-separated entries):
-/// - entry = `pid=<u32>,ip=<ipv4>,port=<u16>[,proto=<tcp|udp|6|17>]`
+/// - entry = `[pid=<u32>|cgroup=<u64>],ip=<ipv4>,port=<u16>[,proto=<tcp|udp|6|17>]`
 /// - supported key aliases: `dst_ip`, `dst_port`
 ///
 /// Notes:
 /// - `proto` defaults to tcp (`6`) when omitted.
 /// - unknown keys and missing required keys are treated as hard errors.
 fn parse_tc_deny_rules(raw: &str) -> Result<Vec<TcDenyRule>> {
+    parse_tc_rules(raw, false)
+}
+
+/// Parse allow/deny/rate-limit rules from `OLOPA_TC_POLICY_RULES`.
+/// Rate entries require `action=rate,pps=<n>` and optionally `burst=<n>`.
+fn parse_tc_policy_rules(raw: &str) -> Result<Vec<TcDenyRule>> {
+    parse_tc_rules(raw, true)
+}
+
+fn parse_tc_rules(raw: &str, extended: bool) -> Result<Vec<TcDenyRule>> {
     let mut out = Vec::new();
     for (idx, entry_raw) in raw.split(';').enumerate() {
         let entry = entry_raw.trim();
@@ -1193,9 +1675,13 @@ fn parse_tc_deny_rules(raw: &str) -> Result<Vec<TcDenyRule>> {
         }
 
         let mut pid: Option<u32> = None;
+        let mut cgroup_id: Option<u64> = None;
         let mut dst_ip: Option<u32> = None;
         let mut dst_port: Option<u16> = None;
         let mut proto: Option<u8> = None;
+        let mut action = TC_POLICY_ACTION_DENY;
+        let mut packets_per_second: Option<u32> = None;
+        let mut burst: Option<u32> = None;
 
         for part in entry.split(',') {
             let token = part.trim();
@@ -1217,6 +1703,11 @@ fn parse_tc_deny_rules(raw: &str) -> Result<Vec<TcDenyRule>> {
                         format!("invalid pid '{}' in TC deny rule '{}'", value, entry)
                     })?);
                 }
+                "cgroup" | "cgroup_id" => {
+                    cgroup_id = Some(value.parse::<u64>().with_context(|| {
+                        format!("invalid cgroup id '{}' in TC deny rule '{}'", value, entry)
+                    })?);
+                }
                 "ip" | "dst_ip" => {
                     let ip = value.parse::<Ipv4Addr>().with_context(|| {
                         format!("invalid IPv4 '{}' in TC deny rule '{}'", value, entry)
@@ -1233,9 +1724,30 @@ fn parse_tc_deny_rules(raw: &str) -> Result<Vec<TcDenyRule>> {
                         format!("invalid proto '{}' in TC deny rule '{}'", value, entry)
                     })?);
                 }
+                "action" if extended => {
+                    action = match value.to_ascii_lowercase().as_str() {
+                        "allow" => TC_POLICY_ACTION_ALLOW,
+                        "deny" => TC_POLICY_ACTION_DENY,
+                        "rate" | "rate_limit" => TC_POLICY_ACTION_RATE_LIMIT,
+                        _ => bail!("invalid TC policy action '{}' in rule '{}'", value, entry),
+                    };
+                }
+                "pps" | "packets_per_second" if extended => {
+                    packets_per_second = Some(value.parse::<u32>().with_context(|| {
+                        format!(
+                            "invalid packets-per-second '{}' in TC policy rule '{}'",
+                            value, entry
+                        )
+                    })?);
+                }
+                "burst" if extended => {
+                    burst = Some(value.parse::<u32>().with_context(|| {
+                        format!("invalid burst '{}' in TC policy rule '{}'", value, entry)
+                    })?);
+                }
                 _ => {
                     bail!(
-                        "unsupported key '{}' in TC deny rule '{}' (supported: pid, ip, port, proto)",
+                        "unsupported key '{}' in TC deny rule '{}' (supported: pid, cgroup, ip, port, proto)",
                         key,
                         entry
                     );
@@ -1243,17 +1755,41 @@ fn parse_tc_deny_rules(raw: &str) -> Result<Vec<TcDenyRule>> {
             }
         }
 
-        let pid = pid.with_context(|| format!("missing pid in TC deny rule '{}'", entry))?;
+        if pid.is_none() && cgroup_id.is_none() {
+            bail!("missing pid or cgroup in TC deny rule '{}'", entry);
+        }
+        let pid = pid.unwrap_or(0);
+        let cgroup_id = cgroup_id.unwrap_or(0);
         let dst_ip = dst_ip.with_context(|| format!("missing ip in TC deny rule '{}'", entry))?;
         let dst_port =
             dst_port.with_context(|| format!("missing port in TC deny rule '{}'", entry))?;
         let proto = proto.unwrap_or(6);
+        let rate = if action == TC_POLICY_ACTION_RATE_LIMIT {
+            let packets_per_second = packets_per_second
+                .filter(|value| *value > 0)
+                .with_context(|| format!("rate policy requires pps>0 in rule '{}'", entry))?;
+            Some(TcRateLimitConfig {
+                packets_per_second,
+                burst: burst.unwrap_or(packets_per_second).max(1),
+            })
+        } else {
+            if packets_per_second.is_some() || burst.is_some() {
+                bail!(
+                    "pps/burst require action=rate in TC policy rule '{}'",
+                    entry
+                );
+            }
+            None
+        };
 
         out.push(TcDenyRule {
             pid,
+            cgroup_id,
             dst_ip,
             dst_port,
             proto,
+            action,
+            rate,
         });
 
         if out.len() > 32_768 {
@@ -1266,6 +1802,15 @@ fn parse_tc_deny_rules(raw: &str) -> Result<Vec<TcDenyRule>> {
     }
 
     Ok(out)
+}
+
+fn tc_action_name(action: u8) -> &'static str {
+    match action {
+        TC_POLICY_ACTION_ALLOW => "allow",
+        TC_POLICY_ACTION_DENY => "deny",
+        TC_POLICY_ACTION_RATE_LIMIT => "rate_limit",
+        _ => "unknown",
+    }
 }
 
 /// Parse protocol string token into numeric protocol id used by TC map keys.
@@ -1311,13 +1856,36 @@ mod tc_policy_tests {
         assert_eq!(parse_l4_proto("17").expect("17 should parse"), 17);
         assert!(parse_l4_proto("icmp").is_err());
     }
+
+    #[test]
+    fn parse_tc_policy_rules_supports_cgroup_allow_and_rate_limit() {
+        let rules = parse_tc_policy_rules(
+            "cgroup=42,ip=10.0.0.4,port=443,action=allow;cgroup=42,ip=8.8.8.8,port=53,proto=udp,action=rate,pps=100,burst=25",
+        )
+        .expect("valid TC policy rules");
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].action, TC_POLICY_ACTION_ALLOW);
+        assert_eq!(rules[0].cgroup_id, 42);
+        assert_eq!(rules[1].action, TC_POLICY_ACTION_RATE_LIMIT);
+        let rate = rules[1].rate.expect("rate config");
+        assert_eq!(rate.packets_per_second, 100);
+        assert_eq!(rate.burst, 25);
+    }
+
+    #[test]
+    fn parse_tc_policy_rules_rejects_rate_without_pps() {
+        let err = parse_tc_policy_rules("pid=1,ip=1.1.1.1,port=443,action=rate")
+            .expect_err("rate policy without pps must fail");
+        assert!(err.to_string().contains("requires pps"));
+    }
 }
 
 impl RuleEngineLike for ActiveRuleEngine {
     fn evaluate(&mut self, event: &IngestEvent) -> Vec<RuleMatch> {
-        match self {
-            ActiveRuleEngine::RuntimeIr(engine) => engine.evaluate_matches(event),
-            ActiveRuleEngine::Simple(engine) => engine.evaluate(event),
+        self.maybe_reload();
+        match &mut self.current {
+            RuleEngineMode::RuntimeIr(engine) => engine.evaluate_matches(event),
+            RuleEngineMode::Simple(engine) => engine.evaluate(event),
         }
     }
 }
@@ -1531,7 +2099,7 @@ fn build_graph_dump_payload(
         active_nodes.insert(event.graph_target_id);
         active_nodes.insert(event.graph_parent_id);
         latest_comm_by_graph_pid
-            .entry(normalize_graph_vertex(event.pid))
+            .entry(event.graph_source_id)
             .or_insert_with(|| event.comm.clone());
 
         edges.push(GraphDumpEdge {
@@ -1661,15 +2229,14 @@ fn event_comm_to_string(comm: &[u8; 16]) -> String {
 
 /// Maximum number of recent events retained in dump payload.
 const MAX_DUMP_EVENTS: usize = 10_000;
-/// Fixed graph id space used by current bootstrap graph allocator.
-const GRAPH_NODE_SPACE: u32 = 65_536;
-
-/// Map arbitrary vertex ids into current fixed graph id space.
-fn normalize_graph_vertex(vertex_id: u32) -> u32 {
-    if GRAPH_NODE_SPACE == 0 {
-        return 0;
-    }
-    vertex_id % GRAPH_NODE_SPACE
+/// Maximum dense vertex count. The compact allocator prevents raw kernel ids
+/// from forcing sparse multi-gigabyte arrays while avoiding modulo collisions.
+fn graph_max_nodes() -> u32 {
+    std::env::var("OLOPA_GRAPH_MAX_NODES")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(1_000_000)
+        .max(1_024)
 }
 
 /// Format attached probe selections for startup logs.
@@ -1724,4 +2291,44 @@ fn expand_probe_status_tokens(selections: &[ProbeSelection]) -> Vec<&'static str
         }
     }
     out
+}
+
+#[cfg(test)]
+mod graph_adapter_tests {
+    use super::*;
+
+    #[test]
+    fn compact_allocator_avoids_old_modulo_and_entity_type_collisions() {
+        let mut graph = RealGraph::default();
+        let first = IngestEvent {
+            pid: 7,
+            vertex_id: 7,
+            dst_vertex_id: 99,
+            event_type: 2,
+            ..Default::default()
+        };
+        let second = IngestEvent {
+            pid: 65_543,
+            vertex_id: 65_543,
+            dst_vertex_id: 99,
+            event_type: 3,
+            net_dst_ip: u32::from(Ipv4Addr::new(203, 0, 113, 7)),
+            net_dst_port: 443,
+            ..Default::default()
+        };
+        graph.write_edge(&first);
+        graph.write_edge(&second);
+        graph.merge_deltas();
+
+        let process_a = graph.vertex_index[&(NodeLabel::Process, 7)];
+        let process_b = graph.vertex_index[&(NodeLabel::Process, 65_543)];
+        let file = graph.vertex_index[&(NodeLabel::File, 99)];
+        let endpoint = graph.vertex_index[&(
+            NodeLabel::NetworkEndpoint,
+            u32::from(Ipv4Addr::new(203, 0, 113, 7)),
+        )];
+        assert_ne!(process_a, process_b);
+        assert_ne!(file, endpoint);
+        assert_eq!(graph.inner.snapshot().num_edges, 2);
+    }
 }

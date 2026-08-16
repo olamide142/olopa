@@ -16,7 +16,6 @@
 // ============================================================
 
 use crossbeam_utils::CachePadded;
-use log::warn;
 use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -33,7 +32,7 @@ const _: () = assert!(std::mem::size_of::<EdgeProps>() == 16);
 
 // -- Node types (matches graph data model)
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum NodeLabel {
     Process = 0,
     File = 1,
@@ -243,7 +242,7 @@ impl CsrSnapshot {
 pub struct DeltaBuffer {
     pub new_nodes: Vec<(u32, NodeProps)>,      // (vertex_id, props)
     pub new_edges: Vec<(u32, u32, EdgeProps)>, // (src, dst, props)
-    pub risk_updates: Vec<(u32, f32)>,         // (vertex_id, new_risk)
+    pub risk_updates: Vec<(u32, f32, u64)>,    // (vertex_id, new_risk, observed_at_ns)
 }
 
 impl DeltaBuffer {
@@ -267,8 +266,8 @@ impl DeltaBuffer {
     }
 
     #[inline(always)]
-    pub fn update_risk(&mut self, id: u32, risk: f32) {
-        self.risk_updates.push((id, risk));
+    pub fn update_risk(&mut self, id: u32, risk: f32, observed_at_ns: u64) {
+        self.risk_updates.push((id, risk, observed_at_ns));
     }
 
     pub fn drain(&mut self) -> DeltaBuffer {
@@ -410,6 +409,23 @@ impl CsrGraph {
         self.edge_count.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Queue creation or replacement of one compact graph node.
+    #[inline]
+    pub fn write_node(&self, id: u32, props: NodeProps) {
+        let shard_idx = self.delta_shard_index();
+        self.delta_shards[shard_idx].lock().add_node(id, props);
+        self.node_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Queue an in-place risk update without replacing other node metadata.
+    #[inline]
+    pub fn update_risk(&self, id: u32, risk: f32, observed_at_ns: u64) {
+        let shard_idx = self.delta_shard_index();
+        self.delta_shards[shard_idx]
+            .lock()
+            .update_risk(id, risk, observed_at_ns);
+    }
+
     // -- Merge task: runs every 10ms on a background thread ---
     // Drains all delta buffers, rebuilds CSR arrays, swaps pointer.
     // Readers are never blocked — they hold the old Arc until done.
@@ -448,65 +464,81 @@ impl CsrGraph {
 // The sort brings all edges for the same source together,
 // making offsets[] trivial to compute in one linear pass.
 fn rebuild_csr(base: &CsrSnapshot, delta: DeltaBuffer) -> CsrSnapshot {
-    let num_nodes = base.num_nodes as usize;
     let DeltaBuffer {
         new_nodes,
-        new_edges,
+        mut new_edges,
         risk_updates,
     } = delta;
 
-    // Merge base edges + delta edges into one sorted edge list
-    let mut all_edges: Vec<(u32, u32, EdgeProps)> =
-        Vec::with_capacity(base.adjacency.len() + new_edges.len());
-    for src in 0..base.num_nodes {
-        let neighbors = base.neighbors(src);
-        let props = base.neighbor_props(src);
-        for (i, &dst) in neighbors.iter().enumerate() {
-            all_edges.push((src, dst, props[i]));
-        }
-    }
-    all_edges.extend(new_edges);
+    // Grow only to the highest compact id actually observed. The caller owns
+    // the allocator bound; this keeps snapshots dense without modulo aliases.
+    let max_delta_node = new_nodes
+        .iter()
+        .map(|(id, _)| *id)
+        .chain(risk_updates.iter().map(|(id, _, _)| *id))
+        .chain(new_edges.iter().flat_map(|(src, dst, _)| [*src, *dst]))
+        .max();
+    let num_nodes = max_delta_node
+        .map(|id| base.num_nodes.max(id.saturating_add(1)))
+        .unwrap_or(base.num_nodes) as usize;
 
-    // Sort by src so all edges from the same source are contiguous
-    // Radix sort is O(n) for u32 keys — faster than comparison sort
-    all_edges.sort_unstable_by_key(|(src, dst, _)| (*src, *dst));
-
-    // Build offsets[] in one linear pass
+    // Delta edges are much smaller than the accumulated snapshot. Sort only
+    // the delta, then linearly merge it with the already ordered CSR arrays.
+    new_edges.sort_unstable_by_key(|(src, dst, _)| (*src, *dst));
     let mut offsets = vec![0u32; num_nodes + 1];
-    let mut adjacency = Vec::with_capacity(all_edges.len());
-    let mut edge_props = Vec::with_capacity(all_edges.len());
-    let mut dropped_oob_edges = 0u64;
+    let mut adjacency = Vec::with_capacity(base.adjacency.len() + new_edges.len());
+    let mut edge_props = Vec::with_capacity(base.edge_props.len() + new_edges.len());
+    let mut delta_index = 0usize;
 
-    for (src, dst, props) in &all_edges {
-        let src_idx = *src as usize;
-        let dst_idx = *dst as usize;
-        if src_idx >= num_nodes || dst_idx >= num_nodes {
-            dropped_oob_edges = dropped_oob_edges.saturating_add(1);
-            continue;
+    for src in 0..num_nodes {
+        let (mut base_index, base_end) = if src < base.num_nodes as usize {
+            (
+                base.offsets[src] as usize,
+                base.offsets[src.saturating_add(1)] as usize,
+            )
+        } else {
+            (0, 0)
+        };
+        let delta_start = delta_index;
+        while delta_index < new_edges.len() && new_edges[delta_index].0 as usize == src {
+            delta_index += 1;
         }
+        let delta_end = delta_index;
+        let mut current_delta = delta_start;
 
-        offsets[src_idx + 1] += 1;
-        adjacency.push(*dst);
-        edge_props.push(*props);
-    }
-
-    if dropped_oob_edges > 0 {
-        warn!(
-            "csr_graph: dropped {} out-of-range edges (num_nodes={})",
-            dropped_oob_edges, num_nodes
-        );
-    }
-    // Prefix-sum to convert counts → cumulative offsets
-    for i in 1..=num_nodes {
-        offsets[i] += offsets[i - 1];
+        while base_index < base_end || current_delta < delta_end {
+            let base_dst = (base_index < base_end).then(|| base.adjacency[base_index]);
+            let delta_dst = (current_delta < delta_end).then(|| new_edges[current_delta].1);
+            let next_dst = match (base_dst, delta_dst) {
+                (Some(a), Some(b)) => a.min(b),
+                (Some(a), None) => a,
+                (None, Some(b)) => b,
+                (None, None) => break,
+            };
+            let mut selected: Option<EdgeProps> = None;
+            while base_index < base_end && base.adjacency[base_index] == next_dst {
+                selected = latest_props(selected, base.edge_props[base_index]);
+                base_index += 1;
+            }
+            while current_delta < delta_end && new_edges[current_delta].1 == next_dst {
+                selected = latest_props(selected, new_edges[current_delta].2);
+                current_delta += 1;
+            }
+            if (next_dst as usize) < num_nodes {
+                adjacency.push(next_dst);
+                edge_props.push(selected.expect("edge metadata exists"));
+            }
+        }
+        offsets[src + 1] = adjacency.len().try_into().unwrap_or(u32::MAX);
     }
 
     // Apply risk updates to node_props
     let mut node_props = base.node_props.clone();
-    for (id, risk) in risk_updates {
+    node_props.resize_with(num_nodes, default_node_props);
+    for (id, risk, observed_at_ns) in risk_updates {
         if let Some(n) = node_props.get_mut(id as usize) {
             n.risk_score = risk;
-            n.last_seen_ns = 0; // would be set from event ts_ns in production
+            n.last_seen_ns = n.last_seen_ns.max(observed_at_ns);
         }
     }
     // Merge new nodes
@@ -524,6 +556,28 @@ fn rebuild_csr(base: &CsrSnapshot, delta: DeltaBuffer) -> CsrSnapshot {
         adjacency,
         edge_props,
         node_props,
+    }
+}
+
+#[inline]
+fn latest_props(current: Option<EdgeProps>, candidate: EdgeProps) -> Option<EdgeProps> {
+    match current {
+        Some(existing) if existing.ts_ns > candidate.ts_ns => Some(existing),
+        _ => Some(candidate),
+    }
+}
+
+fn default_node_props() -> NodeProps {
+    NodeProps {
+        first_seen_ns: 0,
+        last_seen_ns: 0,
+        risk_score: 0.0,
+        page_rank: 0.0,
+        label: NodeLabel::Process,
+        is_internal: true,
+        is_canary: false,
+        community_id: 0,
+        _pad: [0; 4],
     }
 }
 
@@ -669,5 +723,32 @@ mod tests {
         let second = g.snapshot();
         assert_eq!(second.neighbors(1), &[2, 3]);
         assert_eq!(second.num_edges, 2);
+    }
+
+    #[test]
+    fn merge_coalesces_repeated_edges_using_latest_metadata() {
+        let g = CsrGraph::new(4, 4);
+        g.write_edge(1, 2, make_props(EdgeKind::ConnectedTo, 1_000));
+        g.write_edge(1, 2, make_props(EdgeKind::ConnectedTo, 2_000));
+        g.merge_deltas();
+        assert_eq!(g.snapshot().num_edges, 1);
+        assert_eq!(g.snapshot().find_edge(1, 2).unwrap().ts_ns, 2_000);
+
+        g.write_edge(1, 2, make_props(EdgeKind::ConnectedTo, 3_000));
+        g.merge_deltas();
+        assert_eq!(g.snapshot().num_edges, 1);
+        assert_eq!(g.snapshot().find_edge(1, 2).unwrap().ts_ns, 3_000);
+    }
+
+    #[test]
+    fn merge_grows_dense_node_storage_for_compact_ids() {
+        let g = CsrGraph::new(0, 2);
+        g.write_node(2, make_node(NodeLabel::Container, 0.4, true));
+        g.write_edge(0, 2, make_props(EdgeKind::ExecIn, 1));
+        g.merge_deltas();
+        let snapshot = g.snapshot();
+        assert_eq!(snapshot.num_nodes, 3);
+        assert_eq!(snapshot.node(2).label, NodeLabel::Container);
+        assert_eq!(snapshot.neighbors(0), &[2]);
     }
 }

@@ -6,7 +6,8 @@ use crate::ast::{
     ActionStmt, AuthKind, ChallengeKind, DurationUnit, IsolateKind, OilDuration, RevokeKind,
     Severity, SnapshotKind,
 };
-use crate::mid::{MirAction, MirExpr, MirProgram, RuleClass};
+use crate::mid::{MirAction, MirExpr, MirProgram, MirRule, RuleClass};
+use crate::prelude::{CallableSignatures, CallableTypeRef};
 use crate::schema::{FieldType, PrimitiveType, SchemaRegistry};
 
 /// Serialized payload sent from the compiler to the runtime evaluator.
@@ -18,7 +19,41 @@ pub struct RuntimeProgram {
     /// Runtime field metadata derived from compiler schema/context.
     #[serde(default)]
     pub fields: Vec<RuntimeField>,
+    /// Callable contracts available when this artifact was compiled.
+    #[serde(default)]
+    pub callables: Vec<RuntimeCallable>,
     pub rules: Vec<RuntimeRule>,
+}
+
+/// Compiler-emitted callable contract consumed by runtime validation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeCallable {
+    pub name: String,
+    pub params: Vec<RuntimeCallableParam>,
+    pub returns: Option<RuntimeCallableType>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeCallableParam {
+    pub name: String,
+    pub value_type: RuntimeCallableType,
+}
+
+/// Wire representation of OIL callable parameter and return types.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", content = "of", rename_all = "snake_case")]
+pub enum RuntimeCallableType {
+    Any,
+    Str,
+    Int,
+    Float,
+    Bool,
+    Duration,
+    Path,
+    IpAddr,
+    Entity(String),
+    Set(Box<RuntimeCallableType>),
+    Nullable(Box<RuntimeCallableType>),
 }
 
 /// Typed field metadata consumed by runtime evaluators.
@@ -240,6 +275,10 @@ pub enum RuntimeExpr {
         name: String,
         args: Vec<RuntimeExpr>,
     },
+    Project {
+        base: Box<RuntimeExpr>,
+        field: String,
+    },
     And {
         lhs: Box<RuntimeExpr>,
         rhs: Box<RuntimeExpr>,
@@ -384,6 +423,54 @@ pub fn runtime_fields_from_schema(schema: &SchemaRegistry) -> Vec<RuntimeField> 
     out
 }
 
+/// Convert prelude callable signatures into a deterministic runtime contract.
+pub fn runtime_callables_from_prelude(signatures: &CallableSignatures) -> Vec<RuntimeCallable> {
+    let mut callables = signatures
+        .iter()
+        .flat_map(|(name, overloads)| {
+            overloads.iter().map(|signature| RuntimeCallable {
+                name: name.clone(),
+                params: signature
+                    .params
+                    .iter()
+                    .map(|param| RuntimeCallableParam {
+                        name: param.name.clone(),
+                        value_type: lower_callable_type(&param.ty),
+                    })
+                    .collect(),
+                returns: signature.returns.as_ref().map(lower_callable_type),
+            })
+        })
+        .collect::<Vec<_>>();
+    callables.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| a.params.len().cmp(&b.params.len()))
+            .then_with(|| format!("{:?}", a.params).cmp(&format!("{:?}", b.params)))
+    });
+    callables
+}
+
+fn lower_callable_type(value_type: &CallableTypeRef) -> RuntimeCallableType {
+    match value_type {
+        CallableTypeRef::Any => RuntimeCallableType::Any,
+        CallableTypeRef::Str => RuntimeCallableType::Str,
+        CallableTypeRef::Int => RuntimeCallableType::Int,
+        CallableTypeRef::Float => RuntimeCallableType::Float,
+        CallableTypeRef::Bool => RuntimeCallableType::Bool,
+        CallableTypeRef::Duration => RuntimeCallableType::Duration,
+        CallableTypeRef::Path => RuntimeCallableType::Path,
+        CallableTypeRef::IpAddr => RuntimeCallableType::IpAddr,
+        CallableTypeRef::Entity(name) => RuntimeCallableType::Entity(name.clone()),
+        CallableTypeRef::Set(inner) => {
+            RuntimeCallableType::Set(Box::new(lower_callable_type(inner)))
+        }
+        CallableTypeRef::Nullable(inner) => {
+            RuntimeCallableType::Nullable(Box::new(lower_callable_type(inner)))
+        }
+    }
+}
+
 fn collect_runtime_fields_for_entity(
     schema: &SchemaRegistry,
     entity_name: &str,
@@ -495,85 +582,209 @@ pub fn lower_runtime_program(mir: &MirProgram) -> RuntimeProgram {
     RuntimeProgram {
         version: 1,
         fields: Vec::new(),
+        callables: Vec::new(),
         rules: mir
             .rules
             .iter()
-            .map(|rule| RuntimeRule {
-                id: rule.id.0.clone(),
-                name: rule.name.clone(),
-                class: lower_rule_class(rule.class),
-                sources: rule
-                    .sources
-                    .iter()
-                    .map(|s| RuntimeSource {
-                        domain: s.domain.clone(),
-                        event: s.event.clone(),
-                        alias: s.alias.clone(),
-                    })
-                    .collect(),
-                predicates: rule
-                    .predicates
-                    .iter()
-                    .map(|p| lower_mir_expr(&p.expr))
-                    .collect(),
-                joins: rule
-                    .joins
-                    .iter()
-                    .map(|j| RuntimeJoin {
-                        left_alias: j.left_alias.clone(),
-                        right_alias: j.right_alias.clone(),
-                        on: j.on.as_ref().map(lower_mir_expr),
-                    })
-                    .collect(),
-                window: rule.window.map(lower_duration),
-                require: rule
-                    .require
-                    .iter()
-                    .map(|r| lower_mir_expr(&r.expr))
-                    .collect(),
-                lets: rule
-                    .lets
-                    .iter()
-                    .map(|b| RuntimeLet {
-                        name: b.name.clone(),
-                        value: lower_mir_expr(&b.value),
-                    })
-                    .collect(),
-                score: RuntimeScore {
-                    base: rule.score.base,
-                    modifiers: rule
-                        .score
-                        .modifiers
-                        .iter()
-                        .map(|m| RuntimeScoreModifier {
-                            delta: m.delta,
-                            condition: m.condition.as_ref().map(lower_mir_expr),
-                        })
-                        .collect(),
-                },
-                verify: rule.verify.iter().map(|v| v.path.clone()).collect(),
-                emit: rule
-                    .emit
-                    .iter()
-                    .map(|e| RuntimeEmit {
-                        fact_name: e.fact_name.clone(),
-                        args: e.args.iter().map(lower_mir_expr).collect(),
-                        expires: e.expires.map(lower_duration),
-                    })
-                    .collect(),
-                respond: RuntimeRespondPlan {
-                    branches: rule
-                        .respond
-                        .branches
-                        .iter()
-                        .map(|b| RuntimeRespondBranch {
-                            condition: b.condition.as_ref().map(lower_mir_expr),
-                            actions: b.actions.iter().map(lower_action).collect(),
-                        })
-                        .collect(),
-                },
+            .map(|rule| {
+                canonicalize_runtime_rule(
+                    rule,
+                    RuntimeRule {
+                        id: rule.id.0.clone(),
+                        name: rule.name.clone(),
+                        class: lower_rule_class(rule.class),
+                        sources: rule
+                            .sources
+                            .iter()
+                            .map(|s| RuntimeSource {
+                                domain: s.domain.clone(),
+                                event: s.event.clone(),
+                                alias: s.alias.clone(),
+                            })
+                            .collect(),
+                        predicates: rule
+                            .predicates
+                            .iter()
+                            .map(|p| lower_mir_expr(&p.expr))
+                            .collect(),
+                        joins: rule
+                            .joins
+                            .iter()
+                            .map(|j| RuntimeJoin {
+                                left_alias: j.left_alias.clone(),
+                                right_alias: j.right_alias.clone(),
+                                on: j.on.as_ref().map(lower_mir_expr),
+                            })
+                            .collect(),
+                        window: rule.window.map(lower_duration),
+                        require: rule
+                            .require
+                            .iter()
+                            .map(|r| lower_mir_expr(&r.expr))
+                            .collect(),
+                        lets: rule
+                            .lets
+                            .iter()
+                            .map(|b| RuntimeLet {
+                                name: b.name.clone(),
+                                value: lower_mir_expr(&b.value),
+                            })
+                            .collect(),
+                        score: RuntimeScore {
+                            base: rule.score.base,
+                            modifiers: rule
+                                .score
+                                .modifiers
+                                .iter()
+                                .map(|m| RuntimeScoreModifier {
+                                    delta: m.delta,
+                                    condition: m.condition.as_ref().map(lower_mir_expr),
+                                })
+                                .collect(),
+                        },
+                        verify: rule.verify.iter().map(|v| v.path.clone()).collect(),
+                        emit: rule
+                            .emit
+                            .iter()
+                            .map(|e| RuntimeEmit {
+                                fact_name: e.fact_name.clone(),
+                                args: e.args.iter().map(lower_mir_expr).collect(),
+                                expires: e.expires.map(lower_duration),
+                            })
+                            .collect(),
+                        respond: RuntimeRespondPlan {
+                            branches: rule
+                                .respond
+                                .branches
+                                .iter()
+                                .map(|b| RuntimeRespondBranch {
+                                    condition: b.condition.as_ref().map(lower_mir_expr),
+                                    actions: b.actions.iter().map(lower_action).collect(),
+                                })
+                                .collect(),
+                        },
+                    },
+                )
             })
             .collect(),
+    }
+}
+
+fn canonicalize_runtime_rule(rule: &MirRule, mut lowered: RuntimeRule) -> RuntimeRule {
+    let aliases = rule
+        .sources
+        .iter()
+        .filter_map(|source| {
+            source.alias.as_ref().map(|alias| {
+                (
+                    alias.clone(),
+                    canonical_runtime_root(&source.domain, &source.event).to_string(),
+                )
+            })
+        })
+        .collect::<HashMap<_, _>>();
+    canonicalize_runtime_rule_fields(&mut lowered, &aliases);
+    lowered
+}
+
+/// Map subscription taxonomy onto stdlib runtime roots. Most domains already
+/// match directly; endpoint subscriptions use their event kind as the entity
+/// root (`endpoint.process` -> `process`).
+fn canonical_runtime_root<'a>(domain: &'a str, event: &'a str) -> &'a str {
+    match (domain, event) {
+        ("endpoint", "process") => "process",
+        ("endpoint", "file") => "file",
+        _ => domain,
+    }
+}
+
+/// Canonicalize rule-local field aliases after structural lowering.
+///
+/// Runtime field metadata is keyed by schema roots (`ssl.pid`, `dns.pid`),
+/// while authored predicates use correlate aliases (`s.pid`, `q.pid`). Keeping
+/// the local alias in executable IR makes common field names ambiguous and can
+/// silently resolve them to `Null`.
+fn canonicalize_runtime_rule_fields(rule: &mut RuntimeRule, aliases: &HashMap<String, String>) {
+    for expr in &mut rule.predicates {
+        canonicalize_runtime_expr_fields(expr, aliases);
+    }
+    for join in &mut rule.joins {
+        if let Some(expr) = &mut join.on {
+            canonicalize_runtime_expr_fields(expr, aliases);
+        }
+    }
+    for expr in &mut rule.require {
+        canonicalize_runtime_expr_fields(expr, aliases);
+    }
+    for binding in &mut rule.lets {
+        canonicalize_runtime_expr_fields(&mut binding.value, aliases);
+    }
+    for modifier in &mut rule.score.modifiers {
+        if let Some(expr) = &mut modifier.condition {
+            canonicalize_runtime_expr_fields(expr, aliases);
+        }
+    }
+    for emit in &mut rule.emit {
+        for expr in &mut emit.args {
+            canonicalize_runtime_expr_fields(expr, aliases);
+        }
+    }
+    for branch in &mut rule.respond.branches {
+        if let Some(expr) = &mut branch.condition {
+            canonicalize_runtime_expr_fields(expr, aliases);
+        }
+    }
+}
+
+fn canonicalize_runtime_expr_fields(expr: &mut RuntimeExpr, aliases: &HashMap<String, String>) {
+    match expr {
+        RuntimeExpr::Field { path } => {
+            if let Some((head, tail)) = path.split_once('.') {
+                if let Some(root) = aliases.get(head) {
+                    *path = format!("{root}.{tail}");
+                }
+            }
+        }
+        RuntimeExpr::List { items } | RuntimeExpr::Call { args: items, .. } => {
+            for item in items {
+                canonicalize_runtime_expr_fields(item, aliases);
+            }
+        }
+        RuntimeExpr::Project { base, .. } => canonicalize_runtime_expr_fields(base, aliases),
+        RuntimeExpr::And { lhs, rhs }
+        | RuntimeExpr::Or { lhs, rhs }
+        | RuntimeExpr::Eq { lhs, rhs }
+        | RuntimeExpr::Ne { lhs, rhs }
+        | RuntimeExpr::Lt { lhs, rhs }
+        | RuntimeExpr::Gt { lhs, rhs }
+        | RuntimeExpr::Le { lhs, rhs }
+        | RuntimeExpr::Ge { lhs, rhs }
+        | RuntimeExpr::Add { lhs, rhs }
+        | RuntimeExpr::Sub { lhs, rhs }
+        | RuntimeExpr::Mul { lhs, rhs }
+        | RuntimeExpr::Div { lhs, rhs }
+        | RuntimeExpr::StartsWith { lhs, rhs }
+        | RuntimeExpr::EndsWith { lhs, rhs }
+        | RuntimeExpr::Contains { lhs, rhs } => {
+            canonicalize_runtime_expr_fields(lhs, aliases);
+            canonicalize_runtime_expr_fields(rhs, aliases);
+        }
+        RuntimeExpr::In { lhs, rhs } => {
+            canonicalize_runtime_expr_fields(lhs, aliases);
+            for item in rhs {
+                canonicalize_runtime_expr_fields(item, aliases);
+            }
+        }
+        RuntimeExpr::Not { expr } | RuntimeExpr::Matches { lhs: expr, .. } => {
+            canonicalize_runtime_expr_fields(expr, aliases);
+        }
+        RuntimeExpr::Bool { .. }
+        | RuntimeExpr::Null
+        | RuntimeExpr::Int { .. }
+        | RuntimeExpr::Float { .. }
+        | RuntimeExpr::Duration { .. }
+        | RuntimeExpr::Str { .. }
+        | RuntimeExpr::Unsupported { .. } => {}
     }
 }
 
@@ -631,6 +842,10 @@ fn lower_mir_expr(expr: &MirExpr) -> RuntimeExpr {
         MirExpr::Call { name, args } => RuntimeExpr::Call {
             name: name.clone(),
             args: args.iter().map(lower_mir_expr).collect(),
+        },
+        MirExpr::Project { base, field } => RuntimeExpr::Project {
+            base: Box::new(lower_mir_expr(base)),
+            field: field.clone(),
         },
         MirExpr::And { lhs, rhs } => RuntimeExpr::And {
             lhs: Box::new(lower_mir_expr(lhs)),
@@ -836,9 +1051,15 @@ rule "runtime_ir" {
         assert_eq!(runtime.rules[0].name, "runtime_ir");
         assert_eq!(runtime.rules[0].class, RuntimeRuleClass::Temporal);
         assert_eq!(runtime.rules[0].sources.len(), 1);
+        assert_eq!(runtime.rules[0].sources[0].alias.as_deref(), Some("p"));
         assert_eq!(runtime.rules[0].predicates.len(), 1);
         assert_eq!(runtime.rules[0].respond.branches.len(), 1);
         assert_eq!(runtime.rules[0].respond.branches[0].actions.len(), 1);
+
+        let json = serde_json::to_string(&runtime.rules[0]).expect("serialize runtime rule");
+        assert!(json.contains(r#""path":"process.pid""#));
+        assert!(json.contains(r#""path":"process.name""#));
+        assert!(!json.contains(r#""path":"p.pid""#));
     }
 
     #[test]
@@ -917,6 +1138,35 @@ rule "runtime_ir_call" {
             }
             other => panic!("expected RuntimeExpr::Call, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn lowers_callable_member_projection_without_flattening_call_arguments() {
+        let src = r#"
+rule "runtime_ir_projection" {
+  from endpoint.process
+  correlate process.spawn as p
+  where baseline.image("sha256:abc").allowed_processes contains p.name
+  respond alert high
+}
+"#;
+        let tokens = Lexer::new(src).tokenize().expect("lex");
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().expect("parse");
+        let mir = lower_program(&program);
+        let runtime = lower_runtime_program(&mir);
+        let RuntimeExpr::Contains { lhs, .. } = &runtime.rules[0].predicates[0] else {
+            panic!("expected contains predicate");
+        };
+        let RuntimeExpr::Project { base, field } = lhs.as_ref() else {
+            panic!("expected projected callable result, got {lhs:?}");
+        };
+        assert_eq!(field, "allowed_processes");
+        let RuntimeExpr::Call { name, args } = base.as_ref() else {
+            panic!("expected callable projection base, got {base:?}");
+        };
+        assert_eq!(name, "baseline.image");
+        assert!(matches!(args.as_slice(), [RuntimeExpr::Str { value }] if value == "sha256:abc"));
     }
 
     #[test]

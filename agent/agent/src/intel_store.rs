@@ -92,9 +92,39 @@ pub fn set_exists(set_name: &str) -> bool {
         None => return false,
     };
     match store.read() {
-        Ok(inner) => inner.string_sets.contains_key(set_name) || inner.ip_sets.contains_key(set_name),
+        Ok(inner) => {
+            inner.string_sets.contains_key(set_name) || inner.ip_sets.contains_key(set_name)
+        }
         Err(_) => false,
     }
+}
+
+/// Snapshot a string-backed intel set for callable consumers.
+///
+/// Membership checks should continue using `contains_str`; this allocation is
+/// intended for explicit collection-returning functions such as
+/// `intel.domains(feed)`.
+pub fn string_set_items(set_name: &str) -> Option<Vec<String>> {
+    let store = INTEL_STORE.get()?;
+    let inner = store.read().ok()?;
+    let mut items = inner
+        .string_sets
+        .get(set_name)?
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    items.sort();
+    Some(items)
+}
+
+#[cfg(test)]
+pub fn install_test_string_set(set_name: &str, items: &[&str]) {
+    let store = INTEL_STORE.get_or_init(|| RwLock::new(IntelStoreInner::empty()));
+    let mut guard = store.write().expect("intel test store write lock");
+    guard.string_sets.insert(
+        set_name.to_string(),
+        items.iter().map(|item| item.to_ascii_lowercase()).collect(),
+    );
 }
 
 /// Initialise the global store from `path` and start the hot-reload watcher.
@@ -155,17 +185,14 @@ impl IntelStoreInner {
     }
 
     fn contains_ip(&self, set_name: &str, ip: u32) -> bool {
-        self.ip_sets
-            .get(set_name)
-            .is_some_and(|s| s.contains(&ip))
+        self.ip_sets.get(set_name).is_some_and(|s| s.contains(&ip))
     }
 
     fn load(path: &Path) -> Result<Self, String> {
-        let raw = std::fs::read_to_string(path)
-            .map_err(|e| format!("read failed: {e}"))?;
+        let raw = std::fs::read_to_string(path).map_err(|e| format!("read failed: {e}"))?;
 
-        let wire: IntelWire = serde_json::from_str(&raw)
-            .map_err(|e| format!("JSON parse failed: {e}"))?;
+        let wire: IntelWire =
+            serde_json::from_str(&raw).map_err(|e| format!("JSON parse failed: {e}"))?;
 
         if wire.version != 1 {
             return Err(format!("unsupported intel.json version: {}", wire.version));
@@ -203,7 +230,10 @@ impl IntelStoreInner {
             }
         }
 
-        Ok(Self { string_sets, ip_sets })
+        Ok(Self {
+            string_sets,
+            ip_sets,
+        })
     }
 }
 
@@ -295,7 +325,10 @@ mod tests {
         let mut s = HashSet::new();
         s.insert("evil.com".to_string());
         sets.insert("org.threat_intel.c2_domains".to_string(), s);
-        let store = IntelStoreInner { string_sets: sets, ip_sets: HashMap::new() };
+        let store = IntelStoreInner {
+            string_sets: sets,
+            ip_sets: HashMap::new(),
+        };
         // Stored lowercase; input is normalised at query time.
         assert!(store.contains_str("org.threat_intel.c2_domains", "evil.com"));
         assert!(!store.contains_str("org.threat_intel.c2_domains", "safe.com"));
@@ -307,15 +340,30 @@ mod tests {
         let mut ips = HashSet::new();
         ips.insert(u32::from(Ipv4Addr::new(1, 2, 3, 4)));
         ip_sets.insert("org.threat_intel.outgoing_ips".to_string(), ips);
-        let store = IntelStoreInner { string_sets: HashMap::new(), ip_sets };
-        assert!(store.contains_ip("org.threat_intel.outgoing_ips", u32::from(Ipv4Addr::new(1, 2, 3, 4))));
-        assert!(!store.contains_ip("org.threat_intel.outgoing_ips", u32::from(Ipv4Addr::new(9, 9, 9, 9))));
+        let store = IntelStoreInner {
+            string_sets: HashMap::new(),
+            ip_sets,
+        };
+        assert!(store.contains_ip(
+            "org.threat_intel.outgoing_ips",
+            u32::from(Ipv4Addr::new(1, 2, 3, 4))
+        ));
+        assert!(!store.contains_ip(
+            "org.threat_intel.outgoing_ips",
+            u32::from(Ipv4Addr::new(9, 9, 9, 9))
+        ));
     }
 
     #[test]
     fn parse_ipv4_strips_cidr_suffix() {
-        assert_eq!(parse_ipv4_to_u32("1.2.3.4/24"), Some(u32::from(Ipv4Addr::new(1, 2, 3, 4))));
-        assert_eq!(parse_ipv4_to_u32("1.2.3.4"), Some(u32::from(Ipv4Addr::new(1, 2, 3, 4))));
+        assert_eq!(
+            parse_ipv4_to_u32("1.2.3.4/24"),
+            Some(u32::from(Ipv4Addr::new(1, 2, 3, 4)))
+        );
+        assert_eq!(
+            parse_ipv4_to_u32("1.2.3.4"),
+            Some(u32::from(Ipv4Addr::new(1, 2, 3, 4)))
+        );
         assert_eq!(parse_ipv4_to_u32("not-an-ip"), None);
     }
 }

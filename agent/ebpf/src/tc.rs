@@ -17,12 +17,20 @@
 
 use aya_ebpf::{
     bindings::{TC_ACT_OK, TC_ACT_SHOT},
-    helpers::bpf_get_current_pid_tgid,
+    helpers::{
+        bpf_get_current_cgroup_id, bpf_get_current_comm, bpf_get_current_pid_tgid,
+        bpf_get_current_uid_gid, bpf_ktime_get_ns,
+    },
     macros::{classifier, map},
     maps::{Array, HashMap},
     programs::TcContext,
 };
-use olopa_common::{TcEgressPolicyKey, TC_POLICY_ACTION_DENY};
+use olopa_common::{
+    TcEgressPolicyKey, TcEvent, TcRateLimitConfig, TcRateLimitState, EVENT_KIND_TC,
+    TC_POLICY_ACTION_ALLOW, TC_POLICY_ACTION_DENY, TC_POLICY_ACTION_RATE_LIMIT, TC_VERDICT_DENY,
+};
+
+use crate::EVENTS;
 
 /// Policy map:
 /// key   = process + destination tuple (`pid,dst_ip,dst_port,proto`)
@@ -32,6 +40,17 @@ use olopa_common::{TcEgressPolicyKey, TC_POLICY_ACTION_DENY};
 /// Kernel fast path does read-only lookups per packet.
 #[map]
 static TC_EGRESS_POLICY: HashMap<TcEgressPolicyKey, u8> = HashMap::with_max_entries(16_384, 0);
+
+/// Rate parameters for keys whose action is `TC_POLICY_ACTION_RATE_LIMIT`.
+#[map]
+static TC_EGRESS_RATE_CONFIG: HashMap<TcEgressPolicyKey, TcRateLimitConfig> =
+    HashMap::with_max_entries(16_384, 0);
+
+/// Mutable token-bucket state. Kept separate from immutable policy so control
+/// updates do not race packet counters.
+#[map]
+static TC_EGRESS_RATE_STATE: HashMap<TcEgressPolicyKey, TcRateLimitState> =
+    HashMap::with_max_entries(16_384, 0);
 
 /// TC stats counters:
 /// index 0 = allowed packets
@@ -150,23 +169,125 @@ unsafe fn process(ctx: &TcContext) -> Result<i32, i32> {
 
     let pid_tgid = bpf_get_current_pid_tgid();
     let pid = (pid_tgid >> 32) as u32;
+    let cgroup_id = bpf_get_current_cgroup_id();
+
+    // Most-specific to least-specific lookup: exact process+cgroup, process,
+    // cgroup, then a global destination tuple. This keeps the map exact-match
+    // fast path while supporting container-scoped policy without duplicating
+    // packet parsing or requiring a linear rule scan.
+    if let Some((key, action)) = policy_action(cgroup_id, pid, dst_ip, dst_port, proto) {
+        let denied = action == TC_POLICY_ACTION_DENY
+            || (action == TC_POLICY_ACTION_RATE_LIMIT && rate_limit_denies(&key));
+        if denied {
+            inc_stat(1);
+            emit_deny_event(cgroup_id, pid, dst_ip, dst_port, proto);
+            return Ok(TC_ACT_SHOT as i32);
+        }
+        if action == TC_POLICY_ACTION_ALLOW || action == TC_POLICY_ACTION_RATE_LIMIT {
+            inc_stat(0);
+            return Ok(TC_ACT_OK as i32);
+        }
+    }
+
+    inc_stat(0);
+    Ok(TC_ACT_OK as i32)
+}
+
+/// Emit only denied packets. Allowed traffic is already represented by the
+/// connect tracepoint, so emitting every TC allow would duplicate telemetry
+/// and place packet-rate pressure on the shared ring buffer.
+#[inline(always)]
+unsafe fn emit_deny_event(cgroup_id: u64, pid: u32, dst_ip: u32, dst_port: u16, proto: u8) {
+    let mut entry = match EVENTS.reserve::<TcEvent>(0) {
+        Some(entry) => entry,
+        None => return,
+    };
+    let event = entry.as_mut_ptr();
+    (*event).kind = EVENT_KIND_TC;
+    (*event).pid = pid;
+    (*event).ts_ns = bpf_ktime_get_ns();
+    (*event).cgroup_id = cgroup_id;
+    (*event).uid = bpf_get_current_uid_gid() as u32;
+    (*event).dst_ip = dst_ip;
+    (*event).dst_port = dst_port;
+    (*event).proto = proto;
+    (*event).direction = 1;
+    (*event).verdict = TC_VERDICT_DENY;
+    (*event)._pad = [0; 3];
+    (*event).comm = match bpf_get_current_comm() {
+        Ok(comm) => comm,
+        Err(_) => [0; 16],
+    };
+    entry.submit(0);
+}
+
+#[inline(always)]
+unsafe fn lookup_action(
+    cgroup_id: u64,
+    pid: u32,
+    dst_ip: u32,
+    dst_port: u16,
+    proto: u8,
+) -> Option<(TcEgressPolicyKey, u8)> {
     let key = TcEgressPolicyKey {
+        cgroup_id,
         pid,
         dst_ip,
         dst_port,
         proto,
         _pad: 0,
     };
+    TC_EGRESS_POLICY.get(&key).map(|action| (key, *action))
+}
 
-    // Enforce deny when userspace policy map says so.
-    // Any non-deny value currently falls through to allow.
-    if let Some(action) = TC_EGRESS_POLICY.get(&key) {
-        if *action == TC_POLICY_ACTION_DENY {
-            inc_stat(1);
-            return Ok(TC_ACT_SHOT as i32);
-        }
+#[inline(always)]
+unsafe fn policy_action(
+    cgroup_id: u64,
+    pid: u32,
+    dst_ip: u32,
+    dst_port: u16,
+    proto: u8,
+) -> Option<(TcEgressPolicyKey, u8)> {
+    lookup_action(cgroup_id, pid, dst_ip, dst_port, proto)
+        .or_else(|| lookup_action(0, pid, dst_ip, dst_port, proto))
+        .or_else(|| lookup_action(cgroup_id, 0, dst_ip, dst_port, proto))
+        .or_else(|| lookup_action(0, 0, dst_ip, dst_port, proto))
+}
+
+#[inline(always)]
+unsafe fn rate_limit_denies(key: &TcEgressPolicyKey) -> bool {
+    let Some(config) = TC_EGRESS_RATE_CONFIG.get(key) else {
+        // A malformed policy entry fails closed for the affected tuple.
+        return true;
+    };
+    if config.packets_per_second == 0 || config.burst == 0 {
+        return true;
     }
-
-    inc_stat(0);
-    Ok(TC_ACT_OK as i32)
+    let now = bpf_ktime_get_ns();
+    if let Some(state) = TC_EGRESS_RATE_STATE.get_ptr_mut(key) {
+        let elapsed = now.saturating_sub((*state).last_refill_ns);
+        let refill = if elapsed >= 1_000_000_000 {
+            config.burst
+        } else {
+            ((elapsed.saturating_mul(config.packets_per_second as u64)) / 1_000_000_000) as u32
+        };
+        if refill > 0 {
+            (*state).tokens = (*state).tokens.saturating_add(refill).min(config.burst);
+            (*state).last_refill_ns = now;
+        }
+        if (*state).tokens == 0 {
+            return true;
+        }
+        (*state).tokens -= 1;
+        return false;
+    }
+    let state = TcRateLimitState {
+        last_refill_ns: now,
+        tokens: config.burst.saturating_sub(1),
+        _pad: 0,
+    };
+    if TC_EGRESS_RATE_STATE.insert(key, &state, 0).is_err() {
+        return true;
+    }
+    false
 }

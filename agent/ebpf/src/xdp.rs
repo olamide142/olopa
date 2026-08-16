@@ -6,9 +6,8 @@
 //! Server (eth0/ens3): native XDP — full line rate
 //! Laptop  (wlo1):     SKB_MODE fallback — works on all interfaces
 //!
-//! Current: pass everything and count packets.
-//! Future:  blacklist map → XDP_DROP
-//!          risk score map → XDP_REDIRECT to honeypot
+//! Current: parse IPv4 ingress traffic, drop exact source-IP threat matches,
+//! and count pass/drop verdicts.
 //!
 //! Design note:
 //! - XDP program currently mutates only counter map state and does not emit
@@ -17,7 +16,7 @@
 use aya_ebpf::{
     bindings::xdp_action,
     macros::{map, xdp},
-    maps::Array,
+    maps::{Array, HashMap},
     programs::XdpContext,
 };
 
@@ -25,6 +24,15 @@ use aya_ebpf::{
 /// Agent reads these for Prometheus metrics.
 #[map]
 static XDP_COUNTERS: Array<u64> = Array::with_max_entries(3, 0);
+
+/// Exact IPv4 source-address deny map populated by userspace.
+#[map]
+static XDP_BLOCKLIST_V4: HashMap<u32, u8> = HashMap::with_max_entries(65_536, 0);
+
+const ETH_HDR_LEN: usize = 14;
+const ETH_PROTO_OFFSET: usize = 12;
+const IPV4_SOURCE_OFFSET: usize = ETH_HDR_LEN + 12;
+const ETH_P_IP: u16 = 0x0800;
 
 #[xdp]
 pub fn xdp_filter(ctx: XdpContext) -> u32 {
@@ -34,16 +42,38 @@ pub fn xdp_filter(ctx: XdpContext) -> u32 {
     }
 }
 
-unsafe fn process(_ctx: XdpContext) -> Result<u32, u32> {
-    // Future:
-    // 1. Parse ethernet/IP header (bounds-check required by verifier)
-    // 2. Blacklist map lookup → XDP_DROP
-    // 3. Risk score map: >70 → XDP_REDIRECT to honeypot
-    // 4. Consistent-hash 5-tuple → select backend (load balancing)
+unsafe fn process(ctx: XdpContext) -> Result<u32, u32> {
+    let eth_proto = u16::from_be(core::ptr::read_unaligned(ptr_at::<u16>(
+        &ctx,
+        ETH_PROTO_OFFSET,
+    )?));
+    if eth_proto == ETH_P_IP {
+        let source_ip = u32::from_be(core::ptr::read_unaligned(ptr_at::<u32>(
+            &ctx,
+            IPV4_SOURCE_OFFSET,
+        )?));
+        if XDP_BLOCKLIST_V4.get(&source_ip).is_some() {
+            if let Some(counter) = XDP_COUNTERS.get_ptr_mut(1) {
+                *counter = (*counter).saturating_add(1);
+            }
+            return Ok(xdp_action::XDP_DROP);
+        }
+    }
 
     if let Some(counter) = XDP_COUNTERS.get_ptr_mut(0) {
         *counter = (*counter).saturating_add(1);
     }
 
     Ok(xdp_action::XDP_PASS)
+}
+
+#[inline(always)]
+fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*const T, u32> {
+    let start = ctx.data();
+    let end = ctx.data_end();
+    let len = core::mem::size_of::<T>();
+    if start.saturating_add(offset).saturating_add(len) > end {
+        return Err(xdp_action::XDP_ABORTED);
+    }
+    Ok((start + offset) as *const T)
 }

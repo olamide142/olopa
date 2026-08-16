@@ -9,6 +9,10 @@ callable baseline.workload(namespace: Str, name: Str) -> BaselineProfile
 callable intel.domains(feed: Str) -> Set<Str>
 
 // Statistical helpers evaluated by runtime engine.
+callable count(value: Any) -> Int
+callable len(value: Str) -> Int
+callable len(value: Set<Any>) -> Int
+callable is_shell(process: Process) -> Bool
 callable rare(value: Str) -> Bool
 callable unusual_for(value: Str, entity: Str) -> Bool
 callable max(values: Set<Int>) -> Int

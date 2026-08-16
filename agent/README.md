@@ -89,6 +89,44 @@ Run these commands from `olopa/agent`.
 - Default runtime path is embedded bytes via `include_bytes_aligned!`; no manual `OLOPA_EBPF_OBJECT` is required.
 - `OLOPA_EBPF_OBJECT=/abs/path/to/olopa-ebpf` can still be used to override the embedded artifact at runtime.
 
+### Kernel policy configuration
+
+- `OLOPA_XDP_BLOCK_IPS=198.51.100.10,203.0.113.7` installs exact IPv4 ingress drops.
+- `OLOPA_TC_DENY_RULES` remains the compatible deny-only format.
+- `OLOPA_TC_POLICY_RULES` accepts semicolon-separated `pid`/`cgroup`, `ip`, `port`, `proto`, and `action=allow|deny|rate` entries. Rate rules require `pps` and may set `burst`.
+
+### Secure Connect
+
+Secure Connect is isolated from telemetry and disabled unless `OLOPA_SC_ENABLED=1`.
+Production startup requires `OLOPA_SC_CONTROL_URL` (HTTPS) and an mTLS identity at
+`OLOPA_SC_MTLS_IDENTITY_PEM`. First enrollment also requires
+`OLOPA_SC_ENROLLMENT_TOKEN`. Useful overrides include `OLOPA_SC_INTERFACE`,
+`OLOPA_SC_HEARTBEAT_MS`, `OLOPA_SC_POLICY_TTL_SECS`, `OLOPA_SC_KILL_SWITCH`,
+`OLOPA_SC_STATE_PATH`, and `OLOPA_SC_STATUS_PATH`.
+
+WireGuard keypairs are generated on the endpoint; the private key is passed to
+`wg` only over stdin, never appears in an argument list or in persisted state,
+and is zeroed on drop. Requires `ip`, `wg`, `nft`, and `resolvectl` on PATH plus
+`CAP_NET_ADMIN`.
+
+**Posture.** Heartbeats carry baseline self-reported facts (OS, kernel, disk
+encryption, privileges) plus kernel-verified facts read from the live sensor's
+own status snapshot (`OLOPA_STATUS_PATH`) and rule deployment status
+(`OLOPA_RULE_STATUS_PATH`): attached probes, capture/drop counters, firewall
+verdict counts, ingest reachability, and loaded rule count.
+`kernel_verified_posture` is false whenever that snapshot is missing or older
+than 60s, so the control plane can distinguish a healthy endpoint from one whose
+sensor stopped reporting.
+
+**Telemetry.** Tunnel and posture events ride the existing durable ingest spool
+as `sc_event` lines (mapped into the `agent_heartbeat` family with
+`attrs.wire=secure_connect`), so Secure Connect opens no second ingest surface
+and its events survive restarts and backpressure like sensor events do.
+
+**Recovery.** `terminate` is terminal and requires re-enrollment. `quarantine`
+and profile expiry are not: the kill switch stays applied while the endpoint
+waits for the control plane to grant a new session.
+
 ### Compile individual crates
 
 - Userspace agent:

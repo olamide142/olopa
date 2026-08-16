@@ -29,13 +29,15 @@ Implemented today:
 - Axum server with tracing and graceful shutdown.
 - Endpoints:
   - `GET /health`
+  - `GET /ready`
+  - `GET /metrics` (global-scope authentication when auth is enabled)
   - `POST /api/v1/ingest/batches`
   - `GET /api/v1/ingest/stats`
   - `GET /api/v1/ingest/recent?limit=&tenant_id=`
   - `GET /api/v1/ingest/summary?tenant_id=`
 - Token-based API auth (`Authorization: Bearer` or `x-api-key`) when `INGEST_API_TOKENS` is configured.
 - Tenant-scoped authorization on ingest/read endpoints; global-scope only on stats endpoint.
-- Single background worker drains a bounded `mpsc` queue.
+- Partitioned background workers drain bounded `mpsc` queues while preserving a global queue cap.
 - Flush is triggered by interval (`INGEST_FLUSH_INTERVAL_MS`) and row threshold (`INGEST_FLUSH_MAX_ROWS`).
 
 ### 3.2 Wire Schema and Backpressure
@@ -67,6 +69,9 @@ Implemented today:
   - JSONL fallback sink on downstream sink failure,
   - JSONL primary sink when both database sinks are disabled.
 - Recent in-memory ring buffer and aggregate counters by kind/tenant/host.
+- Fsynced acceptance WAL before acknowledgement, restart replay, commit checkpoints, torn-tail recovery, and atomic compaction.
+- Persistent bounded `(tenant_id, host_id, batch_id)` idempotency snapshot.
+- Exponential retry with jitter, SurrealDB/ClickHouse circuit breakers, JSONL fallback, and fsynced dead-letter records for permanent/all-sink failures.
 
 ### 3.4 Configuration and Ops Controls
 
@@ -77,6 +82,8 @@ Implemented today:
 - ClickHouse and SurrealDB connection/auth settings are configurable via environment variables.
 - API tokens and tenant scopes are configurable via `INGEST_API_TOKENS`.
 - Stats counters include queue depth, accepted/rejected, flushed, failed flushes, last flush timestamp.
+- Request body limits, per-tenant/host token buckets, CORS origin allow-listing, and production-mode authentication validation.
+- Prometheus counters and flush-duration histogram are exposed by `/metrics`; readiness reports queue, WAL, worker, local sink, and circuit state.
 
 ### 3.5 Test Coverage Baseline
 
@@ -90,21 +97,16 @@ Implemented today:
   - tenant-scoped recent/summary filtering,
   - Surreal SQL generation and Surreal error parsing.
 - Unit tests in `main.rs` and `config.rs` cover auth token parsing and tenant scope behavior.
-- Current local test result: 13/13 passing.
+- Current local test result: 34/34 passing, including crash/replay, corruption rejection, persistent dedupe, sink retry/circuit/dead-letter, HTTP limit, partition concurrency, and sustained-load JSONL integrity tests.
 
 ## 4) Current Gaps
 
-Not implemented yet:
+Remaining optional/next-stage work:
 
-- advanced identity integration beyond static API tokens (for example mTLS identity binding, token rotation/revocation),
-- request size/rate limiting safeguards,
-- idempotency and duplicate suppression using `batch_id`,
-- durable pre-flush spool/WAL for crash recovery,
-- retry policy and circuit-breaker logic for ClickHouse,
-- Prometheus/OpenTelemetry metrics/traces,
-- strict CORS policy (currently permissive),
-- readiness endpoint with dependency checks,
-- multi-worker/sharded flush pipeline for higher throughput.
+- advanced identity integration beyond static API tokens (for example mTLS identity binding and token rotation/revocation),
+- OpenTelemetry trace export and cross-service correlation,
+- Kafka/durable fan-out when deployment throughput requires another decoupling tier,
+- schema bootstrap/migrations for managed ClickHouse and SurrealDB installations.
 
 ## 5) Future Proposed Work
 
@@ -348,23 +350,23 @@ Done criteria:
 
 ## 6) Proposed Work Checklist
 
-- [ ] Authn/authz/tenant enforcement for ingest endpoints
-- [ ] Request size and rate limiting
-- [ ] Idempotency and deduplication ledger
-- [ ] Durable spool/WAL and restart replay
-- [ ] ClickHouse retry/circuit breaker
-- [ ] Multi-worker sharded flush architecture
-- [ ] Prometheus and OpenTelemetry instrumentation
-- [ ] Readiness endpoint with dependency checks
-- [ ] CORS allow-list and API hardening
+- [x] Authn/authz/tenant enforcement for ingest endpoints
+- [x] Request size and rate limiting
+- [x] Idempotency and deduplication ledger
+- [x] Durable spool/WAL and restart replay
+- [x] ClickHouse/SurrealDB retry and circuit breakers
+- [x] Multi-worker sharded flush architecture
+- [x] Prometheus instrumentation
+- [ ] OpenTelemetry trace export
+- [x] Readiness endpoint with dependency checks
+- [x] CORS allow-list and API hardening
 - [ ] Expanded query filters and pagination
 - [ ] Ingest-to-control-plane E2E integration tests
 - [ ] CI pipeline with load/perf smoke tests
 
 ## 7) Immediate Next Sprint
 
-1. Implement ingest auth + tenant claim enforcement.
-2. Add payload size/event-count limits and standardized errors.
-3. Add idempotency handling using `batch_id`.
-4. Add readiness endpoint and sink health reporting.
-5. Add Prometheus metrics for queue, flush, and sink failures.
+1. Add managed sink schema migrations and compatibility gates.
+2. Add OpenTelemetry trace export and request/flush correlation IDs.
+3. Run containerized ClickHouse/SurrealDB outage and migration tests in CI.
+4. Add Kafka fan-out only after load testing demonstrates the WAL/worker design is insufficient.
