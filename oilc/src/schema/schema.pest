@@ -1,0 +1,17 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* | "#" ~ (!"\n" ~ ANY)* }
+
+schema = { SOI ~ declaration* ~ EOI }
+declaration = _{ root_decl | entity_decl }
+
+root_decl = { "root" ~ identifier ~ ":" ~ identifier ~ comma? }
+entity_decl = { "entity" ~ identifier ~ "{" ~ field_decl* ~ "}" }
+field_decl = { identifier ~ ":" ~ field_type ~ comma? }
+
+field_type = { type_primary ~ nullable? }
+type_primary = _{ set_type | identifier }
+set_type = { "Set" ~ "<" ~ field_type ~ ">" }
+nullable = { "?" }
+
+identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+comma = _{ "," }

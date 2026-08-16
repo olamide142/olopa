@@ -1,0 +1,32 @@
+[Unit]
+Description=Olopa Secure Connect gateway reconciler
+Documentation=https://github.com/olopa/olopa
+After=network-online.target wg-quick@olopa-gw0.service
+Wants=network-online.target
+Requires=wg-quick@olopa-gw0.service
+
+[Service]
+Type=simple
+# Credentials and gateway identity live outside the unit file.
+EnvironmentFile=/etc/olopa/secure-connect-gateway.env
+ExecStart=/usr/bin/python3 /opt/olopa/secure_connect_gateway/reconciler.py
+Restart=always
+RestartSec=5
+
+# The reconciler only needs to drive WireGuard; nothing else.
+User=root
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

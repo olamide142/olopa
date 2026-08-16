@@ -22,6 +22,18 @@ pub struct ServerConfig {
     pub port: u16,
     /// API authentication/authorization settings.
     pub auth: AuthConfig,
+    /// Refuse unsafe development defaults when enabled.
+    pub production_mode: bool,
+    /// Browser origins allowed to call the API. Empty disables cross-origin access.
+    pub cors_allowed_origins: Vec<String>,
+    /// Maximum decoded HTTP request body size.
+    pub max_request_body_bytes: usize,
+    /// Sustained accepted requests per second for one tenant/host pair.
+    pub rate_limit_per_second: u32,
+    /// Maximum token-bucket burst for one tenant/host pair.
+    pub rate_limit_burst: u32,
+    /// Maximum tenant/host rate buckets retained in memory.
+    pub rate_limit_max_keys: usize,
     /// Ingest pipeline tuning and persistence settings.
     pub ingest: IngestConfig,
 }
@@ -67,6 +79,26 @@ pub struct IngestConfig {
     /// Maximum accepted `(tenant, host, batch_id)` keys retained for retry deduplication.
     /// Set to zero to disable idempotency tracking.
     pub dedupe_max_entries: usize,
+    /// Fsynced write-ahead log used before acknowledging batches.
+    pub wal_path: String,
+    /// Atomically replaced persistent idempotency snapshot.
+    pub dedupe_path: String,
+    /// Commit count between WAL compaction attempts.
+    pub wal_compact_after_commits: usize,
+    /// Number of independently partitioned flush workers.
+    pub flush_workers: usize,
+    /// Maximum sink attempts before falling back or dead-lettering.
+    pub sink_retry_max_attempts: u32,
+    /// Initial exponential sink retry delay.
+    pub sink_retry_initial_ms: u64,
+    /// Upper bound for exponential sink retry delay.
+    pub sink_retry_max_ms: u64,
+    /// Consecutive failures that open one sink circuit.
+    pub circuit_failure_threshold: u32,
+    /// Time an open sink circuit rejects calls before a half-open probe.
+    pub circuit_open_ms: u64,
+    /// Durable local destination for batches that no sink can persist.
+    pub dead_letter_path: String,
     /// Durable local fallback sink for flattened events.
     pub persist_jsonl_path: String,
     /// Optional ClickHouse HTTP endpoint.
@@ -117,6 +149,16 @@ impl Default for IngestConfig {
             suggested_batch_bytes: 4_000_000,
             recent_events_max: 5_000,
             dedupe_max_entries: 100_000,
+            wal_path: "/tmp/olopa/ingest/acceptance.wal".to_string(),
+            dedupe_path: "/tmp/olopa/ingest/dedupe.json".to_string(),
+            wal_compact_after_commits: 1_000,
+            flush_workers: 4,
+            sink_retry_max_attempts: 4,
+            sink_retry_initial_ms: 100,
+            sink_retry_max_ms: 5_000,
+            circuit_failure_threshold: 5,
+            circuit_open_ms: 30_000,
+            dead_letter_path: "/tmp/olopa/ingest/dead-letter.jsonl".to_string(),
             persist_jsonl_path: "/tmp/olopa/ingest/events.jsonl".to_string(),
             clickhouse_url: None,
             clickhouse_insert_sql: "INSERT INTO olopa.events_raw FORMAT JSONEachRow".to_string(),
@@ -148,6 +190,18 @@ impl ServerConfig {
         Self {
             host: env_or("SERVER_HOST", "0.0.0.0"),
             port: env_parse_or("SERVER_PORT", 8000u16),
+            production_mode: env_bool("INGEST_PRODUCTION_MODE", false)
+                || env_opt("INGEST_ENV").is_some_and(|value| {
+                    matches!(value.to_ascii_lowercase().as_str(), "prod" | "production")
+                }),
+            cors_allowed_origins: env_list("INGEST_CORS_ALLOWED_ORIGINS"),
+            max_request_body_bytes: env_parse_or(
+                "INGEST_MAX_REQUEST_BODY_BYTES",
+                8 * 1024 * 1024usize,
+            ),
+            rate_limit_per_second: env_parse_or("INGEST_RATE_LIMIT_PER_SECOND", 200u32),
+            rate_limit_burst: env_parse_or("INGEST_RATE_LIMIT_BURST", 400u32),
+            rate_limit_max_keys: env_parse_or("INGEST_RATE_LIMIT_MAX_KEYS", 100_000usize),
             auth: AuthConfig {
                 tokens: auth_tokens,
             },
@@ -176,6 +230,37 @@ impl ServerConfig {
                 dedupe_max_entries: env_parse_or(
                     "INGEST_DEDUPE_MAX_ENTRIES",
                     ingest_defaults.dedupe_max_entries,
+                ),
+                wal_path: env_or("INGEST_WAL_PATH", &ingest_defaults.wal_path),
+                dedupe_path: env_or("INGEST_DEDUPE_PATH", &ingest_defaults.dedupe_path),
+                wal_compact_after_commits: env_parse_or(
+                    "INGEST_WAL_COMPACT_AFTER_COMMITS",
+                    ingest_defaults.wal_compact_after_commits,
+                ),
+                flush_workers: env_parse_or("INGEST_FLUSH_WORKERS", ingest_defaults.flush_workers),
+                sink_retry_max_attempts: env_parse_or(
+                    "INGEST_SINK_RETRY_MAX_ATTEMPTS",
+                    ingest_defaults.sink_retry_max_attempts,
+                ),
+                sink_retry_initial_ms: env_parse_or(
+                    "INGEST_SINK_RETRY_INITIAL_MS",
+                    ingest_defaults.sink_retry_initial_ms,
+                ),
+                sink_retry_max_ms: env_parse_or(
+                    "INGEST_SINK_RETRY_MAX_MS",
+                    ingest_defaults.sink_retry_max_ms,
+                ),
+                circuit_failure_threshold: env_parse_or(
+                    "INGEST_CIRCUIT_FAILURE_THRESHOLD",
+                    ingest_defaults.circuit_failure_threshold,
+                ),
+                circuit_open_ms: env_parse_or(
+                    "INGEST_CIRCUIT_OPEN_MS",
+                    ingest_defaults.circuit_open_ms,
+                ),
+                dead_letter_path: env_or(
+                    "INGEST_DEAD_LETTER_PATH",
+                    &ingest_defaults.dead_letter_path,
                 ),
                 persist_jsonl_path: env_or(
                     "INGEST_PERSIST_JSONL_PATH",
@@ -211,6 +296,50 @@ impl ServerConfig {
                 ),
             },
         }
+    }
+
+    /// Reject configurations that would silently remove production safety guarantees.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.production_mode && !self.auth.enabled() {
+            return Err(
+                "production mode requires INGEST_API_TOKENS; unauthenticated startup refused"
+                    .to_string(),
+            );
+        }
+        if self.max_request_body_bytes == 0 {
+            return Err("INGEST_MAX_REQUEST_BODY_BYTES must be greater than zero".to_string());
+        }
+        if self.rate_limit_per_second == 0 || self.rate_limit_burst == 0 {
+            return Err("ingest rate limit and burst must be greater than zero".to_string());
+        }
+        if self.rate_limit_max_keys == 0 {
+            return Err("INGEST_RATE_LIMIT_MAX_KEYS must be greater than zero".to_string());
+        }
+        if self.ingest.queue_maxsize == 0
+            || self.ingest.flush_workers == 0
+            || self.ingest.sink_retry_max_attempts == 0
+        {
+            return Err(
+                "queue size, flush workers, and sink retry attempts must be non-zero".to_string(),
+            );
+        }
+        if self.ingest.wal_path.trim().is_empty() || self.ingest.dedupe_path.trim().is_empty() {
+            return Err("durable WAL and dedupe paths must be configured".to_string());
+        }
+        let durable_paths = [
+            self.ingest.wal_path.as_str(),
+            self.ingest.dedupe_path.as_str(),
+            self.ingest.persist_jsonl_path.as_str(),
+            self.ingest.dead_letter_path.as_str(),
+        ];
+        for (index, path) in durable_paths.iter().enumerate() {
+            if durable_paths[index + 1..].contains(path) {
+                return Err(
+                    "WAL, dedupe, JSONL, and dead-letter paths must be distinct".to_string()
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -293,6 +422,29 @@ fn env_opt(key: &str) -> Option<String> {
     }
 }
 
+fn env_bool(key: &str, default: bool) -> bool {
+    env_opt(key)
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
+}
+
+fn env_list(key: &str) -> Vec<String> {
+    env_opt(key)
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,5 +475,18 @@ mod tests {
             .tokens
             .insert("t".to_string(), AuthTokenScope::Global);
         assert!(enabled.enabled());
+    }
+
+    #[test]
+    fn production_configuration_requires_authentication() {
+        let mut cfg = ServerConfig::from_env();
+        cfg.production_mode = true;
+        cfg.auth = AuthConfig::default();
+        assert!(cfg.validate().is_err());
+
+        cfg.auth
+            .tokens
+            .insert("secret".to_string(), AuthTokenScope::Global);
+        assert!(cfg.validate().is_ok());
     }
 }

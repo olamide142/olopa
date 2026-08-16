@@ -23,13 +23,13 @@
 
 use aya_ebpf::{
     helpers::{
-        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_ns,
-        bpf_probe_read_user_str_bytes,
+        bpf_get_current_cgroup_id, bpf_get_current_comm, bpf_get_current_pid_tgid,
+        bpf_get_current_uid_gid, bpf_ktime_get_ns, bpf_probe_read_user_str_bytes,
     },
     macros::uprobe,
     programs::ProbeContext,
 };
-use olopa_common::{EVENT_KIND_DNS, DnsEvent};
+use olopa_common::{DnsEvent, EVENT_KIND_DNS};
 
 use crate::EVENTS;
 
@@ -60,6 +60,7 @@ unsafe fn try_dns_query(ctx: &ProbeContext) -> u32 {
 
     (*event).kind = EVENT_KIND_DNS;
     (*event).ts_ns = bpf_ktime_get_ns();
+    (*event).cgroup_id = bpf_get_current_cgroup_id();
 
     let pid_tgid = bpf_get_current_pid_tgid();
     (*event).pid = (pid_tgid >> 32) as u32;

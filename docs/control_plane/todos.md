@@ -29,12 +29,26 @@ Implemented now:
 - `GET /api/v1/control/status`
 - ingest proxy endpoints (`/api/v1/ingest/*`, `/api/v1/dashboard/ingest/*`)
 - `POST /api/v1/control/compiler/compile`
+- explicit dev/JWT/service-token authentication with tenant-bound identities,
+- hierarchical RBAC guards on control, ingest-proxy, compiler, intel, rule,
+  deployment, and audit APIs,
+- persistent tenant-scoped rules, immutable rule versions, deployments, and
+  audit events,
+- real `oilc` diagnostics/runtime-IR compilation for rule validation and
+  persistence,
+- deployment transition and rollback validation with tenant-scoped
+  idempotency keys,
+- Secure Connect orchestrator (`/api/v1/secure-connect/*`): single-use
+  mTLS-bound enrollment, gateway/address allocation, profile compilation,
+  heartbeat command channel with monotonic nonces, rekey, revocation, the
+  risk-adaptive access state machine, a background reaper plus detection-stream
+  risk subscriber, and SLO metrics.
 
 Missing now:
 
-- authn/authz/tenancy,
-- persistent domain models,
-- rule registry/versioning/deployments,
+- external OIDC/JWKS identity-provider integration and key rotation,
+- atomic audit writes for every remaining mutation (compiler and intel sync),
+- asynchronous compiler/deployment jobs and real agent-fleet rollout delivery,
 - incident and fleet management,
 - robust observability and reliability controls.
 
@@ -300,13 +314,21 @@ Phase exit criteria:
 
 ## 6) Missing Features Checklist
 
-- [ ] Authentication and identity provider integration
-- [ ] RBAC and tenant-aware authorization
-- [ ] Mutation audit logs and query API
-- [ ] Rule registry and immutable versioning
-- [ ] Rule validate/test APIs with artifact persistence
-- [ ] Deployment state machine with rollback
+- [ ] Authentication and identity provider integration (local JWT and fixed
+  service identities implemented; external OIDC/JWKS remains)
+- [x] RBAC and tenant-aware authorization
+- [ ] Mutation audit logs and query API (rule/deployment mutations covered;
+  remaining mutations need atomic audit writes)
+- [x] Rule registry and immutable versioning
+- [ ] Rule validate/test APIs with artifact persistence (real validation and
+  runtime IR persistence implemented; fixture execution remains provisional)
+- [ ] Deployment state machine with rollback (validated persisted state and
+  idempotency implemented; real fleet delivery/canary execution remains)
 - [ ] IDE backend endpoints (templates/drafts/diff)
+- [x] Secure Connect orchestration (enrollment, sessions, policy, rekey,
+  revocation, risk transitions, detection-stream subscription, session reaping,
+  SLO metrics, and the gateway reconciler in `app/secure_connect_gateway/`;
+  multi-gateway failover and scale testing remain)
 - [ ] Incident management APIs and SLA workflows
 - [ ] Agent fleet desired-state management
 - [ ] Typed settings lifecycle with rollback
@@ -314,7 +336,8 @@ Phase exit criteria:
 - [ ] Dashboard KPI and export APIs
 - [ ] Notification integrations and delivery reliability
 - [ ] Async job system with status API
-- [ ] Standardized API error and idempotency model
+- [ ] Standardized API error and idempotency model (error envelope and
+  deployment idempotency implemented; expand idempotency to other mutations)
 - [ ] Full observability and SRE runbook coverage
 - [ ] DR/backup strategy and restore drills
 - [ ] CI quality and security gates

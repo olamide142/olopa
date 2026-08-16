@@ -7,10 +7,11 @@
 //! - Flushed rows are persisted to ClickHouse (optional) with JSONL fallback.
 //! - Operational counters expose queue depth and flush health.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{hash_map::DefaultHasher, HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -21,6 +22,7 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, error};
 
 use super::config::IngestConfig;
+use super::durability::{AcceptOutcome, DurableAcceptance};
 
 /// Versioned ingest request envelope sent by agents.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -248,6 +250,18 @@ pub struct IngestStatsResponse {
     pub flushed_total: u64,
     /// Total failed flush attempts.
     pub failed_flush_total: u64,
+    /// Uncommitted acceptance records currently retained in the WAL.
+    pub wal_pending: usize,
+    /// WAL batches replayed during this process start.
+    pub replayed_total: u64,
+    /// Active partitioned flush workers.
+    pub flush_workers: usize,
+    /// Retried remote sink requests.
+    pub sink_retry_total: u64,
+    /// Payloads written to the dead-letter file.
+    pub dead_letter_total: u64,
+    /// Number of times either remote sink circuit opened.
+    pub circuit_open_total: u64,
     /// Wall-clock timestamp of last successful flush.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_flush_at_unix_ms: Option<u64>,
@@ -323,43 +337,109 @@ struct IngestInMemoryState {
     total_rows: u64,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct ReadinessResponse {
+    pub ready: bool,
+    pub queue_healthy: bool,
+    pub wal_healthy: bool,
+    pub workers_healthy: bool,
+    pub local_sink_healthy: bool,
+    pub surreal_circuit_open: bool,
+    pub clickhouse_circuit_open: bool,
+    pub queued: usize,
+    pub wal_pending: usize,
+}
+
+#[derive(Debug)]
+struct SinkError {
+    message: String,
+    permanent: bool,
+}
+
+impl SinkError {
+    fn transient(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            permanent: false,
+        }
+    }
+
+    fn permanent(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            permanent: true,
+        }
+    }
+
+    fn status(status: reqwest::StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            permanent: status.is_client_error()
+                && status != reqwest::StatusCode::REQUEST_TIMEOUT
+                && status != reqwest::StatusCode::TOO_MANY_REQUESTS,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RemoteFailure {
+    message: String,
+    permanent: bool,
+}
+
+impl std::fmt::Display for RemoteFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+#[derive(Default)]
+struct CircuitBreaker {
+    consecutive_failures: u32,
+    open_until: Option<Instant>,
+}
+
+impl CircuitBreaker {
+    fn is_open(&self) -> bool {
+        self.open_until.is_some_and(|until| until > Instant::now())
+    }
+
+    fn allow(&mut self) -> bool {
+        match self.open_until {
+            Some(until) if until > Instant::now() => false,
+            Some(_) => {
+                self.open_until = None;
+                true
+            }
+            None => true,
+        }
+    }
+
+    fn success(&mut self) {
+        self.consecutive_failures = 0;
+        self.open_until = None;
+    }
+
+    fn failure(&mut self, threshold: u32, open_for: Duration) -> bool {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        if self.consecutive_failures >= threshold.max(1) {
+            self.open_until = Some(Instant::now() + open_for);
+            self.consecutive_failures = 0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Internal queue item (batch plus precomputed row count).
 struct QueuedBatch {
+    /// Durable WAL sequence used to commit this acceptance after persistence.
+    sequence: u64,
     /// Number of rows in payload for quick threshold accounting.
     rows: usize,
     /// Original request payload.
     payload: IngestBatchRequest,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct BatchDedupeKey {
-    tenant_id: String,
-    host_id: String,
-    batch_id: String,
-}
-
-#[derive(Default)]
-struct BatchDedupeState {
-    seen: HashSet<BatchDedupeKey>,
-    order: VecDeque<BatchDedupeKey>,
-}
-
-impl BatchDedupeState {
-    fn contains(&self, key: &BatchDedupeKey) -> bool {
-        self.seen.contains(key)
-    }
-
-    fn remember(&mut self, key: BatchDedupeKey, max_entries: usize) {
-        if max_entries == 0 || !self.seen.insert(key.clone()) {
-            return;
-        }
-        self.order.push_back(key);
-        while self.seen.len() > max_entries {
-            if let Some(expired) = self.order.pop_front() {
-                self.seen.remove(&expired);
-            }
-        }
-    }
 }
 
 /// Ingest runtime owning queue, flush worker, persistence hooks, and metrics.
@@ -371,11 +451,11 @@ pub struct IngestRuntime {
     /// Optional prebuilt ClickHouse HTTP client.
     clickhouse_client: Option<reqwest::Client>,
     /// Sender side of bounded ingest queue.
-    tx: mpsc::Sender<QueuedBatch>,
-    /// Receiver side moved into background worker at startup.
-    rx: Mutex<Option<mpsc::Receiver<QueuedBatch>>>,
-    /// Join handle for background worker.
-    worker_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    tx: Vec<mpsc::Sender<QueuedBatch>>,
+    /// Partition receivers moved into background workers at startup.
+    rx: Mutex<Vec<mpsc::Receiver<QueuedBatch>>>,
+    /// Join handles for background workers.
+    worker_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     /// Cooperative shutdown flag for worker.
     shutdown_tx: watch::Sender<bool>,
 
@@ -393,17 +473,53 @@ pub struct IngestRuntime {
     failed_flush_total: AtomicU64,
     /// Last successful flush timestamp.
     last_flush_at_unix_ms: AtomicU64,
+    /// Batches recovered from the acceptance WAL during this process start.
+    replayed_total: AtomicU64,
+    /// Number of active partition workers.
+    workers_started: AtomicUsize,
+    sink_retry_total: AtomicU64,
+    dead_letter_total: AtomicU64,
+    circuit_open_total: AtomicU64,
+    flush_duration_buckets: [AtomicU64; 7],
+    flush_duration_count: AtomicU64,
+    flush_duration_sum_micros: AtomicU64,
     /// In-memory recent rows + aggregates exposed by inspection APIs.
     state: Mutex<IngestInMemoryState>,
-    /// Bounded accepted batch-id index. A synchronous mutex keeps check + enqueue + insert atomic.
-    dedupe: StdMutex<BatchDedupeState>,
+    /// Fsynced acceptance log and persistent idempotency state.
+    durable: Arc<DurableAcceptance>,
+    surreal_breaker: StdMutex<CircuitBreaker>,
+    clickhouse_breaker: StdMutex<CircuitBreaker>,
+    /// Serialize multi-write JSONL records across partition workers.
+    jsonl_lock: Mutex<()>,
+    /// Serialize dead-letter records across partition workers.
+    dead_letter_lock: Mutex<()>,
 }
 
 impl IngestRuntime {
     /// Construct a new ingest runtime with bounded queue and counters reset.
+    #[cfg(test)]
     pub fn new(cfg: IngestConfig) -> Self {
-        let (tx, rx) = mpsc::channel(cfg.queue_maxsize);
+        Self::try_new(cfg).expect("initialize durable ingest runtime")
+    }
+
+    /// Construct a runtime, failing startup if durable acceptance cannot open.
+    pub fn try_new(cfg: IngestConfig) -> Result<Self, String> {
+        let worker_count = cfg.flush_workers.max(1);
+        let partition_capacity = cfg.queue_maxsize.div_ceil(worker_count).max(1);
+        let mut tx = Vec::with_capacity(worker_count);
+        let mut rx = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            let (partition_tx, partition_rx) = mpsc::channel(partition_capacity);
+            tx.push(partition_tx);
+            rx.push(partition_rx);
+        }
         let (shutdown_tx, _) = watch::channel(false);
+        let durable = Arc::new(DurableAcceptance::open(
+            &cfg.wal_path,
+            &cfg.dedupe_path,
+            cfg.dedupe_max_entries,
+            cfg.wal_compact_after_commits,
+        )?);
         let surreal_client = cfg.surreal_url.as_ref().and_then(|_| {
             reqwest::Client::builder()
                 .timeout(Duration::from_millis(cfg.surreal_timeout_ms))
@@ -425,13 +541,13 @@ impl IngestRuntime {
                 .ok()
         });
 
-        Self {
+        Ok(Self {
             cfg,
             surreal_client,
             clickhouse_client,
             tx,
-            rx: Mutex::new(Some(rx)),
-            worker_handle: Mutex::new(None),
+            rx: Mutex::new(rx),
+            worker_handles: Mutex::new(Vec::new()),
             shutdown_tx,
             queued: AtomicUsize::new(0),
             accepted_total: AtomicU64::new(0),
@@ -440,24 +556,40 @@ impl IngestRuntime {
             flushed_total: AtomicU64::new(0),
             failed_flush_total: AtomicU64::new(0),
             last_flush_at_unix_ms: AtomicU64::new(0),
+            replayed_total: AtomicU64::new(0),
+            workers_started: AtomicUsize::new(0),
+            sink_retry_total: AtomicU64::new(0),
+            dead_letter_total: AtomicU64::new(0),
+            circuit_open_total: AtomicU64::new(0),
+            flush_duration_buckets: std::array::from_fn(|_| AtomicU64::new(0)),
+            flush_duration_count: AtomicU64::new(0),
+            flush_duration_sum_micros: AtomicU64::new(0),
             state: Mutex::new(IngestInMemoryState::default()),
-            dedupe: StdMutex::new(BatchDedupeState::default()),
-        }
+            durable,
+            surreal_breaker: StdMutex::new(CircuitBreaker::default()),
+            clickhouse_breaker: StdMutex::new(CircuitBreaker::default()),
+            jsonl_lock: Mutex::new(()),
+            dead_letter_lock: Mutex::new(()),
+        })
     }
 
-    /// Start the single background flush worker.
+    /// Start partitioned background flush workers and replay uncommitted WAL entries.
     ///
     /// Idempotent: calling this more than once is a no-op after the receiver has
     /// already been moved into a worker.
     pub async fn start_worker(self: &Arc<Self>) {
         let mut rx_guard = self.rx.lock().await;
-        let Some(mut rx) = rx_guard.take() else {
+        if rx_guard.is_empty() {
             return;
-        };
+        }
 
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
-        let this = Arc::clone(self);
-        let handle = tokio::spawn(async move {
+        let receivers = std::mem::take(&mut *rx_guard);
+        drop(rx_guard);
+        let mut handles = Vec::with_capacity(receivers.len());
+        for mut rx in receivers {
+            let mut shutdown_rx = self.shutdown_tx.subscribe();
+            let this = Arc::clone(self);
+            handles.push(tokio::spawn(async move {
             let mut pending_rows = 0usize;
             let mut pending_batches = Vec::<QueuedBatch>::new();
             let mut flush_tick =
@@ -496,9 +628,30 @@ impl IngestRuntime {
                 this.flush_pending(&mut pending_batches, &mut pending_rows)
                     .await;
             }
-        });
+            }));
+        }
+        self.workers_started.store(handles.len(), Ordering::Release);
+        *self.worker_handles.lock().await = handles;
 
-        *self.worker_handle.lock().await = Some(handle);
+        let recovered = self.durable.recovered();
+        for (sequence, payload) in recovered {
+            let rows = payload.row_count();
+            let partition = self.partition_for(&payload);
+            self.queued.fetch_add(1, Ordering::Relaxed);
+            if self.tx[partition]
+                .send(QueuedBatch {
+                    sequence,
+                    rows,
+                    payload,
+                })
+                .await
+                .is_err()
+            {
+                self.queued.fetch_sub(1, Ordering::Relaxed);
+                break;
+            }
+            self.replayed_total.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     async fn flush_pending(
@@ -514,7 +667,23 @@ impl IngestRuntime {
         let batch_count = pending_batches.len() as u64;
         let row_count = *pending_rows as u64;
 
-        let result = self.persist_batches(pending_batches).await;
+        let started = Instant::now();
+        let result = match self.persist_batches(pending_batches).await {
+            Ok(inserted) => {
+                let sequences = pending_batches
+                    .iter()
+                    .map(|batch| batch.sequence)
+                    .collect::<Vec<_>>();
+                let durable = Arc::clone(&self.durable);
+                match tokio::task::spawn_blocking(move || durable.commit(&sequences)).await {
+                    Ok(Ok(())) => Ok(inserted),
+                    Ok(Err(err)) => Err(err),
+                    Err(err) => Err(format!("WAL commit worker failed: {err}")),
+                }
+            }
+            Err(err) => Err(err),
+        };
+        self.observe_flush_duration(started.elapsed());
         match result {
             Ok(inserted_rows) => {
                 self.flushed_total
@@ -527,6 +696,8 @@ impl IngestRuntime {
                     inserted_rows = inserted_rows,
                     "ingest flush complete"
                 );
+                pending_batches.clear();
+                *pending_rows = 0;
             }
             Err(err) => {
                 self.failed_flush_total
@@ -534,9 +705,6 @@ impl IngestRuntime {
                 error!(error = %err, batches = batch_count, rows = row_count, "ingest flush failed");
             }
         }
-
-        pending_batches.clear();
-        *pending_rows = 0;
     }
 
     /// Persist pending batches and return number of rows durably written.
@@ -554,7 +722,7 @@ impl IngestRuntime {
         }
 
         if self.cfg.surreal_url.is_some() {
-            match self.persist_surreal(&rows).await {
+            match self.persist_surreal_resilient(&rows).await {
                 Ok(()) => {}
                 Err(surreal_err) => {
                     error!(
@@ -562,37 +730,51 @@ impl IngestRuntime {
                         "surrealdb insert failed; trying clickhouse/jsonl fallback path"
                     );
                     if self.cfg.clickhouse_url.is_some() {
-                        match self.persist_clickhouse(&rows).await {
+                        match self.persist_clickhouse_resilient(&rows).await {
                             Ok(()) => {}
                             Err(clickhouse_err) => {
                                 error!(
                                     error = %clickhouse_err,
                                     "clickhouse fallback insert failed; falling back to JSONL persistence"
                                 );
-                                self.persist_jsonl(&rows)
-                                    .await
-                                    .map_err(|io_err| format!("jsonl fallback failed: {io_err}"))?;
+                                if surreal_err.permanent || clickhouse_err.permanent {
+                                    let reason = format!(
+                                        "permanent remote failure: surreal={surreal_err}; clickhouse={clickhouse_err}"
+                                    );
+                                    self.persist_dead_letter(&rows, &reason).await?;
+                                } else if let Err(io_err) = self.persist_jsonl(&rows).await {
+                                    let reason = format!("surreal={surreal_err}; clickhouse={clickhouse_err}; jsonl={io_err}");
+                                    self.persist_dead_letter(&rows, &reason).await?;
+                                }
                             }
                         }
                     } else {
-                        self.persist_jsonl(&rows)
-                            .await
-                            .map_err(|io_err| format!("jsonl fallback failed: {io_err}"))?;
+                        if surreal_err.permanent {
+                            let reason = format!("permanent surreal failure: {surreal_err}");
+                            self.persist_dead_letter(&rows, &reason).await?;
+                        } else if let Err(io_err) = self.persist_jsonl(&rows).await {
+                            let reason = format!("surreal={surreal_err}; jsonl={io_err}");
+                            self.persist_dead_letter(&rows, &reason).await?;
+                        }
                     }
                 }
             }
         } else {
             if self.cfg.clickhouse_url.is_some() {
-                match self.persist_clickhouse(&rows).await {
+                match self.persist_clickhouse_resilient(&rows).await {
                     Ok(()) => {}
                     Err(err) => {
                         error!(
                             error = %err,
                             "clickhouse insert failed; falling back to JSONL persistence"
                         );
-                        self.persist_jsonl(&rows)
-                            .await
-                            .map_err(|io_err| format!("jsonl fallback failed: {io_err}"))?;
+                        if err.permanent {
+                            let reason = format!("permanent clickhouse failure: {err}");
+                            self.persist_dead_letter(&rows, &reason).await?;
+                        } else if let Err(io_err) = self.persist_jsonl(&rows).await {
+                            let reason = format!("clickhouse={err}; jsonl={io_err}");
+                            self.persist_dead_letter(&rows, &reason).await?;
+                        }
                     }
                 }
             } else {
@@ -607,18 +789,18 @@ impl IngestRuntime {
     }
 
     /// Try inserting flattened rows into SurrealDB over HTTP SQL endpoint.
-    async fn persist_surreal(&self, rows: &[PersistRow]) -> Result<(), String> {
+    async fn persist_surreal_once(&self, rows: &[PersistRow]) -> Result<(), SinkError> {
         let Some(url_base) = self.cfg.surreal_url.as_ref() else {
-            return Err("surrealdb URL not configured".to_string());
+            return Err(SinkError::transient("surrealdb URL not configured"));
         };
         let Some(client) = self.surreal_client.as_ref() else {
-            return Err("surrealdb client unavailable".to_string());
+            return Err(SinkError::transient("surrealdb client unavailable"));
         };
         if !is_valid_surreal_identifier(&self.cfg.surreal_table) {
-            return Err(format!(
+            return Err(SinkError::permanent(format!(
                 "invalid surreal table name '{}': only [A-Za-z0-9_] allowed",
                 self.cfg.surreal_table
-            ));
+            )));
         }
 
         let sql = build_surreal_insert_sql(rows, &self.cfg.surreal_table);
@@ -638,20 +820,25 @@ impl IngestRuntime {
         let resp = req
             .send()
             .await
-            .map_err(|err| format!("surrealdb HTTP request failed: {err}"))?;
+            .map_err(|err| SinkError::transient(format!("surrealdb HTTP request failed: {err}")))?;
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
 
         if !status.is_success() {
-            return Err(format!(
-                "surrealdb insert failed (status={}): {}",
+            return Err(SinkError::status(
                 status,
-                truncate_for_log(&body, 512)
+                format!(
+                    "surrealdb insert failed (status={}): {}",
+                    status,
+                    truncate_for_log(&body, 512)
+                ),
             ));
         }
 
         if let Some(err_message) = extract_surreal_error(&body) {
-            return Err(format!("surrealdb insert returned error: {err_message}"));
+            return Err(SinkError::transient(format!(
+                "surrealdb insert returned error: {err_message}"
+            )));
         }
 
         Ok(())
@@ -660,16 +847,17 @@ impl IngestRuntime {
     /// Try inserting flattened rows into ClickHouse over HTTP.
     ///
     /// Uses `query=<INSERT ... FORMAT JSONEachRow>` style endpoint.
-    async fn persist_clickhouse(&self, rows: &[PersistRow]) -> Result<(), String> {
+    async fn persist_clickhouse_once(&self, rows: &[PersistRow]) -> Result<(), SinkError> {
         let Some(url_base) = self.cfg.clickhouse_url.as_ref() else {
-            return Err("clickhouse URL not configured".to_string());
+            return Err(SinkError::transient("clickhouse URL not configured"));
         };
         let Some(client) = self.clickhouse_client.as_ref() else {
-            return Err("clickhouse client unavailable".to_string());
+            return Err(SinkError::transient("clickhouse client unavailable"));
         };
 
-        let mut url = reqwest::Url::parse(url_base)
-            .map_err(|err| format!("invalid clickhouse URL '{url_base}': {err}"))?;
+        let mut url = reqwest::Url::parse(url_base).map_err(|err| {
+            SinkError::transient(format!("invalid clickhouse URL '{url_base}': {err}"))
+        })?;
         url.query_pairs_mut()
             .append_pair("query", &self.cfg.clickhouse_insert_sql);
 
@@ -687,18 +875,20 @@ impl IngestRuntime {
             req = req.basic_auth(user, self.cfg.clickhouse_password.as_ref());
         }
 
-        let resp = req
-            .send()
-            .await
-            .map_err(|err| format!("clickhouse HTTP request failed: {err}"))?;
+        let resp = req.send().await.map_err(|err| {
+            SinkError::transient(format!("clickhouse HTTP request failed: {err}"))
+        })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!(
-                "clickhouse insert failed (status={}): {}",
+            return Err(SinkError::status(
                 status,
-                truncate_for_log(&body, 512)
+                format!(
+                    "clickhouse insert failed (status={}): {}",
+                    status,
+                    truncate_for_log(&body, 512)
+                ),
             ));
         }
 
@@ -707,6 +897,7 @@ impl IngestRuntime {
 
     /// Append flattened rows to local JSONL fallback file.
     async fn persist_jsonl(&self, rows: &[PersistRow]) -> std::io::Result<()> {
+        let _write_guard = self.jsonl_lock.lock().await;
         let path = std::path::Path::new(&self.cfg.persist_jsonl_path);
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -724,7 +915,126 @@ impl IngestRuntime {
             file.write_all(row.line.as_bytes()).await?;
             file.write_all(b"\n").await?;
         }
-        file.flush().await
+        file.flush().await?;
+        file.sync_data().await
+    }
+
+    async fn persist_surreal_resilient(&self, rows: &[PersistRow]) -> Result<(), RemoteFailure> {
+        self.persist_remote_with_retry(rows, true).await
+    }
+
+    async fn persist_clickhouse_resilient(&self, rows: &[PersistRow]) -> Result<(), RemoteFailure> {
+        self.persist_remote_with_retry(rows, false).await
+    }
+
+    async fn persist_remote_with_retry(
+        &self,
+        rows: &[PersistRow],
+        surreal: bool,
+    ) -> Result<(), RemoteFailure> {
+        let breaker = if surreal {
+            &self.surreal_breaker
+        } else {
+            &self.clickhouse_breaker
+        };
+        if !breaker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .allow()
+        {
+            return Err(RemoteFailure {
+                message: "sink circuit is open".to_string(),
+                permanent: false,
+            });
+        }
+
+        let attempts = self.cfg.sink_retry_max_attempts.max(1);
+        let mut delay = self.cfg.sink_retry_initial_ms.max(1);
+        let mut last_error = String::new();
+        let mut permanent = false;
+        for attempt in 0..attempts {
+            let result = if surreal {
+                self.persist_surreal_once(rows).await
+            } else {
+                self.persist_clickhouse_once(rows).await
+            };
+            match result {
+                Ok(()) => {
+                    breaker
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .success();
+                    return Ok(());
+                }
+                Err(err) => {
+                    last_error = err.message;
+                    permanent = err.permanent;
+                    if err.permanent || attempt + 1 == attempts {
+                        let opened = breaker
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .failure(
+                                self.cfg.circuit_failure_threshold,
+                                Duration::from_millis(self.cfg.circuit_open_ms),
+                            );
+                        if opened {
+                            self.circuit_open_total.fetch_add(1, Ordering::Relaxed);
+                        }
+                        break;
+                    }
+                    self.sink_retry_total.fetch_add(1, Ordering::Relaxed);
+                    let jitter = retry_jitter_ms(attempt, delay);
+                    tokio::time::sleep(Duration::from_millis(delay.saturating_add(jitter))).await;
+                    delay = delay
+                        .saturating_mul(2)
+                        .min(self.cfg.sink_retry_max_ms.max(1));
+                }
+            }
+        }
+        Err(RemoteFailure {
+            message: last_error,
+            permanent,
+        })
+    }
+
+    async fn persist_dead_letter(&self, rows: &[PersistRow], reason: &str) -> Result<(), String> {
+        let _write_guard = self.dead_letter_lock.lock().await;
+        let path = std::path::Path::new(&self.cfg.dead_letter_path);
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            create_dir_all(parent)
+                .await
+                .map_err(|err| format!("create dead-letter directory: {err}"))?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await
+            .map_err(|err| format!("open dead-letter file: {err}"))?;
+        for row in rows {
+            let record = json!({
+                "failed_at_unix_ms": now_unix_ms(),
+                "reason": reason,
+                "row": serde_json::from_str::<serde_json::Value>(&row.line).unwrap_or_default(),
+            });
+            let line = serde_json::to_vec(&record)
+                .map_err(|err| format!("serialize dead-letter record: {err}"))?;
+            file.write_all(&line)
+                .await
+                .map_err(|err| format!("write dead-letter record: {err}"))?;
+            file.write_all(b"\n")
+                .await
+                .map_err(|err| format!("write dead-letter delimiter: {err}"))?;
+        }
+        file.sync_data()
+            .await
+            .map_err(|err| format!("fsync dead-letter file: {err}"))?;
+        self.dead_letter_total
+            .fetch_add(rows.len() as u64, Ordering::Relaxed);
+        Ok(())
     }
 
     /// Update in-memory recent rows and aggregate counters after successful flush.
@@ -762,6 +1072,24 @@ impl IngestRuntime {
     /// Queue a batch for async processing and return immediate ack/backpressure hints.
     pub fn ack_batch(&self, batch: IngestBatchRequest) -> AckResponse {
         let rows = batch.row_count();
+        if !(1..=2).contains(&batch.schema_version) {
+            self.rejected_total.fetch_add(1, Ordering::Relaxed);
+            return AckResponse {
+                accepted: false,
+                duplicate: false,
+                rejected: 1,
+                retry_after_ms: 0,
+                suggested_batch_bytes: self.cfg.suggested_batch_bytes,
+                throttle_ratio: throttle_ratio(
+                    self.queued.load(Ordering::Relaxed),
+                    self.cfg.queue_maxsize,
+                ),
+                message: Some(format!(
+                    "unsupported schema_version {}; supported versions are 1 and 2",
+                    batch.schema_version
+                )),
+            };
+        }
         if rows == 0 {
             self.rejected_total.fetch_add(1, Ordering::Relaxed);
             return AckResponse {
@@ -775,54 +1103,35 @@ impl IngestRuntime {
             };
         }
 
-        let dedupe_key = if self.cfg.dedupe_max_entries == 0 {
-            None
-        } else {
-            batch.batch_id.as_deref().and_then(|batch_id| {
-                let batch_id = batch_id.trim();
-                (!batch_id.is_empty()).then(|| BatchDedupeKey {
-                    tenant_id: batch.tenant_id.clone(),
-                    host_id: batch.host_id.clone(),
-                    batch_id: batch_id.to_string(),
-                })
-            })
-        };
-        // Keep this guard through `try_send`: concurrent retries cannot both
-        // pass the membership check before the accepted key is recorded.
-        let mut dedupe = dedupe_key.as_ref().map(|_| {
-            self.dedupe
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-        });
-        if dedupe_key
-            .as_ref()
-            .zip(dedupe.as_ref())
-            .is_some_and(|(key, state)| state.contains(key))
-        {
-            self.duplicate_total.fetch_add(1, Ordering::Relaxed);
-            let queued = self.queued.load(Ordering::Relaxed);
-            return AckResponse {
-                accepted: true,
-                duplicate: true,
-                rejected: 0,
-                retry_after_ms: 0,
-                suggested_batch_bytes: self.cfg.suggested_batch_bytes,
-                throttle_ratio: throttle_ratio(queued, self.cfg.queue_maxsize),
-                message: Some("duplicate batch_id already accepted".to_string()),
-            };
-        }
-
-        let queued_batch = QueuedBatch {
-            rows,
-            payload: batch,
-        };
-        match self.tx.try_send(queued_batch) {
-            Ok(()) => {
-                if let (Some(key), Some(state)) = (dedupe_key, dedupe.as_mut()) {
-                    state.remember(key, self.cfg.dedupe_max_entries);
+        let partition = self.partition_for(&batch);
+        let sender = &self.tx[partition];
+        let acceptance = self.durable.accept(batch, |sequence, payload| {
+            let previous = self.queued.fetch_add(1, Ordering::Relaxed);
+            if previous >= self.cfg.queue_maxsize {
+                self.queued.fetch_sub(1, Ordering::Relaxed);
+                return Err(false);
+            }
+            match sender.try_send(QueuedBatch {
+                sequence,
+                rows,
+                payload,
+            }) {
+                Ok(()) => Ok(()),
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    self.queued.fetch_sub(1, Ordering::Relaxed);
+                    Err(false)
                 }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    self.queued.fetch_sub(1, Ordering::Relaxed);
+                    Err(true)
+                }
+            }
+        });
+        match acceptance {
+            Ok(AcceptOutcome::Accepted(sequence)) => {
+                let _accepted_wal_sequence = sequence;
                 self.accepted_total.fetch_add(1, Ordering::Relaxed);
-                let queued = self.queued.fetch_add(1, Ordering::Relaxed) + 1;
+                let queued = self.queued.load(Ordering::Relaxed);
                 AckResponse {
                     accepted: true,
                     duplicate: false,
@@ -833,7 +1142,20 @@ impl IngestRuntime {
                     message: None,
                 }
             }
-            Err(mpsc::error::TrySendError::Full(_)) => {
+            Ok(AcceptOutcome::Duplicate) => {
+                self.duplicate_total.fetch_add(1, Ordering::Relaxed);
+                let queued = self.queued.load(Ordering::Relaxed);
+                AckResponse {
+                    accepted: true,
+                    duplicate: true,
+                    rejected: 0,
+                    retry_after_ms: 0,
+                    suggested_batch_bytes: self.cfg.suggested_batch_bytes,
+                    throttle_ratio: throttle_ratio(queued, self.cfg.queue_maxsize),
+                    message: Some("duplicate batch_id already accepted".to_string()),
+                }
+            }
+            Ok(AcceptOutcome::QueueFull) => {
                 self.rejected_total.fetch_add(1, Ordering::Relaxed);
                 let queued = self.queued.load(Ordering::Relaxed);
                 AckResponse {
@@ -846,7 +1168,7 @@ impl IngestRuntime {
                     message: Some("queue saturated".to_string()),
                 }
             }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
+            Ok(AcceptOutcome::QueueClosed) => {
                 self.rejected_total.fetch_add(1, Ordering::Relaxed);
                 AckResponse {
                     accepted: false,
@@ -858,7 +1180,26 @@ impl IngestRuntime {
                     message: Some("ingest runtime unavailable".to_string()),
                 }
             }
+            Err(err) => {
+                self.rejected_total.fetch_add(1, Ordering::Relaxed);
+                AckResponse {
+                    accepted: false,
+                    duplicate: false,
+                    rejected: 1,
+                    retry_after_ms: self.cfg.default_retry_after_ms,
+                    suggested_batch_bytes: 0,
+                    throttle_ratio: 1.0,
+                    message: Some(format!("durable acceptance failed: {err}")),
+                }
+            }
         }
+    }
+
+    fn partition_for(&self, batch: &IngestBatchRequest) -> usize {
+        let mut hasher = DefaultHasher::new();
+        batch.tenant_id.hash(&mut hasher);
+        batch.host_id.hash(&mut hasher);
+        (hasher.finish() as usize) % self.tx.len()
     }
 
     /// Snapshot current ingest runtime counters.
@@ -872,8 +1213,137 @@ impl IngestRuntime {
             rejected_total: self.rejected_total.load(Ordering::Relaxed),
             flushed_total: self.flushed_total.load(Ordering::Relaxed),
             failed_flush_total: self.failed_flush_total.load(Ordering::Relaxed),
+            wal_pending: self.durable.pending_count(),
+            replayed_total: self.replayed_total.load(Ordering::Relaxed),
+            flush_workers: self.workers_started.load(Ordering::Acquire),
+            sink_retry_total: self.sink_retry_total.load(Ordering::Relaxed),
+            dead_letter_total: self.dead_letter_total.load(Ordering::Relaxed),
+            circuit_open_total: self.circuit_open_total.load(Ordering::Relaxed),
             last_flush_at_unix_ms: if last == 0 { None } else { Some(last) },
         }
+    }
+
+    /// Readiness is intentionally stricter than liveness: it checks acceptance,
+    /// worker availability, queue pressure, local persistence, and sink circuits.
+    pub async fn readiness(&self) -> ReadinessResponse {
+        let queued = self.queued.load(Ordering::Relaxed);
+        let queue_healthy = queued < self.cfg.queue_maxsize;
+        let wal_healthy = self.durable.is_healthy();
+        let workers_healthy = self.workers_started.load(Ordering::Acquire) == self.tx.len();
+        let local_sink_healthy = probe_append_path(&self.cfg.persist_jsonl_path).await;
+        let surreal_circuit_open = self
+            .surreal_breaker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_open();
+        let clickhouse_circuit_open = self
+            .clickhouse_breaker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_open();
+        let remote_healthy = (self.cfg.surreal_url.is_none() || !surreal_circuit_open)
+            && (self.cfg.clickhouse_url.is_none() || !clickhouse_circuit_open);
+        ReadinessResponse {
+            ready: queue_healthy
+                && wal_healthy
+                && workers_healthy
+                && local_sink_healthy
+                && remote_healthy,
+            queue_healthy,
+            wal_healthy,
+            workers_healthy,
+            local_sink_healthy,
+            surreal_circuit_open,
+            clickhouse_circuit_open,
+            queued,
+            wal_pending: self.durable.pending_count(),
+        }
+    }
+
+    /// Render Prometheus exposition text without a global recorder dependency.
+    pub fn prometheus_metrics(&self) -> String {
+        let stats = self.stats();
+        let mut out = String::new();
+        metric(
+            &mut out,
+            "olopa_ingest_accepted_batches_total",
+            stats.accepted_total,
+        );
+        metric(
+            &mut out,
+            "olopa_ingest_duplicate_batches_total",
+            stats.duplicate_total,
+        );
+        metric(
+            &mut out,
+            "olopa_ingest_rejected_batches_total",
+            stats.rejected_total,
+        );
+        metric(
+            &mut out,
+            "olopa_ingest_flushed_rows_total",
+            stats.flushed_total,
+        );
+        metric(
+            &mut out,
+            "olopa_ingest_failed_flushes_total",
+            stats.failed_flush_total,
+        );
+        metric(
+            &mut out,
+            "olopa_ingest_sink_retries_total",
+            stats.sink_retry_total,
+        );
+        metric(
+            &mut out,
+            "olopa_ingest_dead_letter_rows_total",
+            stats.dead_letter_total,
+        );
+        metric(
+            &mut out,
+            "olopa_ingest_circuit_opens_total",
+            stats.circuit_open_total,
+        );
+        gauge(&mut out, "olopa_ingest_queue_depth", stats.queued);
+        gauge(&mut out, "olopa_ingest_wal_pending", stats.wal_pending);
+        gauge(&mut out, "olopa_ingest_flush_workers", stats.flush_workers);
+
+        const BOUNDS_MS: [u64; 7] = [5, 10, 25, 50, 100, 500, u64::MAX];
+        let mut cumulative = 0u64;
+        for (index, bound) in BOUNDS_MS.iter().enumerate() {
+            cumulative = cumulative
+                .saturating_add(self.flush_duration_buckets[index].load(Ordering::Relaxed));
+            let label = if *bound == u64::MAX {
+                "+Inf".to_string()
+            } else {
+                format!("{:.3}", *bound as f64 / 1_000.0)
+            };
+            out.push_str(&format!(
+                "olopa_ingest_flush_duration_seconds_bucket{{le=\"{label}\"}} {cumulative}\n"
+            ));
+        }
+        out.push_str(&format!(
+            "olopa_ingest_flush_duration_seconds_sum {:.6}\n",
+            self.flush_duration_sum_micros.load(Ordering::Relaxed) as f64 / 1_000_000.0
+        ));
+        out.push_str(&format!(
+            "olopa_ingest_flush_duration_seconds_count {}\n",
+            self.flush_duration_count.load(Ordering::Relaxed)
+        ));
+        out
+    }
+
+    fn observe_flush_duration(&self, elapsed: Duration) {
+        let millis = elapsed.as_millis().try_into().unwrap_or(u64::MAX);
+        let micros = elapsed.as_micros().try_into().unwrap_or(u64::MAX);
+        let index = [5u64, 10, 25, 50, 100, 500, u64::MAX]
+            .iter()
+            .position(|bound| millis <= *bound)
+            .unwrap_or(6);
+        self.flush_duration_buckets[index].fetch_add(1, Ordering::Relaxed);
+        self.flush_duration_count.fetch_add(1, Ordering::Relaxed);
+        self.flush_duration_sum_micros
+            .fetch_add(micros, Ordering::Relaxed);
     }
 
     /// Return most recent flushed rows (newest first), capped by `limit`.
@@ -968,8 +1438,15 @@ impl IngestRuntime {
     /// Any pending batches already buffered by the worker are flushed before exit.
     pub async fn shutdown(&self) {
         let _ = self.shutdown_tx.send(true);
-        if let Some(handle) = self.worker_handle.lock().await.take() {
+        for handle in self.worker_handles.lock().await.drain(..) {
             let _ = handle.await;
+        }
+        self.workers_started.store(0, Ordering::Release);
+        let durable = Arc::clone(&self.durable);
+        match tokio::task::spawn_blocking(move || durable.compact()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => error!(error = %err, "final ingest WAL compaction failed"),
+            Err(err) => error!(error = %err, "final ingest WAL compaction worker failed"),
         }
     }
 }
@@ -980,6 +1457,43 @@ fn now_unix_ms() -> u64 {
         Ok(dur) => dur.as_millis() as u64,
         Err(_) => 0,
     }
+}
+
+fn retry_jitter_ms(attempt: u32, delay: u64) -> u64 {
+    if delay <= 1 {
+        return 0;
+    }
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.subsec_nanos() as u64)
+        .unwrap_or(0);
+    (nanos ^ attempt as u64).wrapping_mul(0x9E37_79B9) % (delay / 4).max(1)
+}
+
+async fn probe_append_path(path: &str) -> bool {
+    let path = std::path::Path::new(path);
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        if create_dir_all(parent).await.is_err() {
+            return false;
+        }
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await
+        .is_ok()
+}
+
+fn metric(out: &mut String, name: &str, value: u64) {
+    out.push_str(&format!("# TYPE {name} counter\n{name} {value}\n"));
+}
+
+fn gauge(out: &mut String, name: &str, value: usize) {
+    out.push_str(&format!("# TYPE {name} gauge\n{name} {value}\n"));
 }
 
 /// Convert queue occupancy to normalized pressure ratio `[0, 1]`.
@@ -1185,6 +1699,29 @@ fn extract_surreal_error(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+    static TEST_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
+
+    fn test_config() -> IngestConfig {
+        let id = TEST_RUNTIME_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("test clock")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "olopa-ingest-runtime-{}-{id}-{nonce}",
+            std::process::id()
+        ));
+        IngestConfig {
+            flush_workers: 1,
+            wal_path: base.with_extension("wal").to_string_lossy().into_owned(),
+            dedupe_path: base.with_extension("dedupe").to_string_lossy().into_owned(),
+            persist_jsonl_path: base.with_extension("jsonl").to_string_lossy().into_owned(),
+            dead_letter_path: base.with_extension("dlq").to_string_lossy().into_owned(),
+            ..IngestConfig::default()
+        }
+    }
 
     fn test_batch() -> IngestBatchRequest {
         IngestBatchRequest {
@@ -1209,6 +1746,16 @@ mod tests {
         }
     }
 
+    async fn wait_for_flush(runtime: &IngestRuntime, minimum_rows: u64) {
+        for _ in 0..200 {
+            if runtime.stats().flushed_total >= minimum_rows {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("flush did not complete: stats={:?}", runtime.stats());
+    }
+
     #[tokio::test]
     async fn ack_accepts_and_tracks_queue_depth() {
         let cfg = IngestConfig {
@@ -1218,7 +1765,7 @@ mod tests {
             default_retry_after_ms: 500,
             suggested_batch_bytes: 4_000_000,
             recent_events_max: 100,
-            ..IngestConfig::default()
+            ..test_config()
         };
 
         let runtime = Arc::new(IngestRuntime::new(cfg));
@@ -1236,7 +1783,7 @@ mod tests {
             default_retry_after_ms: 500,
             suggested_batch_bytes: 4_000_000,
             recent_events_max: 100,
-            ..IngestConfig::default()
+            ..test_config()
         };
         let runtime = Arc::new(IngestRuntime::new(cfg));
 
@@ -1255,7 +1802,7 @@ mod tests {
         let runtime = IngestRuntime::new(IngestConfig {
             queue_maxsize: 4,
             dedupe_max_entries: 16,
-            ..IngestConfig::default()
+            ..test_config()
         });
 
         let first = runtime.ack_batch(test_batch());
@@ -1277,7 +1824,7 @@ mod tests {
         let runtime = IngestRuntime::new(IngestConfig {
             queue_maxsize: 4,
             dedupe_max_entries: 16,
-            ..IngestConfig::default()
+            ..test_config()
         });
         let first = test_batch();
         let mut other_host = test_batch();
@@ -1293,7 +1840,7 @@ mod tests {
         let runtime = IngestRuntime::new(IngestConfig {
             queue_maxsize: 4,
             dedupe_max_entries: 1,
-            ..IngestConfig::default()
+            ..test_config()
         });
         let first = test_batch();
         let mut second = test_batch();
@@ -1317,7 +1864,7 @@ mod tests {
         let runtime = Arc::new(IngestRuntime::new(IngestConfig {
             queue_maxsize: RETRIES + 1,
             dedupe_max_entries: 16,
-            ..IngestConfig::default()
+            ..test_config()
         }));
         let barrier = Arc::new(Barrier::new(RETRIES));
         let handles = (0..RETRIES)
@@ -1353,7 +1900,7 @@ mod tests {
             default_retry_after_ms: 500,
             suggested_batch_bytes: 4_000_000,
             recent_events_max: 100,
-            ..IngestConfig::default()
+            ..test_config()
         };
         let runtime = Arc::new(IngestRuntime::new(cfg));
         runtime.start_worker().await;
@@ -1361,7 +1908,7 @@ mod tests {
         let ack = runtime.ack_batch(test_batch());
         assert!(ack.accepted);
 
-        tokio::time::sleep(Duration::from_millis(90)).await;
+        wait_for_flush(&runtime, 1).await;
         let stats = runtime.stats();
         assert_eq!(stats.queued, 0);
         assert!(stats.flushed_total >= 1);
@@ -1407,6 +1954,7 @@ mod tests {
         });
 
         let queued = vec![QueuedBatch {
+            sequence: 1,
             rows: batch.row_count(),
             payload: batch,
         }];
@@ -1467,7 +2015,7 @@ mod tests {
             default_retry_after_ms: 500,
             suggested_batch_bytes: 4_000_000,
             recent_events_max: 16,
-            ..IngestConfig::default()
+            ..test_config()
         };
         let runtime = Arc::new(IngestRuntime::new(cfg));
         runtime.start_worker().await;
@@ -1477,7 +2025,7 @@ mod tests {
         batch.db_query_events.push(sample_db_query_event());
         assert!(runtime.ack_batch(batch).accepted);
 
-        tokio::time::sleep(Duration::from_millis(90)).await;
+        wait_for_flush(&runtime, 1).await;
 
         let recent = runtime.recent_rows(10).await;
         assert_eq!(recent.returned, 1);
@@ -1493,6 +2041,7 @@ mod tests {
     #[test]
     fn surreal_insert_sql_contains_insert_per_row() {
         let queued = vec![QueuedBatch {
+            sequence: 1,
             rows: test_batch().row_count(),
             payload: test_batch(),
         }];
@@ -1521,7 +2070,7 @@ mod tests {
             default_retry_after_ms: 500,
             suggested_batch_bytes: 4_000_000,
             recent_events_max: 16,
-            ..IngestConfig::default()
+            ..test_config()
         };
         let runtime = Arc::new(IngestRuntime::new(cfg));
         runtime.start_worker().await;
@@ -1529,7 +2078,7 @@ mod tests {
         let ack = runtime.ack_batch(test_batch());
         assert!(ack.accepted);
 
-        tokio::time::sleep(Duration::from_millis(90)).await;
+        wait_for_flush(&runtime, 1).await;
 
         let recent = runtime.recent_rows(10).await;
         assert!(recent.returned >= 1);
@@ -1553,7 +2102,7 @@ mod tests {
             default_retry_after_ms: 500,
             suggested_batch_bytes: 4_000_000,
             recent_events_max: 16,
-            ..IngestConfig::default()
+            ..test_config()
         };
         let runtime = Arc::new(IngestRuntime::new(cfg));
         runtime.start_worker().await;
@@ -1567,7 +2116,7 @@ mod tests {
         second.process_exec_events[0].pid = 777;
         assert!(runtime.ack_batch(second).accepted);
 
-        tokio::time::sleep(Duration::from_millis(90)).await;
+        wait_for_flush(&runtime, 2).await;
 
         let recent_acme = runtime.recent_rows_for_tenant(10, "acme").await;
         assert!(recent_acme.returned >= 1);
@@ -1580,13 +2129,162 @@ mod tests {
         let summary_acme = runtime.data_summary_for_tenant("acme").await;
         assert_eq!(summary_acme.total_rows, 1);
         assert_eq!(summary_acme.by_tenant.get("acme").copied(), Some(1));
-        assert!(summary_acme.by_tenant.get("globex").is_none());
+        assert!(!summary_acme.by_tenant.contains_key("globex"));
 
         let summary_globex = runtime.data_summary_for_tenant("globex").await;
         assert_eq!(summary_globex.total_rows, 1);
         assert_eq!(summary_globex.by_tenant.get("globex").copied(), Some(1));
-        assert!(summary_globex.by_tenant.get("acme").is_none());
+        assert!(!summary_globex.by_tenant.contains_key("acme"));
 
         runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn uncommitted_wal_batch_replays_after_runtime_restart() {
+        let mut cfg = test_config();
+        cfg.flush_interval_ms = 20;
+        cfg.wal_compact_after_commits = 1;
+
+        let first = IngestRuntime::new(cfg.clone());
+        let accepted = first.ack_batch(test_batch());
+        assert!(accepted.accepted);
+        assert_eq!(first.stats().wal_pending, 1);
+        drop(first);
+
+        let runtime = Arc::new(IngestRuntime::new(cfg));
+        runtime.start_worker().await;
+        wait_for_flush(&runtime, 1).await;
+        assert_eq!(runtime.stats().replayed_total, 1);
+        assert_eq!(runtime.stats().wal_pending, 0);
+        assert!(runtime.ack_batch(test_batch()).duplicate);
+        runtime.shutdown().await;
+    }
+
+    #[test]
+    fn global_queue_bound_holds_across_worker_partitions() {
+        let runtime = IngestRuntime::new(IngestConfig {
+            queue_maxsize: 2,
+            flush_workers: 4,
+            ..test_config()
+        });
+        for index in 0..2 {
+            let mut batch = test_batch();
+            batch.host_id = format!("host-{index}");
+            batch.batch_id = Some(format!("batch-{index}"));
+            assert!(runtime.ack_batch(batch).accepted);
+        }
+        let mut overflow = test_batch();
+        overflow.host_id = "host-overflow".to_string();
+        overflow.batch_id = Some("batch-overflow".to_string());
+        assert!(!runtime.ack_batch(overflow).accepted);
+        assert_eq!(runtime.stats().queued, 2);
+    }
+
+    #[tokio::test]
+    async fn configured_partition_workers_start_and_report_ready() {
+        let runtime = Arc::new(IngestRuntime::new(IngestConfig {
+            flush_workers: 3,
+            queue_maxsize: 30,
+            ..test_config()
+        }));
+        runtime.start_worker().await;
+        assert_eq!(runtime.stats().flush_workers, 3);
+        let ready = runtime.readiness().await;
+        assert!(ready.ready, "readiness detail: {ready:?}");
+        assert!(runtime
+            .prometheus_metrics()
+            .contains("olopa_ingest_flush_duration_seconds_bucket"));
+        runtime.shutdown().await;
+    }
+
+    #[test]
+    fn rejects_unsupported_schema_versions_and_malformed_payloads() {
+        let runtime = IngestRuntime::new(test_config());
+        let mut future = test_batch();
+        future.schema_version = 99;
+        let ack = runtime.ack_batch(future);
+        assert!(!ack.accepted);
+        assert!(ack.message.unwrap_or_default().contains("unsupported"));
+
+        let malformed = r#"{"tenant_id":"acme","host_id":7,"process_exec_events":[]}"#;
+        assert!(serde_json::from_str::<IngestBatchRequest>(malformed).is_err());
+    }
+
+    #[test]
+    fn circuit_breaker_opens_and_allows_a_half_open_probe() {
+        let mut breaker = CircuitBreaker::default();
+        assert!(breaker.allow());
+        assert!(breaker.failure(1, Duration::from_millis(10)));
+        assert!(breaker.is_open());
+        assert!(!breaker.allow());
+        std::thread::sleep(Duration::from_millis(15));
+        assert!(breaker.allow());
+        breaker.success();
+        assert!(!breaker.is_open());
+    }
+
+    #[tokio::test]
+    async fn transient_sink_failures_retry_open_circuit_and_use_jsonl_fallback() {
+        let mut cfg = test_config();
+        cfg.clickhouse_url = Some("://invalid".to_string());
+        cfg.sink_retry_max_attempts = 3;
+        cfg.sink_retry_initial_ms = 1;
+        cfg.sink_retry_max_ms = 2;
+        cfg.circuit_failure_threshold = 1;
+        cfg.flush_interval_ms = 10;
+        let runtime = Arc::new(IngestRuntime::new(cfg));
+        runtime.start_worker().await;
+        assert!(runtime.ack_batch(test_batch()).accepted);
+        wait_for_flush(&runtime, 1).await;
+        assert_eq!(runtime.stats().sink_retry_total, 2);
+        assert_eq!(runtime.stats().circuit_open_total, 1);
+        assert!(runtime.readiness().await.clickhouse_circuit_open);
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn permanent_sink_failures_are_dead_lettered() {
+        let mut cfg = test_config();
+        cfg.surreal_url = Some("http://unused.invalid/sql".to_string());
+        cfg.surreal_table = "invalid-table-name".to_string();
+        cfg.flush_interval_ms = 10;
+        let dead_letter_path = cfg.dead_letter_path.clone();
+        let runtime = Arc::new(IngestRuntime::new(cfg));
+        runtime.start_worker().await;
+        assert!(runtime.ack_batch(test_batch()).accepted);
+        wait_for_flush(&runtime, 1).await;
+        assert_eq!(runtime.stats().dead_letter_total, 1);
+        let contents = std::fs::read_to_string(dead_letter_path).expect("dead letter contents");
+        assert!(contents.contains("permanent surreal failure"));
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn partitioned_workers_flush_sustained_load_without_corrupting_jsonl() {
+        const BATCHES: u64 = 24;
+        let mut cfg = test_config();
+        cfg.flush_workers = 4;
+        cfg.queue_maxsize = 128;
+        cfg.flush_max_rows = 8;
+        cfg.flush_interval_ms = 10;
+        let jsonl_path = cfg.persist_jsonl_path.clone();
+        let runtime = Arc::new(IngestRuntime::new(cfg));
+        runtime.start_worker().await;
+        for index in 0..BATCHES {
+            let mut batch = test_batch();
+            batch.host_id = format!("host-{}", index % 16);
+            batch.batch_id = Some(format!("load-{index}"));
+            batch.process_exec_events[0].pid = index as u32 + 1;
+            assert!(runtime.ack_batch(batch).accepted);
+        }
+        wait_for_flush(&runtime, BATCHES).await;
+        runtime.shutdown().await;
+
+        let contents = std::fs::read_to_string(jsonl_path).expect("load-test JSONL");
+        let lines = contents.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), BATCHES as usize);
+        assert!(lines
+            .iter()
+            .all(|line| serde_json::from_str::<serde_json::Value>(line).is_ok()));
     }
 }

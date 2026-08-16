@@ -14,8 +14,9 @@ use aya::{include_bytes_aligned, maps::RingBuf, Ebpf};
 use aya_log::EbpfLogger;
 use log::{debug, info, warn};
 use olopa_common::{
-    DnsEvent, ExecEvent, FileEvent, NetEvent, SqlEvent, SslEvent, EVENT_KIND_DNS, EVENT_KIND_EXEC,
-    EVENT_KIND_FILE, EVENT_KIND_NET, EVENT_KIND_SQL, EVENT_KIND_SSL,
+    DnsEvent, ExecEvent, FileEvent, NetEvent, SqlEvent, SslEvent, TcEvent, EVENT_KIND_DNS,
+    EVENT_KIND_EXEC, EVENT_KIND_FILE, EVENT_KIND_NET, EVENT_KIND_SQL, EVENT_KIND_SSL,
+    EVENT_KIND_TC,
 };
 use serde::{Deserialize, Serialize};
 use tokio::signal;
@@ -31,6 +32,8 @@ const DEFAULT_CPU_BUDGET_PCT: f32 = 5.0;
 #[derive(Clone, Copy, Debug)]
 pub struct IngestEvent {
     pub ts_ns: u64,
+    /// Stable kernel cgroup identifier for process/container scoping.
+    pub cgroup_id: u64,
     pub pid: u32,
     pub uid: u32,
     pub event_type: u8, // 1=exec, 2=file, 3=net, 4=sql, 5=ssl, 6=dns
@@ -57,6 +60,8 @@ pub struct IngestEvent {
     // DNS event fields (event_type == 6); zeroed for other event types.
     pub dns_query_hash: u32, // FNV-1a hash of queried hostname
     pub dns_query: [u8; 64], // NUL-terminated queried hostname
+    // TC enforcement verdict (event_type == 7); 0=allow, 1=deny.
+    pub tc_verdict: u8,
 }
 
 // Hand-written because `[u8; 64]` has no std `Default` impl. Lets callers and
@@ -66,6 +71,7 @@ impl Default for IngestEvent {
     fn default() -> Self {
         Self {
             ts_ns: 0,
+            cgroup_id: 0,
             pid: 0,
             uid: 0,
             event_type: 0,
@@ -86,6 +92,7 @@ impl Default for IngestEvent {
             _pad_aux: [0; 2],
             dns_query_hash: 0,
             dns_query: [0; 64],
+            tc_verdict: 0,
         }
     }
 }
@@ -100,6 +107,8 @@ pub(crate) struct TelemetryWireEvent {
     pub wire_version: u16,
     pub event_type: u8,
     pub ts_ns: u64,
+    #[serde(default)]
+    pub cgroup_id: u64,
     pub pid: u32,
     pub uid: u32,
     pub vertex_id: u32,
@@ -118,14 +127,17 @@ pub(crate) struct TelemetryWireEvent {
     pub ssl_operation: u8,
     pub dns_query_hash: u32,
     pub dns_query: String,
+    #[serde(default)]
+    pub tc_verdict: u8,
 }
 
 impl From<&IngestEvent> for TelemetryWireEvent {
     fn from(event: &IngestEvent) -> Self {
         Self {
-            wire_version: 2,
+            wire_version: 3,
             event_type: event.event_type,
             ts_ns: event.ts_ns,
+            cgroup_id: event.cgroup_id,
             pid: event.pid,
             uid: event.uid,
             vertex_id: event.vertex_id,
@@ -144,6 +156,7 @@ impl From<&IngestEvent> for TelemetryWireEvent {
             ssl_operation: event.ssl_operation,
             dns_query_hash: event.dns_query_hash,
             dns_query: cstr_to_str(&event.dns_query).to_string(),
+            tc_verdict: event.tc_verdict,
         }
     }
 }
@@ -710,6 +723,7 @@ impl OlopaAgent {
                 log_exec_ingest(raw);
                 IngestEvent {
                     ts_ns: raw.ts_ns,
+                    cgroup_id: raw.cgroup_id,
                     pid: raw.pid,
                     uid: raw.uid,
                     event_type: 1,
@@ -730,6 +744,7 @@ impl OlopaAgent {
                     _pad_aux: [0; 2],
                     dns_query_hash: 0,
                     dns_query: [0; 64],
+                    tc_verdict: 0,
                 }
             } else if kind == EVENT_KIND_FILE {
                 // SAFETY: tag says FileEvent and length matches its size.
@@ -737,6 +752,7 @@ impl OlopaAgent {
                 log_file_ingest(raw);
                 IngestEvent {
                     ts_ns: raw.ts_ns,
+                    cgroup_id: raw.cgroup_id,
                     pid: raw.pid,
                     uid: raw.uid,
                     event_type: 2,
@@ -757,6 +773,7 @@ impl OlopaAgent {
                     _pad_aux: [0; 2],
                     dns_query_hash: 0,
                     dns_query: [0; 64],
+                    tc_verdict: 0,
                 }
             } else if kind == EVENT_KIND_NET {
                 // SAFETY: tag says NetEvent and length matches its size.
@@ -766,6 +783,7 @@ impl OlopaAgent {
                 let dst = ((u16::from_be(raw.dst_port) as u32) << 16) ^ u32::from_be(raw.dst_ip);
                 IngestEvent {
                     ts_ns: raw.ts_ns,
+                    cgroup_id: raw.cgroup_id,
                     pid: raw.pid,
                     uid: raw.uid,
                     event_type: 3,
@@ -786,6 +804,7 @@ impl OlopaAgent {
                     _pad_aux: [0; 2],
                     dns_query_hash: 0,
                     dns_query: [0; 64],
+                    tc_verdict: 0,
                 }
             } else if kind == EVENT_KIND_SQL {
                 // SAFETY: tag says SqlEvent and length matches its size.
@@ -801,6 +820,7 @@ impl OlopaAgent {
 
                 IngestEvent {
                     ts_ns: raw.ts_ns,
+                    cgroup_id: raw.cgroup_id,
                     pid: raw.pid,
                     uid: raw.uid,
                     event_type: 4,
@@ -825,12 +845,14 @@ impl OlopaAgent {
                     _pad_aux: [0; 2],
                     dns_query_hash: 0,
                     dns_query: [0; 64],
+                    tc_verdict: 0,
                 }
             } else if kind == EVENT_KIND_SSL {
                 // SAFETY: tag says SslEvent and length matches its size.
                 let raw = unsafe { &*(bytes.as_ptr() as *const SslEvent) };
                 IngestEvent {
                     ts_ns: raw.ts_ns,
+                    cgroup_id: raw.cgroup_id,
                     pid: raw.pid,
                     uid: raw.uid,
                     event_type: 5,
@@ -853,12 +875,14 @@ impl OlopaAgent {
                     _pad_aux: [0; 2],
                     dns_query_hash: 0,
                     dns_query: [0; 64],
+                    tc_verdict: 0,
                 }
             } else if kind == EVENT_KIND_DNS {
                 // SAFETY: tag says DnsEvent and length matches its size.
                 let raw = unsafe { &*(bytes.as_ptr() as *const DnsEvent) };
                 IngestEvent {
                     ts_ns: raw.ts_ns,
+                    cgroup_id: raw.cgroup_id,
                     pid: raw.pid,
                     uid: raw.uid,
                     event_type: 6,
@@ -882,6 +906,35 @@ impl OlopaAgent {
                     _pad_aux: [0; 2],
                     dns_query_hash: raw.query_hash,
                     dns_query: raw.query,
+                    tc_verdict: 0,
+                }
+            } else if kind == EVENT_KIND_TC {
+                // SAFETY: tag says TcEvent and length matches its size.
+                let raw = unsafe { &*(bytes.as_ptr() as *const TcEvent) };
+                IngestEvent {
+                    ts_ns: raw.ts_ns,
+                    cgroup_id: raw.cgroup_id,
+                    pid: raw.pid,
+                    uid: raw.uid,
+                    event_type: 7,
+                    vertex_id: raw.pid,
+                    dst_vertex_id: (u32::from(raw.dst_port) << 16) ^ raw.dst_ip,
+                    net_dst_ip: raw.dst_ip,
+                    net_dst_port: raw.dst_port,
+                    comm: raw.comm,
+                    comm_id: fnv1a_32(&raw.comm),
+                    risk_score: if raw.verdict == 1 { 0.95 } else { 0.5 },
+                    sql_query_hash: 0,
+                    sql_query_class: 0,
+                    sql_db_port: 0,
+                    sql_norm_hash: 0,
+                    sql_tables: [0; SQL_TABLES_LEN],
+                    ssl_data_len: 0,
+                    ssl_operation: 0,
+                    _pad_aux: [0; 2],
+                    dns_query_hash: 0,
+                    dns_query: [0; 64],
+                    tc_verdict: raw.verdict,
                 }
             } else {
                 // Unreachable: `expected_event_size` already rejected any kind
@@ -1180,6 +1233,7 @@ fn expected_event_size(kind: u32) -> Option<usize> {
         EVENT_KIND_SQL => Some(size_of::<SqlEvent>()),
         EVENT_KIND_SSL => Some(size_of::<SslEvent>()),
         EVENT_KIND_DNS => Some(size_of::<DnsEvent>()),
+        EVENT_KIND_TC => Some(size_of::<TcEvent>()),
         _ => None,
     }
 }
@@ -1204,6 +1258,7 @@ fn cstr_to_str(buf: &[u8]) -> &str {
 // [ssl_data_len:u32][ssl_operation:u8]
 // [dns_query_hash:u32][dns_query_len:u8][dns_query:utf8 bytes]
 // [sql_norm_hash:u32][sql_tables_len:u8][sql_tables:utf8 bytes]
+// v3 appends `[cgroup_id:u64]` after that extension.
 //
 // The extension is strictly additive: a v1 decoder reads the same header
 // offsets and stops at `rule_name`. Within the extension the trailing SQL
@@ -1214,7 +1269,7 @@ fn cstr_to_str(buf: &[u8]) -> &str {
 // is never encoded here.
 fn encode_alert_payload(event: &IngestEvent, matched_rule: &RuleMatch) -> Vec<u8> {
     const ALERT_MAGIC: [u8; 4] = *b"OLRT";
-    const ALERT_WIRE_VERSION: u16 = 2;
+    const ALERT_WIRE_VERSION: u16 = 3;
 
     let rule_id = matched_rule.rule_id.as_bytes();
     let rule_name = matched_rule.rule_name.as_bytes();
@@ -1260,6 +1315,7 @@ fn encode_alert_payload(event: &IngestEvent, matched_rule: &RuleMatch) -> Vec<u8
     out.extend_from_slice(&event.sql_norm_hash.to_le_bytes());
     out.push(sql_tables_len as u8);
     out.extend_from_slice(&sql_tables[..sql_tables_len]);
+    out.extend_from_slice(&event.cgroup_id.to_le_bytes());
     out
 }
 
@@ -1322,6 +1378,7 @@ mod tests {
         sql_db_port: u16,
         sql_tables: String,
         dns_query: String,
+        cgroup_id: u64,
     }
 
     fn decode_alert_payload(payload: &[u8]) -> DecodedAlertPayload {
@@ -1329,7 +1386,7 @@ mod tests {
         assert!(payload.len() >= 40, "payload too short");
         assert_eq!(&payload[0..4], MAGIC, "invalid alert magic");
         let version = u16::from_le_bytes([payload[4], payload[5]]);
-        assert_eq!(version, 2, "unsupported alert version");
+        assert_eq!(version, 3, "unsupported alert version");
 
         let event_type = payload[6];
         let ts_ns = u64::from_le_bytes(payload[8..16].try_into().expect("ts"));
@@ -1382,6 +1439,9 @@ mod tests {
         cursor += 1;
         let sql_tables = String::from_utf8(payload[cursor..cursor + sql_tables_len].to_vec())
             .expect("sql tables");
+        cursor += sql_tables_len;
+        let cgroup_id =
+            u64::from_le_bytes(payload[cursor..cursor + 8].try_into().expect("cgroup id"));
 
         DecodedAlertPayload {
             ts_ns,
@@ -1400,6 +1460,7 @@ mod tests {
             sql_db_port,
             sql_tables,
             dns_query,
+            cgroup_id,
         }
     }
 
@@ -1427,6 +1488,7 @@ mod tests {
         let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
         let event = IngestEvent {
             ts_ns: 100,
+            cgroup_id: 0x1122_3344_5566_7788,
             pid: 42,
             uid: 7,
             event_type: 1,
@@ -1447,6 +1509,7 @@ mod tests {
             _pad_aux: [0; 2],
             dns_query_hash: 0,
             dns_query: [0; 64],
+            tc_verdict: 0,
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -1461,6 +1524,7 @@ mod tests {
         assert_eq!(decoded.ts_ns, 100);
         assert_eq!(decoded.vertex_id, 42);
         assert_eq!(decoded.dst_vertex_id, 1);
+        assert_eq!(decoded.cgroup_id, 0x1122_3344_5566_7788);
         assert_eq!(decoded.comm_id, 123);
         assert!((decoded.risk_score - 0.9).abs() < 0.0001);
 
@@ -1517,6 +1581,7 @@ mod tests {
             kind: EVENT_KIND_DNS,
             pid: 4242,
             ts_ns: 99,
+            cgroup_id: 123,
             uid: 0,
             query_hash: 0xabcd,
             query_len: 11,
@@ -1567,6 +1632,7 @@ mod tests {
 
         let event = IngestEvent {
             ts_ns: 500,
+            cgroup_id: 0,
             pid: 900,
             uid: 1000,
             event_type: 4,
@@ -1587,6 +1653,7 @@ mod tests {
             _pad_aux: [0; 2],
             dns_query_hash: 0,
             dns_query: [0; 64],
+            tc_verdict: 0,
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -1722,6 +1789,7 @@ mod tests {
 
         let event = IngestEvent {
             ts_ns: 700,
+            cgroup_id: 0,
             pid: 1200,
             uid: 0,
             event_type: 6,
@@ -1742,6 +1810,7 @@ mod tests {
             _pad_aux: [0; 2],
             dns_query_hash: 7,
             dns_query,
+            tc_verdict: 0,
         };
 
         let matches = engine.evaluate_matches(&event);
@@ -1849,6 +1918,7 @@ mod tests {
     fn ingest_path_sends_one_alert_per_rule_match() {
         let event = IngestEvent {
             ts_ns: 1,
+            cgroup_id: 0,
             pid: 123,
             uid: 42,
             event_type: 1,
@@ -1869,6 +1939,7 @@ mod tests {
             _pad_aux: [0; 2],
             dns_query_hash: 0,
             dns_query: [0; 64],
+            tc_verdict: 0,
         };
 
         let mut scorer = NoopScorer;
@@ -1954,6 +2025,7 @@ rule "critical_pid_4242" {
 
         let event = IngestEvent {
             ts_ns: 999,
+            cgroup_id: 0,
             pid: 4242,
             uid: 1000,
             event_type: 1,
@@ -1974,6 +2046,7 @@ rule "critical_pid_4242" {
             _pad_aux: [0; 2],
             dns_query_hash: 0,
             dns_query: [0; 64],
+            tc_verdict: 0,
         };
         OlopaAgent::process_event(
             event,
@@ -2113,6 +2186,7 @@ rule "critical_pid_4242" {
 
         let event = IngestEvent {
             ts_ns: 1_000,
+            cgroup_id: 0,
             pid: 4242,
             uid: 1000,
             event_type: 1,
@@ -2133,6 +2207,7 @@ rule "critical_pid_4242" {
             _pad_aux: [0; 2],
             dns_query_hash: 0,
             dns_query: [0; 64],
+            tc_verdict: 0,
         };
         OlopaAgent::process_event(
             event,

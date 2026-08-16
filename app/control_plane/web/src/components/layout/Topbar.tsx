@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/ui/status-dot";
+import { IdentityMenu } from "@/components/layout/IdentityMenu";
 import { useTheme } from "@/hooks/useTheme";
 import type { FeedState } from "@/hooks/useIngestFeed";
 import { formatNumber } from "@/lib/utils";
@@ -45,6 +46,7 @@ export function Topbar({ feed }: { feed: FeedState }) {
       </div>
 
       <div className="ml-auto flex items-center gap-3">
+        <IdentityMenu />
         <span className="font-mono text-xs tabular-nums text-muted-foreground">{clock}</span>
         <Button variant="ghost" size="icon" onClick={toggle} aria-label="Toggle theme">
           {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}

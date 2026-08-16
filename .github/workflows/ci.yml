@@ -24,6 +24,44 @@ jobs:
       - name: Run oilc tests
         run: cargo test --manifest-path oilc/Cargo.toml
 
+  control-plane-tests:
+    name: control plane tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: app/control_plane/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r app/control_plane/requirements.txt
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      # The compiler endpoint tests shell out to oilc; building it up front
+      # keeps them off the per-request `cargo run` path.
+      - name: Build oilc
+        run: cargo build --release --manifest-path oilc/Cargo.toml
+
+      - name: Run control plane tests
+        working-directory: app/control_plane
+        env:
+          OILC_BINARY_PATH: ${{ github.workspace }}/oilc/target/release/oilc
+        run: python -m pytest -q
+
+      - name: Run Secure Connect gateway reconciler tests
+        working-directory: app/secure_connect_gateway
+        run: python -m pytest -q
+
   agent-tests:
     name: agent tests
     runs-on: ubuntu-latest

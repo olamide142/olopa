@@ -7,7 +7,7 @@ from enum import Enum
 import uuid
 from typing import Any, Dict, Optional
 
-from sqlalchemy import String, DateTime, JSON, Text, ForeignKey
+from sqlalchemy import String, DateTime, JSON, Text, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..db import Base
@@ -55,6 +55,14 @@ class Deployment(Base):
         DeploymentStatus.ROLLED_BACK: set(),
         DeploymentStatus.FAILED: set(),
     }
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_deployment_tenant_idempotency_key",
+        ),
+    )
 
     def can_transition_to(self, new_status: DeploymentStatus) -> bool:
         current = DeploymentStatus(self.status)

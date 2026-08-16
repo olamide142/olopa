@@ -19,9 +19,12 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
 - [x] Keep runtime-IR execution as the default path and fail loudly on schema mismatch.
   - Agent now fails startup when runtime-ir load/schema validation fails.
   - `SimpleRuleEngine` fallback is now opt-in only via `OLOPA_ALLOW_SIMPLE_RULE_FALLBACK=1`.
-- [ ] Harden ingest delivery and service operation.
-  - Progress: accepted non-empty `batch_id` values are idempotent within a bounded in-memory index keyed by tenant, host, and batch ID. Concurrent retries enqueue exactly once, duplicate acknowledgements are explicit, queue-full attempts are not remembered, and `INGEST_DEDUPE_MAX_ENTRIES` bounds memory (set to `0` to disable).
-  - Remaining: persist the idempotency index across restarts; add request-size and rate limits, a WAL/spool, ClickHouse retry/circuit breaking, `/ready`, restricted CORS, Prometheus/OTel, and multiple flush workers.
+- [x] Harden ingest delivery and service operation.
+  - Accepted non-empty `batch_id` values are idempotent through a bounded persistent index keyed by tenant, host, and batch ID. Concurrent retries enqueue exactly once and duplicate acknowledgements are explicit.
+  - Agent delivery complete: the active HTTP sender appends to a bounded fsynced spool before accepting a payload, preserves stable batch IDs across retries/restarts, recovers partial tails, compacts acknowledged records, and applies bounded exponential/server-directed backoff.
+  - Server acceptance is fsynced to a versioned WAL before acknowledgement, replays after restart, checkpoints only after a durable sink, persists/compacts dedupe state atomically, and tolerates a torn tail.
+  - Added request-body and tenant/host rate limits, production auth validation, restricted CORS, `/ready`, authenticated Prometheus counters/flush histograms, partitioned flush workers, exponential jittered sink retry, per-sink circuit breakers, and a fsynced dead-letter path for permanent failures.
+  - Follow-up: add OpenTelemetry trace export and Kafka fan-out only when deployment scale requires decoupling beyond the WAL and partitioned workers.
 
 ## P1 - Rule Engine and Compiler Correctness
 
@@ -56,8 +59,10 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
   - Progress: added extractor bindings for additional schema fields from ingest events (`process.id`, `process.ppid`, `process.elevated`, `network.process_id`, `file.process_id`) with metadata-alias tests.
   - Progress: added extractor bindings for nested/derived schema fields (`user.uid`, `process.user.uid`, `process.parent.{pid,id}`, `host.risk_score`, `network.dest.is_internal`) with metadata-alias tests.
   - Progress: expanded fallback field metadata for older artifacts (no compiler `fields`) and kept `network.dest.domain` evaluator semantics compatible with IP-backed domain matching.
+  - Progress: every context currently captured by the agent now has typed bindings, including cgroup/container metadata, host identity, Secure Connect session state/peer counters, and tunneled network context. Schema-only fields that are not present in endpoint telemetry continue to fail closed as `null`.
   - Remaining: extend runtime extractor bindings so more schema-emitted fields resolve to concrete event values (currently unknown fields safely evaluate as `null`).
 - [ ] Complete remaining parser clause semantics.
+  - Progress: switched source tokenization and the typed stdlib schema parser to Rust Pest grammars. The stable token/AST contract remains as a compatibility adapter while clause-level AST construction migrates incrementally.
   - Progress: parser now accepts `graph` and `around` rule-body clauses (with typed AST blocks), plus MIR source fallback derivation from body arms/source when `from` is omitted.
   - Progress: resolver/type-check now bind `graph`/`around` aliases into rule scope so `where` predicates can reference aliases (for example `p.pid`, `n.dest.port`) without unknown-identifier fallback.
 - [x] Remove legacy compiled-shared-object backend path and references.
@@ -66,11 +71,11 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
 
 ## P2 - Kernel/Data Plane Hardening
 
-- [ ] Add end-to-end cgroup support in agent telemetry and policy evaluation.
-  - Capture cgroup identity from eBPF events (stable id + optional path metadata where available).
-  - Propagate cgroup fields through agent wire payloads to ingest storage.
-  - Extend runtime field resolution so rules can reference cgroup-scoped context.
-  - Add cgroup-targeted policy controls (allow/deny/rate limit) and tests for container workloads.
+- [x] Add end-to-end cgroup support in agent telemetry and policy evaluation.
+  - Every probe records `bpf_get_current_cgroup_id`; userspace periodically resolves the cgroup-v2 inode hierarchy into path, container ID, and pod UID metadata.
+  - Scheduler and alert wire v3 preserve cgroup identity and the HTTP adapter stores resolved metadata in family attributes.
+  - Runtime fields cover `process.cgroup_id`, `process.container_id`, and the container cgroup/path/pod context.
+  - TC policy supports specificity-aware per-process/per-cgroup/global allow and deny overrides plus token-bucket packet rate limits via `OLOPA_TC_POLICY_RULES`.
 - [x] Add SQL query visibility via uprobes for process->table attribution.
   - Done: uprobes attached to `libpq` and MySQL client libraries with multi-distro library discovery (`agent/agent/src/probe_manager.rs`).
   - Done: normalized `db_query_events` family carries process identity, db engine/port, statement fingerprint, and operation kind end to end (agent -> ingest -> `recent`/`summary`).
@@ -94,12 +99,16 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
   - Added kernel-side TC policy enforcement map (`TC_EGRESS_POLICY`) in `agent/ebpf/src/tc.rs`.
   - TC program now parses IPv4+TCP/UDP egress tuple and returns `TC_ACT_SHOT` on deny policy match.
   - Added userspace map loader hook (`OLOPA_TC_DENY_RULES`) in `agent/agent/src/main.rs`.
-- [ ] Implement XDP threat policy logic (beyond pass-and-count).
-- [ ] Emit/consume TC telemetry events where required for rule evaluation.
+- [x] Implement XDP threat policy logic (beyond pass-and-count).
+  - XDP parses bounded Ethernet/IPv4 headers, checks the `XDP_BLOCKLIST_V4` map, drops exact source-IP threats, and records pass/drop counters. Userspace loads `OLOPA_XDP_BLOCK_IPS` atomically at startup.
+- [x] Emit/consume TC telemetry events where required for rule evaluation.
+  - TC emits deny/rate-drop verdicts into the shared ring buffer; the agent decodes event type 7, evaluates runtime network predicates, and routes records to normalized network ingest with `protocol=tc` and verdict attributes.
 - [x] Replace single global graph delta mutex with per-thread/per-core delta buffers.
   - Implemented shard-based delta buffering in `agent/agent/src/data/csr_graph.rs`.
   - Writer threads now map to stable delta shards (thread-local hint), and merge drains all shards before CSR rebuild.
-- [ ] Improve graph merge path for production contention and memory behavior.
+- [x] Improve graph merge path for production contention and memory behavior.
+  - Compact typed vertex allocation replaces the old modulo mapping (which aliased unrelated raw IDs), with an explicit `OLOPA_GRAPH_MAX_NODES` bound.
+  - Snapshot rebuilds sort only new deltas and linearly merge them into the already ordered CSR arrays; repeated edges are coalesced using the newest metadata instead of growing forever.
 
 ## P3 - Product Integration
 
@@ -112,6 +121,11 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
   - Progress: added token-based API auth (`Authorization: Bearer ...` or `x-api-key`) via `INGEST_API_TOKENS` with global and tenant-scoped token support.
   - Progress: ingest write path now enforces tenant authorization (`POST /api/v1/ingest/batches` must match token scope).
   - Progress: read paths now enforce tenant scoping (`/api/v1/ingest/recent`, `/api/v1/ingest/summary`), and `/api/v1/ingest/stats` is restricted to global-scope tokens.
+- [x] Secure the control-plane API and establish the rule/deployment registry foundation.
+  - Added explicit dev/JWT/service authentication; arbitrary API keys no longer become privileged service accounts.
+  - Added hierarchical RBAC and immutable tenant binding across control status, ingest proxies, compiler, intel, rules, deployments, and audit reads.
+  - Added real `oilc` diagnostics/runtime-IR persistence, invalid-rule rejection, immutable version numbering, deployment preflight, rollback transitions, and tenant-scoped idempotency.
+  - Remaining control-plane work: external OIDC/JWKS, atomic audit coverage for every mutation, async jobs, and real agent-fleet rollout delivery.
 - [ ] Add end-to-end integration tests: `oilc -> runtime-ir artifact -> agent eval -> server ingest`.
   - Progress: added `agent::tests::e2e_rule_to_runtime_to_sender_to_ingest_runtime` to validate `oilc` compilation, runtime-ir evaluation, alert payload conversion via HTTP sender logic, and ingest API contract (`/api/v1/ingest/batches` + `/api/v1/ingest/recent`).
   - Note: test is `#[ignore]` by default because it requires local TCP bind + external ingest server process spawn (not available in restricted sandboxes).
@@ -123,7 +137,38 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
 ## P4 - Platform Targets (Roadmap Features)
 
 - [ ] Integrate Memgraph-trigger execution path where required by graph rules.
-- [ ] Add rule package/version lifecycle (load, reload, rollback) with compatibility checks.
+- [x] Add rule package/version lifecycle (load, reload, rollback) with compatibility checks.
+  - The agent fingerprints and validates replacement runtime-IR before atomic activation, retains the last good engine on rejection, supports explicit rollback signals, and publishes generation/fingerprint/rule-count/error deployment status.
+- [x] Implement the Secure Connect agent subsystem behind a disabled-by-default feature flag.
+  - Added validated `OLOPA_SC_*` configuration, mTLS control client, enrollment/session/heartbeat/rekey lifecycle, monotonic command replay protection, and restrictive state-transition enforcement.
+  - WireGuard keypairs are generated locally; private material is passed to `wg` only over stdin and is zeroed on drop. No private key is written into persisted state or command arguments.
+  - Profile routes, DNS, atomic nftables kill switch, policy expiry, quarantine/termination, reconnect backoff, posture, health counters, and `olopa status --verbose` output are wired.
+  - Live tunnel/gateway validation still requires a privileged Linux host with `ip`, `wg`, `nft`, and `resolvectl`, plus a real WireGuard gateway plane.
+- [x] Implement the Secure Connect control-plane orchestrator (`app/control_plane/control_server/secure_connect/`).
+  - `/api/v1/secure-connect/*` implements the agent contract exactly: enroll, session start, heartbeat command channel, and rekey, plus operator APIs for enrollment tokens, gateways, profiles, devices, sessions, and risk signals.
+  - Enrollment tokens are single-use JWTs (`jti` tracked, `exp <= 15m`) redeemed atomically against an mTLS certificate fingerprint that permanently binds the device; only public keys are ever stored.
+  - Gateway allocation is region- and capacity-aware, tunnel addresses are stable per device, and gateways pull desired peer state from `/gateways/{id}/peers` (plan option A: external gateway plane).
+  - The risk adapter maps alert severity to `elevated`/`restricted`/`quarantined`/`terminated`, auto-applies restrictive transitions, revokes key material, instruments propagation latency, and only relaxes `elevated -> healthy` after a cooldown — matching the endpoint's local relaxation guard.
+  - Covered by `app/control_plane/tests/test_secure_connect.py`.
+- [x] Subscribe the Secure Connect risk adapter to the detection stream and reap dead sessions.
+  - A background worker reaps sessions whose profile expired without renewal (revoking keys so a dark device stops holding a gateway peer) and, when `CONTROL_SC_RISK_SUBSCRIBER_ENABLED=1`, polls ingested alert rows, buckets `risk_score` into severities, and drives every live session anchored to the alerting host through the risk state machine.
+  - Alerts apply at most once per `(tenant, host, rule, event)` identity; a detection-stream outage is logged and retried without disturbing live tunnels.
+  - `GET /api/v1/secure-connect/metrics` exposes the SLO counters: sessions by state, stale sessions, gateway utilization, command/revoke propagation latency percentiles, and enrollment token usage.
+- [x] Ship Secure Connect telemetry and kernel-verified posture from the agent.
+  - Tunnel/posture events ride the existing durable ingest spool as `sc_event` lines mapped into the `agent_heartbeat` family, so no second ingest surface was added.
+  - Posture now sources probe attachment, capture/drop counters, firewall verdicts, ingest reachability, and rule counts from the live sensor's status snapshot; `kernel_verified_posture` is false when that snapshot is missing or stale.
+  - `quarantine` and profile expiry are recoverable (kill switch stays applied while awaiting a new session); only `terminate` remains terminal.
+- [x] Harden Secure Connect for production (multi-gateway failover, load testing, runbooks).
+  - Gateways report reconciler liveness; one that goes silent stops receiving sessions and its live sessions migrate to a healthy gateway as a transparent profile refresh. Sessions with nowhere to go are left running rather than torn down.
+  - `POST /gateways/{id}/status` drains or restores a gateway; `POST /gateways/{id}/failover` evacuates it on demand; the background worker does it automatically.
+  - Fixed a latent agent bug the migration path exposed: `wg set` adds peers but never replaces them, so a gateway change left the old peer installed.
+  - `app/control_plane/tools/sc_loadtest.py` drives virtual endpoints through the real contract and fails the run when an SLO target is missed.
+  - Measured ceiling: SQLite serialises writers, so session establishment collapses past ~8 concurrent starts; PostgreSQL is required beyond a pilot. Enabling WAL + `synchronous=NORMAL` cut request latency ~100x and the control-plane suite from ~100s to ~4s.
+  - Operator runbooks with game-day exercises: `docs/secure-connect/runbooks.md`.
+- [x] Build the Secure Connect gateway plane reconciler (`app/secure_connect_gateway/`).
+  - Pulls `GET /gateways/{id}/peers` and converges a WireGuard interface with `wg set`, removals first; peer removal is the revocation path.
+  - Never touches interface configuration, never sees private keys, and never revokes on a failed poll — a control-plane outage leaves the peer set untouched.
+  - Dependency-free Python with `--once`/`--dry-run` modes, a hardened systemd unit, and 14 tests.
 - [ ] Add SQL semantic policy support (example: block process X from reading table `finance` on DB Y).
   - Progress: runtime field model already resolves `sql.query_hash`, `sql.query_class`, and `sql.db_port`, so rules can match uprobe-derived SQL today.
   - Remaining: extend the field model with table-level entities (`db.query`, `db.table`, `db.operation`, `db.server`) once statement capture lands.

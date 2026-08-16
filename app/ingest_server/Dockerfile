@@ -36,5 +36,8 @@ EXPOSE 8000
 ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8000
 ENV INGEST_PERSIST_JSONL_PATH=/var/lib/olopa/ingest/events.jsonl
+ENV INGEST_WAL_PATH=/var/lib/olopa/ingest/acceptance.wal
+ENV INGEST_DEDUPE_PATH=/var/lib/olopa/ingest/dedupe.json
+ENV INGEST_DEAD_LETTER_PATH=/var/lib/olopa/ingest/dead-letter.jsonl
 
 CMD ["sh", "-lc", "HOST_BIND=\"${SERVER_HOST:-0.0.0.0}\"; PORT_BIND=\"${PORT:-${SERVER_PORT:-8000}}\"; echo \"[ingest] boot host=${HOST_BIND} port=${PORT_BIND}\"; exec /usr/local/bin/olopa-ingest --host \"${HOST_BIND}\" --port \"${PORT_BIND}\""]

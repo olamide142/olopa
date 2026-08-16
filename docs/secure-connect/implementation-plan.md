@@ -1,5 +1,44 @@
 # Olopa Secure Connect (WireGuard) Implementation Plan
 
+## 0) Implementation status
+
+Phases 0-4 are implemented. Where the delivered design departs from this plan,
+the reason is recorded inline below.
+
+| Component | Location | State |
+| --- | --- | --- |
+| Endpoint runtime | `agent/agent/src/secure_connect/` | Implemented |
+| Orchestrator | `app/control_plane/control_server/secure_connect/` | Implemented |
+| Gateway plane | `app/secure_connect_gateway/` | Implemented (option A reconciler) |
+
+Deviations from the plan as written:
+
+- **Persistence is SQLAlchemy, not SurrealDB.** The control plane runs on
+  SQLite/SQLAlchemy, so the graph edges in section 6 are foreign keys on
+  `sc_session`, and the section 9 live query is a polling subscriber over the
+  ingest alert stream (`risk_subscriber.py`). The correlation semantics are
+  unchanged: alerts anchored to a host drive every live session on that host.
+- **Operator relaxations are narrower than section 5 implies.** The endpoint
+  refuses any unconfirmed relaxation locally, and it only accepts
+  `elevated -> healthy`. Recovering a restricted or quarantined session
+  therefore goes through termination and a fresh session rather than an
+  operator-confirmed downgrade in place.
+- **Pydantic schemas live in `schemas.py`,** not `models.py`, because ORM models
+  belong under the existing `control_server/models/` package.
+
+Phase 5 is implemented: gateway health reporting, drain/failover with transparent
+session migration, a load-test harness (`app/control_plane/tools/sc_loadtest.py`),
+and operator runbooks with measured capacity limits
+([`runbooks.md`](./runbooks.md)).
+
+The load test surfaced the real capacity ceiling: **SQLite serialises writers, so
+session establishment collapses past roughly 8 concurrent starts.** Enrollment and
+heartbeat scale fine. Production deployments beyond a pilot must run PostgreSQL —
+see runbook section 1. Two fixes came out of that measurement: SQLite now runs in
+WAL mode with `synchronous=NORMAL` (a ~100x latency improvement, and the reason the
+control-plane test suite dropped from ~100s to ~4s), and the address allocator no
+longer relies on SAVEPOINT, which pysqlite does not implement reliably.
+
 ## 1) Goal
 
 Build a dedicated **Secure Connect** subsystem so the `olopa` agent can function as a managed, zero-trust VPN client for employee access, with centralized server-side orchestration in the control plane.

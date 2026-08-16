@@ -270,9 +270,11 @@ fn load_stage0(
                 .collect::<Vec<_>>()
         })?;
 
-    let mut builtin_program = ast::Program::default();
-    builtin_program.predicates = builtin_predicate_program.predicates;
-    builtin_program.sets = builtin_set_program.sets;
+    let builtin_program = ast::Program {
+        predicates: builtin_predicate_program.predicates,
+        sets: builtin_set_program.sets,
+        ..ast::Program::default()
+    };
 
     Ok((
         schema,

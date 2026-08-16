@@ -1,22 +1,25 @@
 use anyhow::Result;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
-use tokio::time::MissedTickBehavior;
 
 use crate::agent::{SenderLike, SenderStats, TelemetryWireEvent};
 use crate::data::batcher_compressor::{BatchParser, DictDecompressor};
+use crate::transport::durable_spool::DurableSpool;
 
 const ALERT_MAGIC: &[u8; 4] = b"OLRT";
 /// Oldest alert wire version this sender still decodes.
 const ALERT_WIRE_VERSION_MIN: u16 = 1;
 /// Alert wire version that carries the SQL/TLS/DNS extension block.
 const ALERT_WIRE_VERSION_EXT: u16 = 2;
+/// Alert wire version that carries stable kernel cgroup identity.
+const ALERT_WIRE_VERSION_CGROUP: u16 = 3;
 
 /// Ring-buffer event type discriminants shared with `agent::IngestEvent`.
 const EVENT_TYPE_FILE: u8 = 2;
@@ -24,6 +27,7 @@ const EVENT_TYPE_NET: u8 = 3;
 const EVENT_TYPE_SQL: u8 = 4;
 const EVENT_TYPE_SSL: u8 = 5;
 const EVENT_TYPE_DNS: u8 = 6;
+const EVENT_TYPE_TC: u8 = 7;
 
 #[derive(Clone, Debug)]
 struct HttpSenderConfig {
@@ -31,6 +35,11 @@ struct HttpSenderConfig {
     tenant_id: String,
     host_id: String,
     auth: Option<HttpSenderAuth>,
+    spool_path: PathBuf,
+    spool_max_bytes: u64,
+    queue_capacity: usize,
+    retry_min: Duration,
+    retry_max: Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -53,6 +62,32 @@ impl HttpSenderConfig {
                 .or_else(|_| std::env::var("HOSTNAME"))
                 .unwrap_or_else(|_| "agent-local".to_string()),
             auth,
+            spool_path: env_non_empty("OLOPA_HTTP_SPOOL_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/var/lib/olopa/http-spool.bin")),
+            spool_max_bytes: env_parse_or("OLOPA_HTTP_SPOOL_MAX_BYTES", 2 * 1024 * 1024 * 1024),
+            queue_capacity: env_parse_or("OLOPA_HTTP_QUEUE_CAPACITY", 256usize).max(1),
+            retry_min: Duration::from_millis(
+                env_parse_or("OLOPA_HTTP_RETRY_MIN_MS", 250u64).max(1),
+            ),
+            retry_max: Duration::from_millis(
+                env_parse_or("OLOPA_HTTP_RETRY_MAX_MS", 60_000u64).max(1),
+            ),
+        }
+    }
+
+    #[cfg(test)]
+    fn for_mapping(tenant_id: &str, host_id: &str) -> Self {
+        Self {
+            ingest_url: "http://127.0.0.1:8000/api/v1/ingest/batches".to_string(),
+            tenant_id: tenant_id.to_string(),
+            host_id: host_id.to_string(),
+            auth: None,
+            spool_path: PathBuf::from("unused-in-mapping-tests"),
+            spool_max_bytes: 1024 * 1024,
+            queue_capacity: 8,
+            retry_min: Duration::from_millis(10),
+            retry_max: Duration::from_secs(1),
         }
     }
 }
@@ -197,6 +232,7 @@ struct DecodedAlert {
     risk_score: f32,
     rule_id: String,
     rule_name: String,
+    cgroup_id: u64,
     /// Present only for v2+ payloads; `None` for legacy v1 senders.
     ext: Option<AlertExt>,
 }
@@ -231,21 +267,26 @@ impl DecodedAlert {
 }
 
 #[derive(Debug)]
-struct QueuedBatch {
-    batch: IngestBatchRequest,
-    approx_bytes: usize,
+struct SpoolPayload {
+    batch_id: String,
+    payload: Vec<u8>,
 }
 
 pub struct HttpIngestSender {
-    tx: mpsc::UnboundedSender<Vec<u8>>,
-    local_spool: Vec<Vec<u8>>,
+    wake_tx: mpsc::Sender<()>,
+    spool: Arc<Mutex<DurableSpool>>,
+    batch_sequence: u64,
     shared: Arc<SharedSenderState>,
 }
 
 impl HttpIngestSender {
-    pub fn from_env() -> Self {
+    pub fn from_env() -> Result<Self> {
         let cfg = HttpSenderConfig::from_env();
-        let (tx, rx) = mpsc::unbounded_channel();
+        let spool = Arc::new(Mutex::new(DurableSpool::open(
+            &cfg.spool_path,
+            cfg.spool_max_bytes,
+        )?));
+        let (wake_tx, wake_rx) = mpsc::channel(cfg.queue_capacity);
         let shared = Arc::new(SharedSenderState::default());
         let auth_mode = match &cfg.auth {
             Some(HttpSenderAuth::BearerToken(_)) => "bearer",
@@ -254,33 +295,97 @@ impl HttpIngestSender {
         };
 
         info!(
-            "sender: http ingest enabled url={} tenant={} host={} auth={}",
-            cfg.ingest_url, cfg.tenant_id, cfg.host_id, auth_mode
+            "sender: http ingest enabled url={} tenant={} host={} auth={} spool={} spool_max_bytes={}",
+            cfg.ingest_url,
+            cfg.tenant_id,
+            cfg.host_id,
+            auth_mode,
+            cfg.spool_path.display(),
+            cfg.spool_max_bytes,
         );
 
-        tokio::spawn(sender_worker(rx, cfg, Arc::clone(&shared)));
+        update_shared_state(&shared, &spool);
+        tokio::spawn(sender_worker(
+            wake_rx,
+            cfg,
+            Arc::clone(&shared),
+            Arc::clone(&spool),
+        ));
+        let _ = wake_tx.try_send(());
 
-        Self {
-            tx,
-            local_spool: Vec::new(),
+        Ok(Self {
+            wake_tx,
+            spool,
+            batch_sequence: 0,
             shared,
+        })
+    }
+}
+
+/// Cloneable emitter for subsystems that ship telemetry outside the sensor
+/// hot loop (currently Secure Connect).
+///
+/// It shares the durable spool with the owning sender, so subsystem events
+/// survive restarts and backpressure exactly like sensor events do. Its own
+/// batch sequence keeps ids unique without touching the sensor's counter.
+#[derive(Clone)]
+pub struct SenderHandle {
+    wake_tx: mpsc::Sender<()>,
+    spool: Arc<Mutex<DurableSpool>>,
+    shared: Arc<SharedSenderState>,
+    batch_sequence: Arc<AtomicU64>,
+}
+
+impl SenderHandle {
+    /// Spool one payload and wake the sender worker.
+    pub fn emit(&self, payload: Vec<u8>) -> Result<()> {
+        let mut seq = self.batch_sequence.fetch_add(1, Ordering::Relaxed);
+        let record = SpoolPayload {
+            batch_id: next_batch_id(&mut seq),
+            payload,
+        };
+        let encoded = encode_spool_payload(&record)?;
+        self.spool
+            .lock()
+            .map_err(|_| anyhow::anyhow!("HTTP spool lock poisoned"))?
+            .append(&encoded)?;
+        update_shared_state(&self.shared, &self.spool);
+        let _ = self.wake_tx.try_send(());
+        Ok(())
+    }
+}
+
+impl HttpIngestSender {
+    /// Hand out an emitter for subsystems that run beside the sensor loop.
+    pub fn handle(&self) -> SenderHandle {
+        SenderHandle {
+            wake_tx: self.wake_tx.clone(),
+            spool: self.spool.clone(),
+            shared: self.shared.clone(),
+            batch_sequence: Arc::new(AtomicU64::new(0)),
         }
     }
 }
 
 impl SenderLike for HttpIngestSender {
     fn send_or_spool(&mut self, payload: Vec<u8>) -> Result<()> {
-        if let Err(e) = self.tx.send(payload) {
-            self.local_spool.push(e.0);
-            self.shared.spooling.store(true, Ordering::Relaxed);
-        }
+        let record = SpoolPayload {
+            batch_id: next_batch_id(&mut self.batch_sequence),
+            payload,
+        };
+        let encoded = encode_spool_payload(&record)?;
+        self.spool
+            .lock()
+            .map_err(|_| anyhow::anyhow!("HTTP spool lock poisoned"))?
+            .append(&encoded)?;
+        update_shared_state(&self.shared, &self.spool);
+        // A full notification channel is fine: it already contains a wakeup.
+        let _ = self.wake_tx.try_send(());
         Ok(())
     }
 
     fn stats(&self) -> SenderStats {
-        let worker_pending = self.shared.spool_pending_bytes.load(Ordering::Relaxed);
-        let local_pending = self.local_spool.iter().map(|b| b.len() as u64).sum::<u64>();
-        let pending = worker_pending.saturating_add(local_pending);
+        let pending = self.shared.spool_pending_bytes.load(Ordering::Relaxed);
         let spooling = pending > 0 || self.shared.spooling.load(Ordering::Relaxed);
         let reachability_known = self
             .shared
@@ -302,25 +407,18 @@ impl SenderLike for HttpIngestSender {
     }
 
     fn drain_spool(&mut self, deadline: Instant) -> Result<usize> {
-        let mut drained = 0usize;
-        while !self.local_spool.is_empty() && Instant::now() < deadline {
-            let payload = self.local_spool.remove(0);
-            match self.tx.send(payload) {
-                Ok(()) => drained = drained.saturating_add(1),
-                Err(e) => {
-                    self.local_spool.insert(0, e.0);
-                    break;
-                }
-            }
+        if Instant::now() < deadline {
+            let _ = self.wake_tx.try_send(());
         }
-        Ok(drained)
+        Ok(0)
     }
 }
 
 async fn sender_worker(
-    mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    mut wake_rx: mpsc::Receiver<()>,
     cfg: HttpSenderConfig,
     shared: Arc<SharedSenderState>,
+    spool: Arc<Mutex<DurableSpool>>,
 ) {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
@@ -335,78 +433,124 @@ async fn sender_worker(
         }
     };
 
-    let mut retry_tick = tokio::time::interval(Duration::from_millis(250));
-    retry_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-    let mut backlog: VecDeque<QueuedBatch> = VecDeque::new();
     let mut dec = DictDecompressor::new();
-    let mut seq = 0u64;
+    let mut retry_delay = cfg.retry_min.min(cfg.retry_max);
+    let mut next_attempt = Some(Instant::now());
 
     loop {
         tokio::select! {
-            payload = rx.recv() => {
-                match payload {
-                    Some(payload) => {
-                        let batches = payload_to_batches(&payload, &cfg, &mut dec, &mut seq);
-                        let approx = payload.len().max(1);
-                        for batch in batches {
-                            backlog.push_back(QueuedBatch {
-                                batch,
-                                approx_bytes: approx,
-                            });
-                        }
+            wake = wake_rx.recv() => if wake.is_none() { break; },
+            _ = async {
+                match next_attempt {
+                    Some(deadline) => {
+                        tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await
                     }
-                    None => break,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {},
+        }
+
+        if next_attempt.is_some_and(|deadline| Instant::now() < deadline) {
+            continue;
+        }
+        loop {
+            let encoded = match spool.lock() {
+                Ok(mut guard) => match guard.peek() {
+                    Ok(value) => value,
+                    Err(err) => {
+                        warn!("sender: failed reading durable spool: {}", err);
+                        None
+                    }
+                },
+                Err(_) => {
+                    warn!("sender: durable spool lock poisoned");
+                    None
+                }
+            };
+            let Some(encoded) = encoded else {
+                break;
+            };
+            let record = match decode_spool_payload(&encoded) {
+                Ok(record) => record,
+                Err(err) => {
+                    warn!("sender: corrupt durable spool record: {}", err);
+                    break;
+                }
+            };
+            let mut batches =
+                payload_to_batches_with_id(&record.payload, &cfg, &mut dec, &record.batch_id);
+            let Some(batch) = batches.pop() else {
+                warn!("sender: spool record produced no ingest batch");
+                break;
+            };
+            let started = Instant::now();
+            match post_batch(&client, &cfg, &batch).await {
+                Ok(()) => {
+                    shared
+                        .backend_reachability_known
+                        .store(true, Ordering::Relaxed);
+                    shared.backend_reachable.store(true, Ordering::Relaxed);
+                    let rtt_ms = started.elapsed().as_millis() as u64;
+                    shared
+                        .backend_rtt_ms
+                        .store(rtt_ms.max(1), Ordering::Relaxed);
+                    match spool.lock() {
+                        Ok(mut guard) => {
+                            if let Err(err) = guard.acknowledge() {
+                                warn!("sender: failed persisting spool acknowledgement: {}", err);
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                    retry_delay = cfg.retry_min.min(cfg.retry_max);
+                    next_attempt = Some(Instant::now());
+                }
+                Err(err) => {
+                    shared
+                        .backend_reachability_known
+                        .store(true, Ordering::Relaxed);
+                    shared.backend_reachable.store(false, Ordering::Relaxed);
+                    debug!("sender: backlog send paused: {}", err);
+                    let server_delay = err.retry_after.unwrap_or_default();
+                    let delay = retry_delay.max(server_delay).min(cfg.retry_max);
+                    next_attempt = Some(Instant::now() + delay);
+                    retry_delay = retry_delay.saturating_mul(2).min(cfg.retry_max);
+                    break;
                 }
             }
-            _ = retry_tick.tick() => {}
+            update_shared_state(&shared, &spool);
         }
-
-        flush_backlog(&client, &cfg, &shared, &mut backlog).await;
-        update_shared_state(&shared, &backlog);
+        if spool
+            .lock()
+            .map(|guard| guard.pending_bytes() == 0)
+            .unwrap_or(false)
+        {
+            next_attempt = None;
+        }
+        update_shared_state(&shared, &spool);
     }
-
-    flush_backlog(&client, &cfg, &shared, &mut backlog).await;
-    update_shared_state(&shared, &backlog);
+    update_shared_state(&shared, &spool);
 }
 
-fn update_shared_state(shared: &SharedSenderState, backlog: &VecDeque<QueuedBatch>) {
-    let pending = backlog.iter().map(|b| b.approx_bytes as u64).sum::<u64>();
+fn update_shared_state(shared: &SharedSenderState, spool: &Arc<Mutex<DurableSpool>>) {
+    let pending = spool
+        .lock()
+        .map(|guard| guard.pending_bytes())
+        .unwrap_or(u64::MAX);
     shared.spool_pending_bytes.store(pending, Ordering::Relaxed);
-    shared
-        .spooling
-        .store(!backlog.is_empty(), Ordering::Relaxed);
+    shared.spooling.store(pending != 0, Ordering::Relaxed);
 }
 
-async fn flush_backlog(
-    client: &reqwest::Client,
-    cfg: &HttpSenderConfig,
-    shared: &SharedSenderState,
-    backlog: &mut VecDeque<QueuedBatch>,
-) {
-    while let Some(item) = backlog.front() {
-        let started = Instant::now();
-        match post_batch(client, cfg, &item.batch).await {
-            Ok(()) => {
-                shared
-                    .backend_reachability_known
-                    .store(true, Ordering::Relaxed);
-                shared.backend_reachable.store(true, Ordering::Relaxed);
-                let rtt_ms = started.elapsed().as_millis() as u64;
-                shared
-                    .backend_rtt_ms
-                    .store(rtt_ms.max(1), Ordering::Relaxed);
-                backlog.pop_front();
-            }
-            Err(err) => {
-                shared
-                    .backend_reachability_known
-                    .store(true, Ordering::Relaxed);
-                shared.backend_reachable.store(false, Ordering::Relaxed);
-                debug!("sender: backlog send paused: {}", err);
-                break;
-            }
-        }
+#[derive(Debug)]
+struct PostBatchError {
+    message: String,
+    retry_after: Option<Duration>,
+}
+
+impl std::fmt::Display for PostBatchError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
     }
 }
 
@@ -414,7 +558,7 @@ async fn post_batch(
     client: &reqwest::Client,
     cfg: &HttpSenderConfig,
     batch: &IngestBatchRequest,
-) -> Result<()> {
+) -> std::result::Result<(), PostBatchError> {
     let mut req = client.post(&cfg.ingest_url).json(batch);
     if let Some(auth) = cfg.auth.as_ref() {
         req = match auth {
@@ -423,32 +567,57 @@ async fn post_batch(
         };
     }
 
-    let resp = req.send().await?;
+    let resp = req.send().await.map_err(|err| PostBatchError {
+        message: err.to_string(),
+        retry_after: None,
+    })?;
     let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!(
-            "http status {} body={}",
-            status,
-            truncate_for_log(&body, 256)
-        );
-    }
-
-    let ack = resp.json::<AckResponse>().await.unwrap_or(AckResponse {
-        accepted: true,
+    let header_retry = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_secs);
+    let body = resp.text().await.unwrap_or_default();
+    let ack = serde_json::from_str::<AckResponse>(&body).unwrap_or(AckResponse {
+        accepted: status.is_success(),
         retry_after_ms: 0,
         message: None,
     });
+    let retry_after = (ack.retry_after_ms != 0)
+        .then(|| Duration::from_millis(u64::from(ack.retry_after_ms)))
+        .or(header_retry);
+    if !status.is_success() {
+        return Err(PostBatchError {
+            message: format!(
+                "http status {} body={}",
+                status,
+                truncate_for_log(&body, 256)
+            ),
+            retry_after,
+        });
+    }
 
     if !ack.accepted {
-        anyhow::bail!(
-            "server rejected batch retry_after_ms={} message={:?}",
-            ack.retry_after_ms,
-            ack.message
-        );
+        return Err(PostBatchError {
+            message: format!(
+                "server rejected batch retry_after_ms={} message={:?}",
+                ack.retry_after_ms, ack.message
+            ),
+            retry_after,
+        });
     }
 
     Ok(())
+}
+
+fn env_parse_or<T>(key: &str, default: T) -> T
+where
+    T: std::str::FromStr,
+{
+    env_non_empty(key)
+        .and_then(|value| value.parse::<T>().ok())
+        .unwrap_or(default)
 }
 
 fn env_non_empty(key: &str) -> Option<String> {
@@ -459,6 +628,37 @@ fn env_non_empty(key: &str) -> Option<String> {
         } else {
             Some(trimmed.to_string())
         }
+    })
+}
+
+fn encode_spool_payload(record: &SpoolPayload) -> Result<Vec<u8>> {
+    let id = record.batch_id.as_bytes();
+    let id_len = u16::try_from(id.len())
+        .map_err(|_| anyhow::anyhow!("batch id is too long for spool record"))?;
+    let mut encoded = Vec::with_capacity(3 + id.len() + record.payload.len());
+    encoded.push(1);
+    encoded.extend_from_slice(&id_len.to_be_bytes());
+    encoded.extend_from_slice(id);
+    encoded.extend_from_slice(&record.payload);
+    Ok(encoded)
+}
+
+fn decode_spool_payload(encoded: &[u8]) -> Result<SpoolPayload> {
+    if encoded.first().copied() != Some(1) || encoded.len() < 3 {
+        anyhow::bail!("unsupported or truncated HTTP spool record");
+    }
+    let id_len = u16::from_be_bytes([encoded[1], encoded[2]]) as usize;
+    let id_end = 3usize
+        .checked_add(id_len)
+        .filter(|end| *end <= encoded.len())
+        .ok_or_else(|| anyhow::anyhow!("truncated batch id in HTTP spool record"))?;
+    let batch_id = std::str::from_utf8(&encoded[3..id_end])?.to_string();
+    if batch_id.is_empty() {
+        anyhow::bail!("empty batch id in HTTP spool record");
+    }
+    Ok(SpoolPayload {
+        batch_id,
+        payload: encoded[id_end..].to_vec(),
     })
 }
 
@@ -482,14 +682,24 @@ fn payload_to_batches(
     dec: &mut DictDecompressor,
     seq: &mut u64,
 ) -> Vec<IngestBatchRequest> {
+    let batch_id = next_batch_id(seq);
+    payload_to_batches_with_id(payload, cfg, dec, &batch_id)
+}
+
+fn payload_to_batches_with_id(
+    payload: &[u8],
+    cfg: &HttpSenderConfig,
+    dec: &mut DictDecompressor,
+    batch_id: &str,
+) -> Vec<IngestBatchRequest> {
     if let Some(alert) = decode_alert_payload(payload) {
-        let mut batch = IngestBatchRequest::new(cfg, next_batch_id(seq));
+        let mut batch = IngestBatchRequest::new(cfg, batch_id.to_string());
         append_alert_to_batch(&mut batch, &alert);
         return vec![batch];
     }
 
     if let Ok(mut parser) = BatchParser::new(payload) {
-        let mut batch = IngestBatchRequest::new(cfg, next_batch_id(seq));
+        let mut batch = IngestBatchRequest::new(cfg, batch_id.to_string());
         let default_cap = (parser.header.raw_bytes as usize).max(2048);
 
         while let Some(frame) = parser.next_frame() {
@@ -512,7 +722,7 @@ fn payload_to_batches(
     }
 
     if let Ok(text) = std::str::from_utf8(payload) {
-        let mut batch = IngestBatchRequest::new(cfg, next_batch_id(seq));
+        let mut batch = IngestBatchRequest::new(cfg, batch_id.to_string());
         append_line_to_batch(&mut batch, text.trim());
         if batch.row_count() == 0 {
             append_unknown_payload_heartbeat(&mut batch, "text_payload_no_rows", payload.len());
@@ -520,7 +730,7 @@ fn payload_to_batches(
         return vec![batch];
     }
 
-    let mut batch = IngestBatchRequest::new(cfg, next_batch_id(seq));
+    let mut batch = IngestBatchRequest::new(cfg, batch_id.to_string());
     append_unknown_payload_heartbeat(&mut batch, "binary_payload", payload.len());
     vec![batch]
 }
@@ -533,12 +743,7 @@ pub(crate) fn payload_to_batches_for_tests(
 ) -> Vec<serde_json::Value> {
     // Reuse the real sender mapping logic so e2e tests validate the exact
     // wire shape that would be posted to ingest in production.
-    let cfg = HttpSenderConfig {
-        ingest_url: "http://127.0.0.1:8000/api/v1/ingest/batches".to_string(),
-        tenant_id: tenant_id.to_string(),
-        host_id: host_id.to_string(),
-        auth: None,
-    };
+    let cfg = HttpSenderConfig::for_mapping(tenant_id, host_id);
     let mut dec = DictDecompressor::new();
     let mut seq = 0u64;
     payload_to_batches(payload, &cfg, &mut dec, &mut seq)
@@ -569,7 +774,9 @@ fn append_line_to_batch(batch: &mut IngestBatchRequest, line: &str) {
 
     if let Some(encoded) = line.strip_prefix("event_v2 ") {
         match serde_json::from_str::<TelemetryWireEvent>(encoded) {
-            Ok(event) if event.wire_version == 2 => append_telemetry_event(batch, &event),
+            Ok(event) if (2..=3).contains(&event.wire_version) => {
+                append_telemetry_event(batch, &event)
+            }
             Ok(event) => append_unknown_payload_heartbeat(
                 batch,
                 &format!("unsupported_event_wire_v{}", event.wire_version),
@@ -587,6 +794,11 @@ fn append_line_to_batch(batch: &mut IngestBatchRequest, line: &str) {
 
     if line.starts_with("metric ") {
         append_metric_line(batch, line);
+        return;
+    }
+
+    if line.starts_with("sc_event ") {
+        append_secure_connect_line(batch, line);
         return;
     }
 
@@ -612,6 +824,18 @@ fn append_telemetry_event(batch: &mut IngestBatchRequest, event: &TelemetryWireE
     attrs.insert("comm_id".to_string(), event.comm_id.to_string());
     attrs.insert("event_type".to_string(), event.event_type.to_string());
     attrs.insert("wire".to_string(), "event_v2".to_string());
+    append_cgroup_attrs(&mut attrs, event.cgroup_id);
+    if event.event_type == EVENT_TYPE_TC {
+        attrs.insert(
+            "tc_verdict".to_string(),
+            if event.tc_verdict == 1 {
+                "deny"
+            } else {
+                "allow"
+            }
+            .to_string(),
+        );
+    }
 
     match event.event_type {
         EVENT_TYPE_FILE => batch.file_events.push(FileEvent {
@@ -624,14 +848,18 @@ fn append_telemetry_event(batch: &mut IngestBatchRequest, event: &TelemetryWireE
             path: format!("vertex:{}->{}", event.vertex_id, event.dst_vertex_id),
             attrs,
         }),
-        EVENT_TYPE_NET => batch.net_events.push(NetEvent {
+        EVENT_TYPE_NET | EVENT_TYPE_TC => batch.net_events.push(NetEvent {
             pid: event.pid,
             tgid: event.pid,
             uid: event.uid,
             gid: 0,
             comm: event.comm.clone(),
             direction: "outbound".to_string(),
-            protocol: "unknown".to_string(),
+            protocol: if event.event_type == EVENT_TYPE_TC {
+                "tc".to_string()
+            } else {
+                "unknown".to_string()
+            },
             src_ip: None,
             dst_ip: (event.net_dst_ip != 0).then(|| Ipv4Addr::from(event.net_dst_ip).to_string()),
             src_port: None,
@@ -784,6 +1012,37 @@ fn append_metric_line(batch: &mut IngestBatchRequest, line: &str) {
     });
 }
 
+/// Map a Secure Connect subsystem event onto the agent-heartbeat family.
+///
+/// Secure Connect rides the existing telemetry stream rather than opening its
+/// own ingest surface, so tunnel/posture events land in the same store the
+/// detection pipeline already reads.
+fn append_secure_connect_line(batch: &mut IngestBatchRequest, line: &str) {
+    let fields = parse_kv_fields(line);
+
+    let mut attrs = HashMap::new();
+    attrs.insert("wire".to_string(), "secure_connect".to_string());
+    attrs.insert("kind".to_string(), "sc_session_event".to_string());
+    for (key, value) in &fields {
+        attrs.insert((*key).to_string(), (*value).to_string());
+    }
+
+    batch.agent_heartbeats.push(AgentHeartbeat {
+        agent_version: fields
+            .get("agent_version")
+            .map(|value| (*value).to_string())
+            .unwrap_or_else(|| "olopa".to_string()),
+        kernel_version: fields
+            .get("kernel_version")
+            .map(|value| (*value).to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        events_read_total: parse_u64(fields.get("bytes_rx").copied()).unwrap_or(0),
+        events_dropped_total: parse_u64(fields.get("reconnect_count").copied()).unwrap_or(0),
+        queue_depth: 0,
+        attrs,
+    });
+}
+
 fn append_unknown_payload_heartbeat(batch: &mut IngestBatchRequest, kind: &str, len: usize) {
     let mut attrs = HashMap::new();
     attrs.insert("kind".to_string(), kind.to_string());
@@ -798,6 +1057,19 @@ fn append_unknown_payload_heartbeat(batch: &mut IngestBatchRequest, kind: &str, 
     });
 }
 
+fn append_cgroup_attrs(attrs: &mut HashMap<String, String>, cgroup_id: u64) {
+    attrs.insert("cgroup_id".to_string(), cgroup_id.to_string());
+    if let Some(metadata) = crate::cgroup::lookup(cgroup_id) {
+        attrs.insert("cgroup_path".to_string(), metadata.path);
+        if let Some(container_id) = metadata.container_id {
+            attrs.insert("container_id".to_string(), container_id);
+        }
+        if let Some(pod_uid) = metadata.pod_uid {
+            attrs.insert("pod_uid".to_string(), pod_uid);
+        }
+    }
+}
+
 fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
     let mut attrs = HashMap::new();
     attrs.insert("ts_ns".to_string(), alert.ts_ns.to_string());
@@ -808,11 +1080,12 @@ fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
     attrs.insert("rule_id".to_string(), alert.rule_id.clone());
     attrs.insert("rule_name".to_string(), alert.rule_name.clone());
     attrs.insert("wire".to_string(), "alert_binary".to_string());
+    append_cgroup_attrs(&mut attrs, alert.cgroup_id);
 
     let comm = alert.comm_label();
 
     match alert.event_type {
-        EVENT_TYPE_NET => {
+        EVENT_TYPE_NET | EVENT_TYPE_TC => {
             batch.net_events.push(NetEvent {
                 pid: alert.pid,
                 tgid: alert.pid,
@@ -820,7 +1093,11 @@ fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
                 gid: 0,
                 comm,
                 direction: "outbound".to_string(),
-                protocol: "unknown".to_string(),
+                protocol: if alert.event_type == EVENT_TYPE_TC {
+                    "tc".to_string()
+                } else {
+                    "unknown".to_string()
+                },
                 src_ip: None,
                 dst_ip: None,
                 src_port: None,
@@ -987,7 +1264,7 @@ fn decode_alert_payload(payload: &[u8]) -> Option<DecodedAlert> {
     }
 
     let version = u16::from_le_bytes([payload[4], payload[5]]);
-    if !(ALERT_WIRE_VERSION_MIN..=ALERT_WIRE_VERSION_EXT).contains(&version) {
+    if !(ALERT_WIRE_VERSION_MIN..=ALERT_WIRE_VERSION_CGROUP).contains(&version) {
         return None;
     }
 
@@ -1022,6 +1299,12 @@ fn decode_alert_payload(payload: &[u8]) -> Option<DecodedAlert> {
     let ext = (version >= ALERT_WIRE_VERSION_EXT)
         .then(|| decode_alert_ext(payload, cursor))
         .flatten();
+    let cgroup_id = if version >= ALERT_WIRE_VERSION_CGROUP {
+        let tail = payload.len().checked_sub(8)?;
+        u64::from_le_bytes(payload.get(tail..)?.try_into().ok()?)
+    } else {
+        0
+    };
 
     Some(DecodedAlert {
         event_type,
@@ -1034,6 +1317,7 @@ fn decode_alert_payload(payload: &[u8]) -> Option<DecodedAlert> {
         risk_score,
         rule_id,
         rule_name,
+        cgroup_id,
         ext,
     })
 }
@@ -1136,6 +1420,25 @@ mod tests {
     }
 
     #[test]
+    fn secure_connect_events_map_onto_the_agent_heartbeat_family() {
+        let line = "sc_event event=access_revoked session_id=sess-1 to_state=quarantined \
+                    revoke_ms=42 kill_switch_ms=7 reason=control_plane_quarantine";
+        let batches = payload_to_batches_for_tests(line.as_bytes(), "tenant-a", "host-a");
+
+        assert_eq!(batches.len(), 1);
+        let heartbeats = batches[0]["agent_heartbeats"].as_array().expect("heartbeats");
+        assert_eq!(heartbeats.len(), 1);
+        let attrs = &heartbeats[0]["attrs"];
+        assert_eq!(attrs["wire"], "secure_connect");
+        assert_eq!(attrs["kind"], "sc_session_event");
+        assert_eq!(attrs["event"], "access_revoked");
+        assert_eq!(attrs["session_id"], "sess-1");
+        assert_eq!(attrs["revoke_ms"], "42");
+        assert_eq!(batches[0]["tenant_id"], "tenant-a");
+        assert_eq!(batches[0]["host_id"], "host-a");
+    }
+
+    #[test]
     fn compressed_normal_events_preserve_all_telemetry_families() {
         let mut batcher = Batcher::new(7, 32);
         let budget = BudgetSnapshot::default_budgets();
@@ -1208,12 +1511,7 @@ mod tests {
         }
         let compressed = batcher.flush().expect("flush telemetry batch");
 
-        let cfg = HttpSenderConfig {
-            ingest_url: "http://127.0.0.1:8000/api/v1/ingest/batches".to_string(),
-            tenant_id: "t".to_string(),
-            host_id: "h".to_string(),
-            auth: None,
-        };
+        let cfg = HttpSenderConfig::for_mapping("t", "h");
         let mut dec = DictDecompressor::new();
         let mut seq = 0;
         let out = payload_to_batches(&compressed.payload, &cfg, &mut dec, &mut seq);
@@ -1299,12 +1597,7 @@ mod tests {
         // no class/port, so the row degrades to `unknown`/`other` rather than
         // being mis-filed as a process exec.
         let payload = v1_alert_payload(EVENT_TYPE_SQL, 0xdead_beef);
-        let cfg = HttpSenderConfig {
-            ingest_url: "http://127.0.0.1:8000/api/v1/ingest/batches".to_string(),
-            tenant_id: "t".to_string(),
-            host_id: "h".to_string(),
-            auth: None,
-        };
+        let cfg = HttpSenderConfig::for_mapping("t", "h");
         let mut dec = DictDecompressor::new();
         let mut seq = 0;
         let out = payload_to_batches(&payload, &cfg, &mut dec, &mut seq);
@@ -1322,12 +1615,7 @@ mod tests {
     #[test]
     fn ssl_alert_routes_to_net_family_as_tls() {
         let payload = v1_alert_payload(EVENT_TYPE_SSL, 0);
-        let cfg = HttpSenderConfig {
-            ingest_url: "http://127.0.0.1:8000/api/v1/ingest/batches".to_string(),
-            tenant_id: "t".to_string(),
-            host_id: "h".to_string(),
-            auth: None,
-        };
+        let cfg = HttpSenderConfig::for_mapping("t", "h");
         let mut dec = DictDecompressor::new();
         let mut seq = 0;
         let out = payload_to_batches(&payload, &cfg, &mut dec, &mut seq);
@@ -1339,12 +1627,7 @@ mod tests {
 
     #[test]
     fn maps_evt_line_into_process_event() {
-        let cfg = HttpSenderConfig {
-            ingest_url: "http://127.0.0.1:8000/api/v1/ingest/batches".to_string(),
-            tenant_id: "t".to_string(),
-            host_id: "h".to_string(),
-            auth: None,
-        };
+        let cfg = HttpSenderConfig::for_mapping("t", "h");
         let mut dec = DictDecompressor::new();
         let mut seq = 0;
         let payload = b"evt ts=10 pid=20 uid=30 risk=0.4 src=20 dst=1 comm=bash";

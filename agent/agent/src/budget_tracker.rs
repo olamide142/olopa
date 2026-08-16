@@ -6,7 +6,7 @@
 //!
 //! Current state:
 //! - CPU and memory utilization are measured from live `/proc` counters.
-//! - IO/NET/BW feedback channels are scaffolded and currently held at zero.
+//! - IO/NET/BW feedback comes from process I/O and network namespace counters.
 //! - The exported `BudgetSnapshot` is the single budget contract used by
 //!   runtime components.
 
@@ -78,6 +78,12 @@ struct ProcSample {
     sys_jiffies: u64,
     // Process resident set size in bytes sampled from /proc/self/status.
     rss_bytes: u64,
+    // Process storage bytes read + written from /proc/self/io.
+    io_bytes: u64,
+    // Network namespace packets received + transmitted from /proc/net/dev.
+    net_packets: u64,
+    // Network namespace bytes received + transmitted from /proc/net/dev.
+    net_bytes: u64,
     // Wall-clock capture time for delta computations/diagnostics.
     at: Instant,
 }
@@ -149,11 +155,14 @@ impl BudgetTracker {
         let mem_cap = self.current.total[MEM].max(1.0);
         out[MEM] = (now.rss_bytes as f32 / mem_cap).clamp(0.0, 1.0);
 
-        // IO/NET/BW are placeholders until those readers are wired.
-        // Keeping these at zero avoids unstable fake feedback.
-        out[IO] = 0.0;
-        out[NET] = 0.0;
-        out[BW] = 0.0;
+        let io_delta = now.io_bytes.saturating_sub(last.io_bytes);
+        out[IO] = (io_delta as f32 / self.current.total[IO].max(1.0)).clamp(0.0, 1.0);
+
+        let packet_delta = now.net_packets.saturating_sub(last.net_packets);
+        out[NET] = (packet_delta as f32 / self.current.total[NET].max(1.0)).clamp(0.0, 1.0);
+
+        let wire_delta = now.net_bytes.saturating_sub(last.net_bytes);
+        out[BW] = (wire_delta as f32 / self.current.total[BW].max(1.0)).clamp(0.0, 1.0);
 
         // `at` is currently diagnostic-only; keep read to avoid stale field confusion.
         let _dt = now.at.duration_since(last.at);
@@ -191,17 +200,56 @@ fn read_proc_sample() -> io::Result<ProcSample> {
     let proc_stat = fs::read_to_string("/proc/self/stat")?;
     let sys_stat = fs::read_to_string("/proc/stat")?;
     let status = fs::read_to_string("/proc/self/status")?;
+    let process_io = fs::read_to_string("/proc/self/io").unwrap_or_default();
+    let network = fs::read_to_string("/proc/net/dev").unwrap_or_default();
 
     let proc_jiffies = parse_proc_self_jiffies(&proc_stat)?;
     let sys_jiffies = parse_proc_total_jiffies(&sys_stat)?;
     let rss_bytes = parse_rss_bytes(&status)?;
+    let io_bytes = parse_process_io_bytes(&process_io);
+    let (net_packets, net_bytes) = parse_network_totals(&network);
 
     Ok(ProcSample {
         proc_jiffies,
         sys_jiffies,
         rss_bytes,
+        io_bytes,
+        net_packets,
+        net_bytes,
         at: Instant::now(),
     })
+}
+
+fn parse_process_io_bytes(raw: &str) -> u64 {
+    raw.lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            matches!(key.trim(), "read_bytes" | "write_bytes")
+                .then(|| value.trim().parse::<u64>().ok())
+                .flatten()
+        })
+        .fold(0u64, u64::saturating_add)
+}
+
+fn parse_network_totals(raw: &str) -> (u64, u64) {
+    raw.lines()
+        .filter_map(|line| line.split_once(':').map(|(_, counters)| counters))
+        .fold((0u64, 0u64), |(packets, bytes), counters| {
+            let fields = counters.split_whitespace().collect::<Vec<_>>();
+            if fields.len() < 10 {
+                return (packets, bytes);
+            }
+            let rx_bytes = fields[0].parse::<u64>().unwrap_or(0);
+            let rx_packets = fields[1].parse::<u64>().unwrap_or(0);
+            let tx_bytes = fields[8].parse::<u64>().unwrap_or(0);
+            let tx_packets = fields[9].parse::<u64>().unwrap_or(0);
+            (
+                packets
+                    .saturating_add(rx_packets)
+                    .saturating_add(tx_packets),
+                bytes.saturating_add(rx_bytes).saturating_add(tx_bytes),
+            )
+        })
 }
 
 // Parse process CPU jiffies from /proc/self/stat.
@@ -261,4 +309,21 @@ fn parse_rss_bytes(status: &str) -> io::Result<u64> {
 // Convert parsing failures into InvalidData io::Error.
 fn invalid_data<E: std::fmt::Display>(e: E) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_process_io_bytes() {
+        let raw = "rchar: 10\nwchar: 20\nread_bytes: 4096\nwrite_bytes: 8192\n";
+        assert_eq!(parse_process_io_bytes(raw), 12_288);
+    }
+
+    #[test]
+    fn parses_network_packet_and_byte_totals() {
+        let raw = "Inter-| Receive | Transmit\n eth0: 1000 10 0 0 0 0 0 0 2000 20 0 0 0 0 0 0\n lo: 50 2 0 0 0 0 0 0 60 3 0 0 0 0 0 0\n";
+        assert_eq!(parse_network_totals(raw), (35, 3_110));
+    }
 }

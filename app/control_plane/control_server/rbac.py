@@ -37,7 +37,9 @@ def require_roles(*allowed_roles: Role) -> Callable[[RequestContext], RequestCon
     """Dependency generator enforcing that caller holds at least one allowed role (or higher)."""
     min_required_weight = min([ROLE_HIERARCHY[r] for r in allowed_roles]) if allowed_roles else 0
 
-    def rbac_guard(ctx: RequestContext = Depends(get_request_context)) -> RequestContext:
+    async def rbac_guard(
+        ctx: RequestContext = Depends(get_request_context),
+    ) -> RequestContext:
         user_max_weight = max([get_role_weight(r) for r in ctx.roles], default=0)
         if user_max_weight < min_required_weight:
             allowed_names = [r.value for r in allowed_roles]

@@ -56,8 +56,8 @@
 
 use aya_ebpf::{
     helpers::{
-        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_ns,
-        bpf_probe_read_user_str_bytes,
+        bpf_get_current_cgroup_id, bpf_get_current_comm, bpf_get_current_pid_tgid,
+        bpf_get_current_uid_gid, bpf_ktime_get_ns, bpf_probe_read_user_str_bytes,
     },
     macros::{map, uprobe},
     maps::LruHashMap,
@@ -258,6 +258,7 @@ unsafe fn try_execute_prepared(
 
     (*event).kind = EVENT_KIND_SQL;
     (*event).ts_ns = bpf_ktime_get_ns();
+    (*event).cgroup_id = bpf_get_current_cgroup_id();
     (*event).pid = key.pid;
     (*event).uid = bpf_get_current_uid_gid() as u32;
     (*event).db_port = default_port;
@@ -304,6 +305,7 @@ unsafe fn try_sql_query(ctx: &ProbeContext, query_arg: usize, default_port: u16)
 
     (*event).kind = EVENT_KIND_SQL;
     (*event).ts_ns = bpf_ktime_get_ns();
+    (*event).cgroup_id = bpf_get_current_cgroup_id();
 
     let pid_tgid = bpf_get_current_pid_tgid();
     (*event).pid = (pid_tgid >> 32) as u32;

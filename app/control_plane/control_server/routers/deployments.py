@@ -20,10 +20,24 @@ router = APIRouter(prefix="/api/v1/deployments", tags=["deployments"])
 
 
 class CreateDeploymentRequest(BaseModel):
-    rule_version_id: str = Field(..., example="550e8400-e29b-41d4-a716-446655440000")
-    environment: str = Field(default="production", example="production")
+    rule_version_id: str = Field(
+        ...,
+        json_schema_extra={"example": "550e8400-e29b-41d4-a716-446655440000"},
+    )
+    environment: str = Field(
+        default="production",
+        min_length=1,
+        max_length=32,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        json_schema_extra={"example": "production"},
+    )
     strategy: DeploymentStrategy = Field(default=DeploymentStrategy.DIRECT)
-    idempotency_key: Optional[str] = Field(None, example="deploy-rev-42")
+    idempotency_key: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=128,
+        json_schema_extra={"example": "deploy-rev-42"},
+    )
 
 
 class DeploymentResponse(BaseModel):
@@ -57,6 +71,19 @@ async def create_deployment(
             )
         ).first()
         if existing:
+            same_request = (
+                existing.rule_version_id == req.rule_version_id
+                and existing.environment == req.environment
+                and existing.strategy == req.strategy.value
+            )
+            if not same_request:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "IDEMPOTENCY_KEY_REUSE",
+                        "message": "Idempotency key was already used for a different deployment request",
+                    },
+                )
             return DeploymentResponse(**existing.to_dict())
 
     # Verify rule version exists and belongs to caller tenant
@@ -72,6 +99,14 @@ async def create_deployment(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Rule version '{req.rule_version_id}' does not belong to tenant '{ctx.tenant_id}'",
+        )
+    if ver.compiled_ir is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "RULE_VERSION_NOT_DEPLOYABLE",
+                "message": "Rule version has no valid compiled runtime IR",
+            },
         )
 
     # Instantiate deployment state machine: pending -> deploying -> active

@@ -37,6 +37,7 @@ entity Process {
     elevated: Bool,
     host_id: Str,
     container_id: Str?,
+    cgroup_id: Int?,
     command_line: Str?,
     parent: Process?,
     user: User?,
@@ -153,6 +154,8 @@ entity DnsDomain {
 
 entity ContainerContext {
     container_id: Str,
+    cgroup_id: Int,
+    cgroup_path: Str?,
     pod_uid: Str?,
     exists: Bool,
     orchestrator: Str?,

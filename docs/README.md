@@ -1,4 +1,10 @@
 "# olopa" 
+
+> **New engineer?** Start with [engineering-onboarding.md](./engineering-onboarding.md) —
+> it describes what is actually in the tree, how the components talk to each other, and how
+> to build and test each one. The summary below is product framing, and some of the
+> components it names are design intent rather than shipped code.
+
 Based on the architecture documentation already loaded in this conversation, here's a clear summary:
 
 ---

@@ -1,4 +1,8 @@
-//! OIL parser (current stage)
+//! OIL AST construction and recovery layer.
+//!
+//! Source recognition/tokenization is defined by the Pest grammar in
+//! `oil.pest`. This module consumes the stable Pest-produced token contract,
+//! builds the existing AST, and retains the compiler's multi-error recovery.
 //!
 //! What this parser currently supports:
 //! - top-level declarations: `use`/`import`, `set`, `predicate`, `fact`, `rule`
@@ -39,7 +43,7 @@ impl ParseError {
     }
 }
 
-/// Recursive-descent parser state.
+/// AST builder state over Pest-produced tokens.
 #[derive(Debug, Clone)]
 pub struct Parser {
     tokens: Vec<Token>,

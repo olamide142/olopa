@@ -785,9 +785,57 @@ const FALLBACK_FIELD_METADATA: &[FallbackFieldMetadata] = &[
         is_time_context: false,
     },
     FallbackFieldMetadata {
+        canonical: "process.host_id",
+        value_type: FieldType::String,
+        aliases: &["host_id"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "process.secure_connect_session_id",
+        value_type: FieldType::String,
+        aliases: &["process.sc_session_id"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
         canonical: "process.elevated",
         value_type: FieldType::Bool,
         aliases: &["elevated", "is_root", "process.is_root"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "process.cgroup_id",
+        value_type: FieldType::Number,
+        aliases: &["cgroup_id", "process.cgroup.id"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "container.cgroup_id",
+        value_type: FieldType::Number,
+        aliases: &["container.cgroup.id"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "container.container_id",
+        value_type: FieldType::String,
+        aliases: &["container.id"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "container.cgroup_path",
+        value_type: FieldType::String,
+        aliases: &["cgroup_path", "container.cgroup.path"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "container.pod_uid",
+        value_type: FieldType::String,
+        aliases: &["pod_uid", "container.pod.uid"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "container.exists",
+        value_type: FieldType::Bool,
+        aliases: &["in_container"],
         is_time_context: false,
     },
     FallbackFieldMetadata {
@@ -833,6 +881,24 @@ const FALLBACK_FIELD_METADATA: &[FallbackFieldMetadata] = &[
         is_time_context: false,
     },
     FallbackFieldMetadata {
+        canonical: "host.id",
+        value_type: FieldType::String,
+        aliases: &["host_id"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "host.hostname",
+        value_type: FieldType::String,
+        aliases: &["hostname"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "host.secure_connect_enabled",
+        value_type: FieldType::Bool,
+        aliases: &["secure_connect_enabled"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
         canonical: "network.process_id",
         value_type: FieldType::Number,
         aliases: &["network.process_id", "net.process_id", "net.proc_id"],
@@ -842,6 +908,18 @@ const FALLBACK_FIELD_METADATA: &[FallbackFieldMetadata] = &[
         canonical: "network.direction",
         value_type: FieldType::String,
         aliases: &["direction"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "network.tunneled",
+        value_type: FieldType::Bool,
+        aliases: &["tunneled"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "network.secure_connect_session_id",
+        value_type: FieldType::String,
+        aliases: &["network.sc_session_id"],
         is_time_context: false,
     },
     FallbackFieldMetadata {
@@ -980,6 +1058,48 @@ const FALLBACK_FIELD_METADATA: &[FallbackFieldMetadata] = &[
         aliases: &["dns_entropy", "dns.entropy"],
         is_time_context: false,
     },
+    FallbackFieldMetadata {
+        canonical: "secure_connect.id",
+        value_type: FieldType::String,
+        aliases: &["sc.id", "secure_connect.session_id"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "secure_connect.active",
+        value_type: FieldType::Bool,
+        aliases: &["sc.active"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "secure_connect.established",
+        value_type: FieldType::Bool,
+        aliases: &["sc.established"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "secure_connect.state",
+        value_type: FieldType::String,
+        aliases: &["sc.state"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "sc_peer.latest_handshake_age",
+        value_type: FieldType::Number,
+        aliases: &["secure_connect.peer.latest_handshake_age"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "sc_peer.rx_bytes",
+        value_type: FieldType::Number,
+        aliases: &["secure_connect.peer.rx_bytes"],
+        is_time_context: false,
+    },
+    FallbackFieldMetadata {
+        canonical: "sc_peer.tx_bytes",
+        value_type: FieldType::Number,
+        aliases: &["secure_connect.peer.tx_bytes"],
+        is_time_context: false,
+    },
 ];
 
 fn build_field_specs(program: &RuntimeProgram) -> Vec<FieldSpec> {
@@ -1066,8 +1186,18 @@ fn lookup_field_extractor(canonical: &str) -> Option<fn(&IngestEvent) -> Value> 
         "process.parent.id" | "process.parent.pid" => Some(field_process_parent_id),
         "process.uid" => Some(field_uid),
         "process.user.uid" | "user.uid" => Some(field_user_uid),
+        "process.host_id" => Some(field_host_id),
+        "process.secure_connect_session_id" => Some(field_secure_connect_id),
         "process.elevated" => Some(field_process_elevated),
+        "process.cgroup_id" | "container.cgroup_id" => Some(field_cgroup_id),
+        "process.container_id" | "container.container_id" => Some(field_container_id),
+        "container.cgroup_path" => Some(field_container_cgroup_path),
+        "container.pod_uid" => Some(field_container_pod_uid),
+        "container.exists" => Some(field_container_exists),
         "host.risk_score" => Some(field_host_risk_score),
+        "host.id" => Some(field_host_id),
+        "host.hostname" => Some(field_hostname),
+        "host.secure_connect_enabled" => Some(field_secure_connect_enabled),
         "event.event_type" => Some(field_event_type),
         "event.vertex_id" => Some(field_vertex_id),
         "event.dst_vertex_id" => Some(field_dst_vertex_id),
@@ -1076,6 +1206,8 @@ fn lookup_field_extractor(canonical: &str) -> Option<fn(&IngestEvent) -> Value> 
         "event.risk_score" => Some(field_risk_score),
         "network.process_id" => Some(field_network_process_id),
         "network.direction" => Some(field_network_direction),
+        "network.tunneled" => Some(field_network_tunneled),
+        "network.secure_connect_session_id" => Some(field_secure_connect_id),
         "network.dest.domain" | "network.dest.ip" => Some(field_network_dest_ip),
         "network.dest.port" => Some(field_network_dest_port),
         "network.dest.is_internal" => Some(field_network_dest_is_internal),
@@ -1111,6 +1243,15 @@ fn lookup_field_extractor(canonical: &str) -> Option<fn(&IngestEvent) -> Value> 
         "dns.domain.value" => Some(field_dns_domain_value),
         "dns.query_hash" => Some(field_dns_query_hash),
         "dns.domain.entropy" => Some(field_dns_domain_entropy),
+        // Secure Connect live session fields.
+        "secure_connect.id" => Some(field_secure_connect_id),
+        "secure_connect.active" => Some(field_secure_connect_active),
+        "secure_connect.established" => Some(field_secure_connect_active),
+        "secure_connect.state" => Some(field_secure_connect_state),
+        "secure_connect.host_id" => Some(field_host_id),
+        "sc_peer.latest_handshake_age" => Some(field_secure_connect_handshake_age),
+        "sc_peer.rx_bytes" => Some(field_secure_connect_rx_bytes),
+        "sc_peer.tx_bytes" => Some(field_secure_connect_tx_bytes),
         _ => None,
     }
 }
@@ -3217,8 +3358,121 @@ fn field_process_elevated(event: &IngestEvent) -> Value {
     Value::Bool(event.uid == 0)
 }
 
+fn field_cgroup_id(event: &IngestEvent) -> Value {
+    if event.cgroup_id == 0 {
+        Value::Null
+    } else {
+        Value::Number(event.cgroup_id as f64)
+    }
+}
+
+fn field_container_id(event: &IngestEvent) -> Value {
+    crate::cgroup::lookup(event.cgroup_id)
+        .and_then(|metadata| metadata.container_id)
+        .map(Value::String)
+        .unwrap_or(Value::Null)
+}
+
+fn field_container_cgroup_path(event: &IngestEvent) -> Value {
+    crate::cgroup::lookup(event.cgroup_id)
+        .map(|metadata| Value::String(metadata.path))
+        .unwrap_or(Value::Null)
+}
+
+fn field_container_pod_uid(event: &IngestEvent) -> Value {
+    crate::cgroup::lookup(event.cgroup_id)
+        .and_then(|metadata| metadata.pod_uid)
+        .map(Value::String)
+        .unwrap_or(Value::Null)
+}
+
+fn field_container_exists(event: &IngestEvent) -> Value {
+    Value::Bool(
+        crate::cgroup::lookup(event.cgroup_id)
+            .and_then(|metadata| metadata.container_id)
+            .is_some(),
+    )
+}
+
 fn field_host_risk_score(event: &IngestEvent) -> Value {
     Value::Number(event.risk_score as f64)
+}
+
+fn field_host_id(_event: &IngestEvent) -> Value {
+    Value::String(runtime_host_identity().0.clone())
+}
+
+fn field_hostname(_event: &IngestEvent) -> Value {
+    Value::String(runtime_host_identity().1.clone())
+}
+
+fn runtime_host_identity() -> &'static (String, String) {
+    static IDENTITY: OnceLock<(String, String)> = OnceLock::new();
+    IDENTITY.get_or_init(|| {
+        let hostname = std::env::var("HOSTNAME")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "agent-local".to_string());
+        let host_id = std::env::var("OLOPA_INGEST_HOST_ID")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| hostname.clone());
+        (host_id, hostname)
+    })
+}
+
+fn secure_connect_is_active(state: crate::secure_connect::SessionState) -> bool {
+    matches!(
+        state,
+        crate::secure_connect::SessionState::Healthy
+            | crate::secure_connect::SessionState::Elevated
+            | crate::secure_connect::SessionState::Restricted
+    )
+}
+
+fn field_secure_connect_enabled(_event: &IngestEvent) -> Value {
+    Value::Bool(crate::secure_connect::current_health().enabled)
+}
+
+fn field_secure_connect_id(_event: &IngestEvent) -> Value {
+    crate::secure_connect::current_health()
+        .session_id
+        .map(Value::String)
+        .unwrap_or(Value::Null)
+}
+
+fn field_secure_connect_active(_event: &IngestEvent) -> Value {
+    Value::Bool(secure_connect_is_active(
+        crate::secure_connect::current_health().state,
+    ))
+}
+
+fn field_secure_connect_state(_event: &IngestEvent) -> Value {
+    let health = crate::secure_connect::current_health();
+    if !health.enabled {
+        return Value::Null;
+    }
+    Value::String(format!("{:?}", health.state).to_ascii_lowercase())
+}
+
+fn field_secure_connect_handshake_age(_event: &IngestEvent) -> Value {
+    let handshake = crate::secure_connect::current_health().last_handshake_unix;
+    if handshake == 0 {
+        return Value::Null;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    Value::Number(now.saturating_sub(handshake).saturating_mul(1_000_000_000) as f64)
+}
+
+fn field_secure_connect_rx_bytes(_event: &IngestEvent) -> Value {
+    Value::Number(crate::secure_connect::current_health().bytes_rx as f64)
+}
+
+fn field_secure_connect_tx_bytes(_event: &IngestEvent) -> Value {
+    Value::Number(crate::secure_connect::current_health().bytes_tx as f64)
 }
 
 fn field_event_type(event: &IngestEvent) -> Value {
@@ -3246,15 +3500,24 @@ fn field_risk_score(event: &IngestEvent) -> Value {
 }
 
 fn field_network_direction(event: &IngestEvent) -> Value {
-    if event.event_type == 3 {
+    if matches!(event.event_type, 3 | 7) {
         Value::String("outbound".to_string())
     } else {
         Value::Null
     }
 }
 
+fn field_network_tunneled(event: &IngestEvent) -> Value {
+    if !matches!(event.event_type, 3 | 7) {
+        return Value::Null;
+    }
+    Value::Bool(secure_connect_is_active(
+        crate::secure_connect::current_health().state,
+    ))
+}
+
 fn field_network_process_id(event: &IngestEvent) -> Value {
-    if event.event_type == 3 {
+    if matches!(event.event_type, 3 | 7) {
         Value::Number(event.pid as f64)
     } else {
         Value::Null
@@ -3262,7 +3525,7 @@ fn field_network_process_id(event: &IngestEvent) -> Value {
 }
 
 fn field_network_dest_ip(event: &IngestEvent) -> Value {
-    if event.event_type == 3 && event.net_dst_ip != 0 {
+    if matches!(event.event_type, 3 | 7) && event.net_dst_ip != 0 {
         Value::Ip(event.net_dst_ip)
     } else {
         Value::Null
@@ -3270,7 +3533,7 @@ fn field_network_dest_ip(event: &IngestEvent) -> Value {
 }
 
 fn field_network_dest_port(event: &IngestEvent) -> Value {
-    if event.event_type == 3 {
+    if matches!(event.event_type, 3 | 7) {
         Value::Number(event.net_dst_port as f64)
     } else {
         Value::Null
@@ -3278,7 +3541,7 @@ fn field_network_dest_port(event: &IngestEvent) -> Value {
 }
 
 fn field_network_dest_is_internal(event: &IngestEvent) -> Value {
-    if event.event_type != 3 || event.net_dst_ip == 0 {
+    if !matches!(event.event_type, 3 | 7) || event.net_dst_ip == 0 {
         return Value::Null;
     }
     let ip = Ipv4Addr::from(event.net_dst_ip);

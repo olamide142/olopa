@@ -1,8 +1,12 @@
 import { Routes, Route } from "react-router-dom";
-import { Server, ShieldAlert, Network, FileCode2, Cpu, Download } from "lucide-react";
+import { Server, ShieldAlert, Network, Download } from "lucide-react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
 import { MetricsPanel } from "@/components/panels/MetricsPanel";
+import { OilEditorPanel } from "@/components/panels/OilEditorPanel";
+import { CompilerPanel } from "@/components/panels/CompilerPanel";
+import { RulesPanel } from "@/components/panels/RulesPanel";
+import { DeploymentsPanel } from "@/components/panels/DeploymentsPanel";
 import { Placeholder } from "@/components/panels/Placeholder";
 import { useIngestFeed } from "@/hooks/useIngestFeed";
 
@@ -52,26 +56,10 @@ export default function App() {
                 />
               }
             />
-            <Route
-              path="/oil"
-              element={
-                <Placeholder
-                  title="OIL Editor"
-                  icon={FileCode2}
-                  description="Author and check OIL detection rules against the compiler."
-                />
-              }
-            />
-            <Route
-              path="/compiler"
-              element={
-                <Placeholder
-                  title="Compiler"
-                  icon={Cpu}
-                  description="Run the oilc pipeline: AST, MIR, runtime-IR and codegen with diagnostics."
-                />
-              }
-            />
+            <Route path="/oil" element={<OilEditorPanel />} />
+            <Route path="/compiler" element={<CompilerPanel />} />
+            <Route path="/rules" element={<RulesPanel />} />
+            <Route path="/deployments" element={<DeploymentsPanel />} />
             <Route
               path="/install"
               element={

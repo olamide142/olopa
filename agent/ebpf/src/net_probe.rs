@@ -18,13 +18,13 @@
 
 use aya_ebpf::{
     helpers::{
-        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_ns,
-        bpf_probe_read_user,
+        bpf_get_current_cgroup_id, bpf_get_current_comm, bpf_get_current_pid_tgid,
+        bpf_get_current_uid_gid, bpf_ktime_get_ns, bpf_probe_read_user,
     },
     macros::tracepoint,
     programs::TracePointContext,
 };
-use olopa_common::{EVENT_KIND_NET, NetEvent};
+use olopa_common::{NetEvent, EVENT_KIND_NET};
 
 use crate::EVENTS;
 
@@ -92,6 +92,7 @@ unsafe fn try_connect(ctx: &TracePointContext) -> u32 {
 
     (*event).kind = EVENT_KIND_NET;
     (*event).ts_ns = bpf_ktime_get_ns();
+    (*event).cgroup_id = bpf_get_current_cgroup_id();
     // Keep network-byte-order values in the event payload.
     // Userspace is responsible for converting for display.
     (*event).dst_ip = addr.sin_addr;

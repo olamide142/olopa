@@ -2,8 +2,9 @@
 
 This document describes the grammar currently accepted by the Rust parser in:
 
+- `src/parser/oil.pest` (authoritative Pest lexical grammar)
+- `src/schema/schema.pest` (typed stdlib schema grammar)
 - `src/parser/mod.rs`
-- `src/lexer/mod.rs`
 - `src/lexer/enums.rs`
 
 It is intentionally the **implemented subset**, not the broader language vision.

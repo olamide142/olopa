@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 import subprocess
@@ -26,9 +27,25 @@ router = APIRouter(prefix="/api/v1/rules", tags=["rules"])
 # -- Request / Response Schemas ------------------------------------------------
 
 class CreateRuleRequest(BaseModel):
-    name: str = Field(..., min_length=2, max_length=128, example="detect_suspicious_pty")
-    description: Optional[str] = Field(None, example="Detect interactive pty allocation under webserver processes")
-    content: str = Field(..., min_length=5, example="rule detect_pty { from process where comm == \"python\" }")
+    name: str = Field(
+        ...,
+        min_length=2,
+        max_length=128,
+        json_schema_extra={"example": "detect_suspicious_pty"},
+    )
+    description: Optional[str] = Field(
+        None,
+        json_schema_extra={
+            "example": "Detect interactive pty allocation under webserver processes"
+        },
+    )
+    content: str = Field(
+        ...,
+        min_length=5,
+        json_schema_extra={
+            "example": 'rule detect_pty { from process where comm == "python" }'
+        },
+    )
     changelog: Optional[str] = Field(default="Initial rule version")
 
 
@@ -57,7 +74,10 @@ class ValidateRuleResponse(BaseModel):
 
 
 class RuleTestFixture(BaseModel):
-    event_type: str = Field(..., example="process_exec")
+    event_type: str = Field(
+        ...,
+        json_schema_extra={"example": "process_exec"},
+    )
     pid: int = Field(default=1001)
     comm: str = Field(default="bash")
     filename: Optional[str] = Field(default="/bin/bash")
@@ -105,85 +125,169 @@ class RuleResponse(BaseModel):
 
 # -- Helper function to execute oilc CLI for compilation/validation ----------
 
-def compile_oil_source(content: str) -> Dict[str, Any]:
+async def compile_oil_source(content: str) -> Dict[str, Any]:
     """Invoke oilc compiler on source string and return result envelope."""
     manifest_path = Path(settings.oilc_manifest_path)
-    if not manifest_path.is_file():
+    compiler_binary = (
+        Path(settings.oilc_binary_path) if settings.oilc_binary_path else None
+    )
+    if compiler_binary is not None and not compiler_binary.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Compiler binary not found at {compiler_binary}",
+        )
+    if compiler_binary is None and not manifest_path.is_file():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Compiler manifest not found at {manifest_path}",
         )
 
-    with tempfile.NamedTemporaryFile("w", suffix=".oil", delete=False) as tf:
-        tf.write(content)
-        tf_path = Path(tf.name)
-
-    try:
-        cmd = [
-            "cargo",
-            "run",
-            "--manifest-path",
-            str(manifest_path),
-            "--quiet",
-            "--",
-            "compile",
-            str(tf_path),
-            "--format",
-            "json",
-        ]
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=settings.compiler_timeout_s,
+    with tempfile.TemporaryDirectory(prefix="olopa-rule-compile-") as temp_dir:
+        tf_path = Path(temp_dir) / "rule.oil"
+        artifact_path = Path(temp_dir) / "runtime-ir.json"
+        tf_path.write_text(content, encoding="utf-8")
+        cmd = (
+            [str(compiler_binary)]
+            if compiler_binary is not None
+            else [
+                "cargo",
+                "run",
+                "--locked",
+                "--manifest-path",
+                str(manifest_path),
+                "--quiet",
+                "--",
+            ]
         )
-    except subprocess.TimeoutExpired as exc:
-        tf_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="oilc compilation timed out",
-        ) from exc
-    finally:
-        tf_path.unlink(missing_ok=True)
+        cmd.extend([
+            "--source",
+            str(tf_path),
+            "--mode",
+            "check",
+            "--diagnostics-format",
+            "json",
+            "--emit-runtime-ir",
+            str(artifact_path),
+        ])
+        try:
+            compiler_process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    compiler_process.communicate(),
+                    timeout=settings.compiler_timeout_s,
+                )
+            except TimeoutError as exc:
+                compiler_process.kill()
+                await compiler_process.wait()
+                raise HTTPException(
+                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                    detail="oilc compilation timed out",
+                ) from exc
+            proc = subprocess.CompletedProcess(
+                args=cmd,
+                returncode=compiler_process.returncode,
+                stdout=stdout_bytes.decode("utf-8", errors="replace"),
+                stderr=stderr_bytes.decode("utf-8", errors="replace"),
+            )
+        except HTTPException:
+            raise
+        except OSError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"failed to execute oilc: {exc}",
+            ) from exc
 
-    if proc.returncode != 0:
-        err_msg = proc.stderr.strip() or proc.stdout.strip() or "Compilation failed"
-        return {
-            "valid": False,
-            "diagnostics": [
+        try:
+            report = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            report = None
+
+        diagnostics: list[dict[str, Any]] = []
+        if isinstance(report, dict):
+            raw_diagnostics = list(report.get("project_diagnostics", []))
+            for unit in report.get("units", []):
+                if isinstance(unit, dict):
+                    raw_diagnostics.extend(unit.get("diagnostics", []))
+            for item in raw_diagnostics:
+                if not isinstance(item, dict):
+                    continue
+                span = item.get("span")
+                start = span.get("start") if isinstance(span, dict) else None
+                line = None
+                column = None
+                if isinstance(start, int) and 0 <= start <= len(content):
+                    line = content.count("\n", 0, start) + 1
+                    line_start = content.rfind("\n", 0, start)
+                    column = start - line_start
+                stage_name = str(item.get("stage") or "compiler").upper()
+                diagnostics.append(
+                    {
+                        "severity": "error" if item.get("is_error") else "warning",
+                        "code": f"OILC_{stage_name}",
+                        "message": str(item.get("message") or "Compiler diagnostic"),
+                        "line": line,
+                        "column": column,
+                    }
+                )
+
+        summary = report.get("summary", {}) if isinstance(report, dict) else {}
+        valid = (
+            proc.returncode == 0
+            and summary.get("failed", 0) == 0
+            and artifact_path.is_file()
+        )
+        if not valid and not diagnostics:
+            diagnostics.append(
                 {
                     "severity": "error",
                     "code": "COMPILER_ERROR",
-                    "message": err_msg,
+                    "message": proc.stderr.strip()
+                    or proc.stdout.strip()
+                    or "Compilation failed",
                     "line": 1,
                     "column": 1,
                 }
-            ],
-            "compiled_ir": None,
-        }
+            )
 
-    try:
-        ir_data = json.loads(proc.stdout)
+        ir_data = None
+        if valid:
+            try:
+                ir_data = json.loads(artifact_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                diagnostics.append(
+                    {
+                        "severity": "error",
+                        "code": "RUNTIME_IR_READ_ERROR",
+                        "message": f"Failed to read runtime IR artifact: {exc}",
+                        "line": None,
+                        "column": None,
+                    }
+                )
+                valid = False
+
         return {
-            "valid": True,
-            "diagnostics": [],
+            "valid": valid,
+            "diagnostics": diagnostics,
             "compiled_ir": ir_data,
         }
-    except json.JSONDecodeError as exc:
-        return {
-            "valid": False,
-            "diagnostics": [
-                {
-                    "severity": "error",
-                    "code": "JSON_PARSE_ERROR",
-                    "message": f"Failed to parse compiler output: {proc.stdout[:200]}",
-                    "line": 1,
-                    "column": 1,
-                }
-            ],
-            "compiled_ir": None,
-        }
+
+
+def require_valid_compilation(compilation: Dict[str, Any]) -> None:
+    """Reject persistence of a rule that cannot produce deployable runtime IR."""
+    if compilation.get("valid") and compilation.get("compiled_ir") is not None:
+        return
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "code": "RULE_INVALID",
+            "message": "Rule failed compilation and was not persisted",
+            "diagnostics": compilation.get("diagnostics", []),
+        },
+    )
 
 
 # -- Endpoints -----------------------------------------------------------------
@@ -206,7 +310,8 @@ async def create_rule(
         )
 
     # Compile source
-    comp_res = compile_oil_source(req.content)
+    comp_res = await compile_oil_source(req.content)
+    require_valid_compilation(comp_res)
 
     rule = Rule(
         tenant_id=ctx.tenant_id,
@@ -290,8 +395,12 @@ async def create_rule_version(
             detail=f"Rule '{rule_id}' not found",
         )
 
-    next_ver_num = len(rule.versions) + 1
-    comp_res = compile_oil_source(req.content)
+    comp_res = await compile_oil_source(req.content)
+    require_valid_compilation(comp_res)
+    current_max = db.scalar(
+        select(func.max(RuleVersion.version)).where(RuleVersion.rule_id == rule.id)
+    )
+    next_ver_num = int(current_max or 0) + 1
     content_hash = RuleVersion.compute_hash(req.content)
 
     new_ver = RuleVersion(
@@ -355,7 +464,7 @@ async def validate_rule(
     ctx: RequestContext = Depends(require_analyst),
 ) -> ValidateRuleResponse:
     """Validate OIL rule content against the compiler without persisting."""
-    comp_res = compile_oil_source(req.content)
+    comp_res = await compile_oil_source(req.content)
     diagnostics = [DiagnosticItem(**d) for d in comp_res.get("diagnostics", [])]
     return ValidateRuleResponse(
         valid=comp_res.get("valid", False),
@@ -370,7 +479,7 @@ async def test_rule(
     ctx: RequestContext = Depends(require_analyst),
 ) -> TestRuleResponse:
     """Test an OIL rule against event fixtures."""
-    comp_res = compile_oil_source(req.content)
+    comp_res = await compile_oil_source(req.content)
     diagnostics = [DiagnosticItem(**d) for d in comp_res.get("diagnostics", [])]
 
     if not comp_res.get("valid"):
