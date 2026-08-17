@@ -21,6 +21,8 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // index.css imports the shared design tokens from ../../design.
+    fs: { allow: [".", "../../design"] },
     proxy: {
       // In dev, proxy API calls to the running control plane.
       "/api": "http://127.0.0.1:8100",

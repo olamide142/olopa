@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+/*
+  Colour, radius and the mono stack come from the shared design system, so the
+  desktop app and the fleet console cannot drift apart. See app/design/README.md.
+
+  Everything below is desktop chrome only — window behaviour and instrument
+  density. No colour values live here.
+*/
+@import "../../design/tokens.css";
+
+@custom-variant dark (&:is(.dark *));
+
+* {
+  border-color: var(--border);
+  min-width: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  /* A desktop chrome should not rubber-band or select like a web page. */
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Anything the operator may need to copy opts back in. */
+code,
+pre,
+input,
+textarea,
+.selectable {
+  user-select: text;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes pulse-ring {
+  0% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+.pulse-ring {
+  animation: pulse-ring 1.6s ease-out infinite;
+}

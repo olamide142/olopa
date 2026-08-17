@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "state": "healthy",
+  "device_id": "dev-7f3a91c2",
+  "session_id": "sess-41b0d8e5",
+  "interface": "olopa0",
+  "profile_version": 4,
+  "last_heartbeat_unix": 1786910804,
+  "last_handshake_unix": 1786910791,
+  "bytes_tx": 48213904,
+  "bytes_rx": 210394881,
+  "reconnect_count": 1,
+  "policy_apply_ms": 34,
+  "revoke_apply_ms": 0,
+  "kill_switch_apply_ms": 11,
+  "posture_updated_unix": 1786910672,
+  "last_error": null
+}
