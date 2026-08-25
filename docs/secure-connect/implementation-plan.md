@@ -548,11 +548,14 @@ Exit criteria:
 - Risk: tight coupling with ingest causes contention.
   - Mitigation: separate APIs and workers for secure-connect orchestration.
 
-## 17) Immediate next implementation tasks
+## 17) Original implementation sequence (complete)
 
-1. Create secure-connect API schema and route stubs in control plane.
-2. Add agent module scaffolding and config parser for `OLOPA_SC_*`.
-3. Implement enrollment token issuance/exchange with JWT `jti` tracking, mTLS cert binding, and atomic redemption.
-4. Implement minimal WireGuard session bring-up/teardown behind feature flag with local-only private key generation.
-5. Implement profile-driven routes/DNS and baseline heartbeat posture payload.
-6. Add basic `olopa status --verbose` secure-connect health block + revoke latency metrics.
+The original first slice is retained here as a delivery record. All six items shipped;
+current platform work is tracked in `docs/olopa-implementation-todo.md`.
+
+1. [x] Create secure-connect API schema and routes in the control plane.
+2. [x] Add the agent subsystem and validated `OLOPA_SC_*` configuration.
+3. [x] Implement single-use enrollment with JWT `jti` tracking, mTLS certificate binding, and atomic redemption.
+4. [x] Implement WireGuard session bring-up/teardown behind a disabled-by-default feature flag with local-only private key generation.
+5. [x] Implement profile-driven routes/DNS and heartbeat posture reporting.
+6. [x] Add `olopa status --verbose` Secure Connect health and revoke-latency metrics.

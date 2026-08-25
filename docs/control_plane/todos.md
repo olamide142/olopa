@@ -327,8 +327,9 @@ Phase exit criteria:
 - [ ] IDE backend endpoints (templates/drafts/diff)
 - [x] Secure Connect orchestration (enrollment, sessions, policy, rekey,
   revocation, risk transitions, detection-stream subscription, session reaping,
-  SLO metrics, and the gateway reconciler in `app/secure_connect_gateway/`;
-  multi-gateway failover and scale testing remain)
+  SLO metrics, multi-gateway failover, load testing, and the gateway reconciler
+  in `app/secure_connect_gateway/`; PostgreSQL migration and privileged live-host
+  validation remain for production rollout)
 - [ ] Incident management APIs and SLA workflows
 - [ ] Agent fleet desired-state management
 - [ ] Typed settings lifecycle with rollback

@@ -1,6 +1,7 @@
 # Olopa Implementation TODO
 
-Actionable TODO derived from the current codebase state (agent, oilc, app/server, web).
+Actionable TODO derived from the current codebase state (agent, oilc, ingest server,
+control plane, web, and desktop).
 
 ## P0 - End-to-End Runtime Path (Ship First)
 
@@ -12,7 +13,7 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
   - Mixed compressed-batch regression coverage verifies SQL reaches `db_query_events`, SSL/DNS retain typed network protocols and attributes, and none of these families fall through to `process_exec_events`.
   - Follow-up: replace adapter parsing with a strict shared schema crate.
 - [x] Replace server `persist_placeholder(...)` with real persistence (ClickHouse/Kafka path).
-  - Implemented durable JSONL persistence in `app/server/src/telemetry.rs`.
+  - Implemented durable JSONL persistence in `app/ingest_server/src/telemetry.rs`.
   - Added optional ClickHouse HTTP sink (`INGEST_CLICKHOUSE_URL`) with JSONL fallback on insert failure.
   - Added optional SurrealDB HTTP SQL sink (`INGEST_SURREAL_URL`) with fallback to ClickHouse and then JSONL.
   - Follow-up: add Kafka/queue fanout for decoupled high-throughput ingest.
@@ -126,10 +127,10 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
   - Added hierarchical RBAC and immutable tenant binding across control status, ingest proxies, compiler, intel, rules, deployments, and audit reads.
   - Added real `oilc` diagnostics/runtime-IR persistence, invalid-rule rejection, immutable version numbering, deployment preflight, rollback transitions, and tenant-scoped idempotency.
   - Remaining control-plane work: external OIDC/JWKS, atomic audit coverage for every mutation, async jobs, and real agent-fleet rollout delivery.
-- [ ] Add end-to-end integration tests: `oilc -> runtime-ir artifact -> agent eval -> server ingest`.
-  - Progress: added `agent::tests::e2e_rule_to_runtime_to_sender_to_ingest_runtime` to validate `oilc` compilation, runtime-ir evaluation, alert payload conversion via HTTP sender logic, and ingest API contract (`/api/v1/ingest/batches` + `/api/v1/ingest/recent`).
-  - Note: test is `#[ignore]` by default because it requires local TCP bind + external ingest server process spawn (not available in restricted sandboxes).
-- [x] Add CI workflows for deterministic checks/tests across `oilc`, `agent`, and `app/server`.
+- [x] Add end-to-end integration tests: `oilc -> runtime-ir artifact -> agent eval -> server ingest`.
+  - `agent::tests::e2e_rule_to_runtime_to_sender_to_ingest_runtime` validates `oilc` compilation, runtime-ir evaluation, alert payload conversion via HTTP sender logic, and the ingest API contract (`/api/v1/ingest/batches` + `/api/v1/ingest/recent`).
+  - The test is `#[ignore]` in the normal agent suite because it binds a local port and spawns the ingest server; CI runs it explicitly in the gated `e2e-runtime-to-ingest` job.
+- [x] Add CI workflows for deterministic checks/tests across `oilc`, `agent`, and `app/ingest_server`.
   - `.github/workflows/ci.yml` runs `oilc`, `agent`, and ingest-server suites plus the gated `e2e-runtime-to-ingest` job.
   - Follow-up: add lint/format gates and a load/perf smoke job.
 - [ ] Add observability surface: metrics/traces/log correlation across compiler, agent, server.
@@ -168,9 +169,9 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
 - [x] Build the Secure Connect gateway plane reconciler (`app/secure_connect_gateway/`).
   - Pulls `GET /gateways/{id}/peers` and converges a WireGuard interface with `wg set`, removals first; peer removal is the revocation path.
   - Never touches interface configuration, never sees private keys, and never revokes on a failed poll — a control-plane outage leaves the peer set untouched.
-  - Dependency-free Python with `--once`/`--dry-run` modes, a hardened systemd unit, and 14 tests.
+  - Dependency-free Python with `--once`/`--dry-run` modes, a hardened systemd unit, and 17 tests.
 - [ ] Add SQL semantic policy support (example: block process X from reading table `finance` on DB Y).
-  - Progress: runtime field model already resolves `sql.query_hash`, `sql.query_class`, and `sql.db_port`, so rules can match uprobe-derived SQL today.
-  - Remaining: extend the field model with table-level entities (`db.query`, `db.table`, `db.operation`, `db.server`) once statement capture lands.
+  - Detection is complete: statement capture is redacted before use and runtime fields resolve query class, database, operation, and `db.tables`, so OIL rules can match uprobe-derived table access today.
+  - Remaining: choose and implement the enforcement boundary. Candidate paths are a client-library fail-close hook, a DB proxy, or a native DB plugin; detection alone cannot safely cancel a query that has already entered the client library.
   - Add policy evaluation mode transitions: observe -> enforce for staged rollout safety.
-  - Define enforcement strategy per engine path (client-library fail-close hook, DB proxy, or native DB plugin) with deterministic rollback.
+  - Require deterministic rollback and live database validation for each supported engine path.
