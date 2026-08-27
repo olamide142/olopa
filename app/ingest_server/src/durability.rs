@@ -511,6 +511,7 @@ mod tests {
             schema_version: 1,
             batch_id: Some(id.into()),
             process_exec_events: vec![ProcessExecEvent {
+                ts_unix_ms: None,
                 pid: 1,
                 tgid: 1,
                 ppid: 0,

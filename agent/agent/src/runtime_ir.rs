@@ -3946,7 +3946,7 @@ fn event_local_time(event: &IngestEvent) -> Option<libc::tm> {
 // Convert that to wall-clock nanoseconds using a startup anchor so
 // weekday/hour rules evaluate against real local time.
 /// Convert probe timestamp to realtime nanoseconds.
-fn event_realtime_ns(ts_ns: u64) -> Option<u64> {
+pub(crate) fn event_realtime_ns(ts_ns: u64) -> Option<u64> {
     // If we already have epoch-like ns (e.g. tests or future probe change),
     // use it directly.
     if ts_ns >= EPOCH_NS_MIN_2000 {

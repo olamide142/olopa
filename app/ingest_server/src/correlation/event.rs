@@ -8,6 +8,37 @@ use crate::telemetry::{
 };
 use super::value::Value;
 
+/// Furthest an agent-stamped event time may lag arrival and still be trusted.
+///
+/// Agents spool while a backend is unreachable, so a genuinely old event is
+/// normal; a full day bounds how far a correlation window can be dragged back.
+const MAX_EVENT_TS_LAG_MS: u64 = 24 * 60 * 60 * 1_000;
+
+/// Furthest an agent-stamped event time may lead arrival and still be trusted.
+///
+/// Anything further ahead is clock skew, not a real observation.
+const MAX_EVENT_TS_LEAD_MS: u64 = 5 * 60 * 1_000;
+
+/// Resolve the event time used for correlation windows.
+///
+/// Prefers the agent's own observation time, which is what makes window
+/// semantics reproducible on replay. Falls back to batch arrival time when the
+/// agent sent none (schema_version < 3) or when the stamp is far enough outside
+/// the arrival time to indicate a skewed agent clock rather than a late event.
+/// Returns the resolved time and whether the fallback was taken.
+pub fn resolve_event_ts(agent_ts_unix_ms: Option<u64>, arrival_ms: u64) -> (u64, bool) {
+    match agent_ts_unix_ms {
+        Some(ts)
+            if ts >= arrival_ms.saturating_sub(MAX_EVENT_TS_LAG_MS)
+                && ts <= arrival_ms.saturating_add(MAX_EVENT_TS_LEAD_MS) =>
+        {
+            (ts, false)
+        }
+        Some(_) => (arrival_ms, true),
+        None => (arrival_ms, true),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventFamily {
     ProcessExec,
@@ -117,6 +148,47 @@ impl<'a> UnifiedEventRef<'a> {
             EventDataRef::DbQuery(q) => get_db_query_field(q, clean_path),
             EventDataRef::Heartbeat(h) => get_heartbeat_field(h, clean_path),
         }
+    }
+
+    /// Stable content identity for this event.
+    ///
+    /// Derived only from what the agent observed - never from arrival or
+    /// evaluation time - so the same event yields the same key in the hot path
+    /// and when replayed later out of a persistent store.
+    pub fn identity_key(&self) -> String {
+        let body = match self.data {
+            EventDataRef::Process(p) => {
+                format!("{}|{}|{}|{}", p.pid, p.ppid, p.comm, p.filename)
+            }
+            EventDataRef::File(f) => format!("{}|{}|{}", f.pid, f.operation, f.path),
+            EventDataRef::Net(n) => format!(
+                "{}|{}|{}|{}|{}",
+                n.pid,
+                n.protocol,
+                n.direction,
+                n.dst_ip.as_deref().unwrap_or(""),
+                n.dst_port.unwrap_or(0)
+            ),
+            EventDataRef::DbQuery(q) => format!(
+                "{}|{}|{}|{}|{}",
+                q.pid,
+                q.db_engine,
+                q.operation,
+                q.database.as_deref().unwrap_or(""),
+                q.statement_fingerprint
+            ),
+            EventDataRef::Heartbeat(h) => {
+                format!("{}|{}", h.agent_version, h.kernel_version)
+            }
+        };
+
+        format!(
+            "{}|{}|{}|{}",
+            self.kind.as_str(),
+            self.host_id,
+            self.ts_unix_ms,
+            body
+        )
     }
 
     /// Convert to an owned event for sliding-window buffering.

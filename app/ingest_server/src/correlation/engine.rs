@@ -19,7 +19,7 @@ use super::event::{EventFamily, OwnedEvent, UnifiedEventRef};
 use super::intel::CentralIntelStore;
 use super::ir::{
     parse_runtime_program, RuntimeAction, RuntimeExpr, RuntimeJoin, RuntimeProgram, RuntimeRule,
-    RuntimeRuleClass, RuntimeScore, RuntimeSource,
+    RuntimeScore, RuntimeSource,
 };
 use super::state::CentralCallableState;
 use super::value::Value;
@@ -32,6 +32,9 @@ pub struct CompiledRule {
     pub sources: Vec<RuntimeSource>,
     pub source_families: Vec<(String, EventFamily)>,
     pub joins: Vec<RuntimeJoin>,
+    /// Field-path pairs from the rule's `on` clauses that the window key is
+    /// built from. Empty when the rule declares no usable equality join.
+    pub join_terms: Vec<(String, String)>,
     pub window_ms: u64,
 }
 
@@ -68,10 +71,13 @@ impl CompiledRule {
 
         let window_ms = rule.window.map(|w| w.to_millis()).unwrap_or(300_000); // 5 min default
 
+        let join_terms = extract_equi_join_terms(&rule.joins);
+
         Self {
             sources: rule.sources.clone(),
             source_families,
             joins: rule.joins.clone(),
+            join_terms,
             window_ms,
             rule,
         }
@@ -86,6 +92,9 @@ impl CompiledRule {
 pub struct CorrelationStats {
     pub rules_active: usize,
     pub events_evaluated: u64,
+    /// Events correlated against batch arrival time because the sender stamped
+    /// no usable event time. Non-zero means replay cannot reproduce this window.
+    pub events_ts_fallback: u64,
     pub matches_total: u64,
     pub alerts_emitted: u64,
     pub window_active_events: usize,
@@ -103,6 +112,7 @@ pub struct CorrelationEngine {
     events_evaluated: Arc<AtomicU64>,
     matches_total: Arc<AtomicU64>,
     alerts_emitted: Arc<AtomicU64>,
+    events_ts_fallback: Arc<AtomicU64>,
 }
 
 impl Default for CorrelationEngine {
@@ -122,6 +132,7 @@ impl CorrelationEngine {
             events_evaluated: Arc::new(AtomicU64::new(0)),
             matches_total: Arc::new(AtomicU64::new(0)),
             alerts_emitted: Arc::new(AtomicU64::new(0)),
+            events_ts_fallback: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -168,6 +179,10 @@ impl CorrelationEngine {
 
         let now_ms = current_unix_ms();
         let col_index = BatchColumnIndex::build(batch, now_ms);
+        if col_index.ts_fallback_count > 0 {
+            self.events_ts_fallback
+                .fetch_add(col_index.ts_fallback_count as u64, Ordering::Relaxed);
+        }
 
         let mut emitted_alerts = Vec::new();
 
@@ -290,7 +305,11 @@ impl CorrelationEngine {
             };
 
             let alert = CorrelatedAlert {
-                alert_id: format!("alt_{}_{}", compiled.rule.id, now_ms),
+                alert_id: CorrelatedAlert::derive_id(
+                    &compiled.rule.id,
+                    event.tenant_id,
+                    [event.identity_key()],
+                ),
                 rule_id: compiled.rule.id.clone(),
                 rule_name: compiled.rule.name.clone(),
                 severity,
@@ -483,7 +502,11 @@ impl CorrelationEngine {
                         .collect();
 
                     let alert = CorrelatedAlert {
-                        alert_id: format!("alt_corr_{}_{}", compiled.rule.id, now_ms),
+                        alert_id: CorrelatedAlert::derive_id(
+                            &compiled.rule.id,
+                            incoming_event.tenant_id,
+                            tuple.values().map(|ev| ev.identity_key()),
+                        ),
                         rule_id: compiled.rule.id.clone(),
                         rule_name: compiled.rule.name.clone(),
                         severity,
@@ -505,25 +528,63 @@ impl CorrelationEngine {
         alerts
     }
 
+    /// Derive the sliding-window bucket key for one event.
+    ///
+    /// Prefers the equality fields the rule actually declared in its `on`
+    /// clause: those keys are tenant-scoped, so a rule joining on something
+    /// shared between machines - a destination address, an account - correlates
+    /// across agents, which is the point of declaring the join.
+    ///
+    /// With no declared join there is nothing to key on but the process id, and
+    /// a bare pid means nothing across machines: pid 1001 on two hosts is two
+    /// unrelated processes. Those keys are host-scoped so they cannot collide
+    /// into one false cross-host match.
+    /// Derive the sliding-window bucket key for one event.
+    ///
+    /// Prefers the equality fields the rule actually declared in its `on`
+    /// clause: those keys are tenant-scoped, so a rule joining on something
+    /// shared between machines - a destination address, an account - correlates
+    /// across agents, which is the point of declaring the join.
+    ///
+    /// Falls back to the process id when the rule declares no join, or when it
+    /// declares one whose fields this event cannot resolve. A bare pid means
+    /// nothing across machines - pid 1001 on two hosts is two unrelated
+    /// processes - so those keys are host-scoped and cannot collide into one
+    /// false cross-host match.
     fn resolve_event_join_key(
         &self,
         event: &UnifiedEventRef<'_>,
-        _alias: &str,
+        alias: &str,
         compiled: &CompiledRule,
     ) -> String {
-        // Priority:
-        // 1. Process ID (for process-correlated rules)
-        // 2. Host ID (for around host rules)
-        // 3. Dest IP (for network rules)
-        let pid = event.get_field("pid", None);
-        if let Value::Int(p) = pid {
-            if p > 0 {
-                return format!("pid_{}", p);
+        if !compiled.join_terms.is_empty() {
+            let mut parts = Vec::with_capacity(compiled.join_terms.len());
+            let mut any_resolved = false;
+
+            for (left_path, right_path) in &compiled.join_terms {
+                // Each side of the equality names a different source. Resolving
+                // against this event's own alias picks out its side and leaves
+                // the other Null, so both sides of the join land on the same key.
+                let value = match event.get_field(left_path, Some(alias)) {
+                    Value::Null => event.get_field(right_path, Some(alias)),
+                    resolved => resolved,
+                };
+                any_resolved |= !matches!(value, Value::Null);
+                parts.push(value.to_key_string());
+            }
+
+            // A join whose fields resolve on no event would bucket the entire
+            // rule under one all-null key and join everything with everything.
+            if any_resolved {
+                return parts.join("\u{1f}");
             }
         }
 
-        if compiled.rule.class == RuntimeRuleClass::Around {
-            return format!("host_{}", event.host_id);
+        let pid = event.get_field("pid", None);
+        if let Value::Int(p) = pid {
+            if p > 0 {
+                return format!("host_{}_pid_{}", event.host_id, p);
+            }
         }
 
         format!("host_{}", event.host_id)
@@ -917,12 +978,55 @@ impl CorrelationEngine {
         CorrelationStats {
             rules_active: rules_count,
             events_evaluated: self.events_evaluated.load(Ordering::Relaxed),
+            events_ts_fallback: self.events_ts_fallback.load(Ordering::Relaxed),
             matches_total: self.matches_total.load(Ordering::Relaxed),
             alerts_emitted: self.alerts_emitted.load(Ordering::Relaxed),
             window_active_events: self.window.active_event_count(),
             facts_active: self.intel.active_count(),
         }
     }
+}
+
+/// Collect the field pairs a rule's `on` clauses join on.
+///
+/// Only equalities between two fields can key a window bucket, so `a.pid ==
+/// b.pid` is collected while a comparison against a literal is not - that is a
+/// filter, and the predicate pass already applies it. Conjunctions are walked so
+/// a compound join contributes every one of its terms; anything else is left
+/// alone rather than guessed at, and the caller falls back to pid keying.
+fn extract_equi_join_terms(joins: &[RuntimeJoin]) -> Vec<(String, String)> {
+    fn walk(expr: &RuntimeExpr, out: &mut Vec<(String, String)>) {
+        match expr {
+            RuntimeExpr::And { lhs, rhs } => {
+                walk(lhs, out);
+                walk(rhs, out);
+            }
+            RuntimeExpr::Eq { lhs, rhs } => {
+                if let (RuntimeExpr::Field { path: l }, RuntimeExpr::Field { path: r }) =
+                    (lhs.as_ref(), rhs.as_ref())
+                {
+                    if l != r {
+                        // Sorted so the pair is the same regardless of which way
+                        // round the rule author wrote the equality.
+                        let (a, b) = if l <= r { (l, r) } else { (r, l) };
+                        out.push((a.clone(), b.clone()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut terms = Vec::new();
+    for join in joins {
+        if let Some(on) = &join.on {
+            walk(on, &mut terms);
+        }
+    }
+    // Every event must build its key in the same term order.
+    terms.sort();
+    terms.dedup();
+    terms
 }
 
 fn current_unix_ms() -> u64 {

@@ -75,6 +75,12 @@ fn default_schema_version() -> u16 {
 /// Process execution event emitted by agent/runtime.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ProcessExecEvent {
+    /// Event time in unix milliseconds, stamped by the agent at observation.
+    ///
+    /// Absent from senders predating schema_version 3; the correlation engine
+    /// falls back to batch arrival time for those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts_unix_ms: Option<u64>,
     /// Process id.
     pub pid: u32,
     /// Thread-group id.
@@ -99,6 +105,12 @@ pub struct ProcessExecEvent {
 /// File event emitted by agent/runtime.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FileEvent {
+    /// Event time in unix milliseconds, stamped by the agent at observation.
+    ///
+    /// Absent from senders predating schema_version 3; the correlation engine
+    /// falls back to batch arrival time for those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts_unix_ms: Option<u64>,
     /// Process id.
     pub pid: u32,
     /// Thread-group id.
@@ -122,6 +134,12 @@ pub struct FileEvent {
 /// Network event emitted by agent/runtime.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct NetEvent {
+    /// Event time in unix milliseconds, stamped by the agent at observation.
+    ///
+    /// Absent from senders predating schema_version 3; the correlation engine
+    /// falls back to batch arrival time for those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts_unix_ms: Option<u64>,
     /// Process id.
     pub pid: u32,
     /// Thread-group id.
@@ -163,6 +181,12 @@ pub struct NetEvent {
 /// are also absent from senders predating statement capture.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DbQueryEvent {
+    /// Event time in unix milliseconds, stamped by the agent at observation.
+    ///
+    /// Absent from senders predating schema_version 3; the correlation engine
+    /// falls back to batch arrival time for those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts_unix_ms: Option<u64>,
     /// Process id issuing the query.
     pub pid: u32,
     /// Thread-group id.
@@ -197,6 +221,12 @@ pub struct DbQueryEvent {
 /// Agent health/heartbeat payload.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AgentHeartbeat {
+    /// Event time in unix milliseconds, stamped by the agent at observation.
+    ///
+    /// Absent from senders predating schema_version 3; the correlation engine
+    /// falls back to batch arrival time for those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts_unix_ms: Option<u64>,
     /// Agent software version.
     pub agent_version: String,
     /// Kernel version seen by agent.
@@ -1088,7 +1118,7 @@ impl IngestRuntime {
     /// Queue a batch for async processing and return immediate ack/backpressure hints.
     pub fn ack_batch(&self, batch: IngestBatchRequest) -> AckResponse {
         let rows = batch.row_count();
-        if !(1..=2).contains(&batch.schema_version) {
+        if !(1..=3).contains(&batch.schema_version) {
             self.rejected_total.fetch_add(1, Ordering::Relaxed);
             return AckResponse {
                 accepted: false,
@@ -1101,7 +1131,7 @@ impl IngestRuntime {
                     self.cfg.queue_maxsize,
                 ),
                 message: Some(format!(
-                    "unsupported schema_version {}; supported versions are 1 and 2",
+                    "unsupported schema_version {}; supported versions are 1, 2 and 3",
                     batch.schema_version
                 )),
             };
@@ -1544,6 +1574,11 @@ fn build_persist_rows(
                 "schema_version": schema_version,
                 "batch_id": batch_id,
                 "ingested_at_unix_ms": ingested_at_unix_ms,
+                "ts_unix_ms": crate::correlation::resolve_event_ts(
+                    event.ts_unix_ms,
+                    ingested_at_unix_ms,
+                )
+                .0,
                 "event_kind": "process_exec",
                 "event": event,
             }))?;
@@ -1568,6 +1603,11 @@ fn build_persist_rows(
                 "schema_version": schema_version,
                 "batch_id": batch_id,
                 "ingested_at_unix_ms": ingested_at_unix_ms,
+                "ts_unix_ms": crate::correlation::resolve_event_ts(
+                    event.ts_unix_ms,
+                    ingested_at_unix_ms,
+                )
+                .0,
                 "event_kind": "file",
                 "event": event,
             }))?;
@@ -1592,6 +1632,11 @@ fn build_persist_rows(
                 "schema_version": schema_version,
                 "batch_id": batch_id,
                 "ingested_at_unix_ms": ingested_at_unix_ms,
+                "ts_unix_ms": crate::correlation::resolve_event_ts(
+                    event.ts_unix_ms,
+                    ingested_at_unix_ms,
+                )
+                .0,
                 "event_kind": "net",
                 "event": event,
             }))?;
@@ -1616,6 +1661,11 @@ fn build_persist_rows(
                 "schema_version": schema_version,
                 "batch_id": batch_id,
                 "ingested_at_unix_ms": ingested_at_unix_ms,
+                "ts_unix_ms": crate::correlation::resolve_event_ts(
+                    event.ts_unix_ms,
+                    ingested_at_unix_ms,
+                )
+                .0,
                 "event_kind": "db_query",
                 "event": event,
             }))?;
@@ -1640,6 +1690,11 @@ fn build_persist_rows(
                 "schema_version": schema_version,
                 "batch_id": batch_id,
                 "ingested_at_unix_ms": ingested_at_unix_ms,
+                "ts_unix_ms": crate::correlation::resolve_event_ts(
+                    event.ts_unix_ms,
+                    ingested_at_unix_ms,
+                )
+                .0,
                 "event_kind": "agent_heartbeat",
                 "event": event,
             }))?;
@@ -1746,6 +1801,7 @@ mod tests {
             schema_version: 1,
             batch_id: Some("test-batch".to_string()),
             process_exec_events: vec![ProcessExecEvent {
+                ts_unix_ms: None,
                 pid: 123,
                 tgid: 123,
                 ppid: 1,
@@ -1936,6 +1992,7 @@ mod tests {
     fn build_persist_rows_flattens_all_event_families() {
         let mut batch = test_batch();
         batch.file_events.push(FileEvent {
+            ts_unix_ms: None,
             pid: 1,
             tgid: 1,
             uid: 0,
@@ -1946,6 +2003,7 @@ mod tests {
             attrs: HashMap::new(),
         });
         batch.net_events.push(NetEvent {
+            ts_unix_ms: None,
             pid: 2,
             tgid: 2,
             uid: 0,
@@ -1961,6 +2019,7 @@ mod tests {
         });
         batch.db_query_events.push(sample_db_query_event());
         batch.agent_heartbeats.push(AgentHeartbeat {
+            ts_unix_ms: None,
             agent_version: "v1".to_string(),
             kernel_version: "k".to_string(),
             events_read_total: 1,
@@ -1991,6 +2050,7 @@ mod tests {
 
     fn sample_db_query_event() -> DbQueryEvent {
         DbQueryEvent {
+            ts_unix_ms: None,
             pid: 900,
             tgid: 900,
             uid: 1000,

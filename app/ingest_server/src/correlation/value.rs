@@ -30,6 +30,29 @@ impl Value {
         }
     }
 
+    /// Render as a window-bucket key component.
+    ///
+    /// Two events join only when their key values render identically, so this
+    /// has to be exact: floats keep full precision and `Null` is a distinct
+    /// marker rather than an empty string, which a real empty field would also
+    /// produce.
+    pub fn to_key_string(&self) -> String {
+        match self {
+            Value::Null => "\u{0}null".to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Int(n) => n.to_string(),
+            Value::Float(f) => format!("{f:?}"),
+            Value::Str(s) => s.clone(),
+            Value::Ip(ip) => ip.to_string(),
+            Value::DurationNs(d) => d.to_string(),
+            Value::List(items) => items
+                .iter()
+                .map(|v| v.to_key_string())
+                .collect::<Vec<_>>()
+                .join("\u{1e}"),
+        }
+    }
+
     pub fn as_i64(&self) -> Option<i64> {
         match self {
             Value::Int(n) => Some(*n),

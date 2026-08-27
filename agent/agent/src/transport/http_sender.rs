@@ -2,6 +2,8 @@ use anyhow::Result;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+use crate::agent::now_unix_ms;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -119,7 +121,7 @@ impl IngestBatchRequest {
         Self {
             tenant_id: cfg.tenant_id.clone(),
             host_id: cfg.host_id.clone(),
-            schema_version: 2,
+            schema_version: 3,
             batch_id: Some(batch_id),
             process_exec_events: Vec::new(),
             file_events: Vec::new(),
@@ -140,6 +142,8 @@ impl IngestBatchRequest {
 
 #[derive(Debug, Clone, Serialize)]
 struct ProcessExecEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ts_unix_ms: Option<u64>,
     pid: u32,
     tgid: u32,
     ppid: u32,
@@ -152,6 +156,8 @@ struct ProcessExecEvent {
 
 #[derive(Debug, Clone, Serialize)]
 struct FileEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ts_unix_ms: Option<u64>,
     pid: u32,
     tgid: u32,
     uid: u32,
@@ -164,6 +170,8 @@ struct FileEvent {
 
 #[derive(Debug, Clone, Serialize)]
 struct NetEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ts_unix_ms: Option<u64>,
     pid: u32,
     tgid: u32,
     uid: u32,
@@ -183,6 +191,8 @@ struct NetEvent {
 /// derived database/table names are serialized.
 #[derive(Debug, Clone, Serialize)]
 struct DbQueryEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ts_unix_ms: Option<u64>,
     pid: u32,
     tgid: u32,
     uid: u32,
@@ -203,6 +213,8 @@ struct DbQueryEvent {
 
 #[derive(Debug, Clone, Serialize)]
 struct AgentHeartbeat {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ts_unix_ms: Option<u64>,
     agent_version: String,
     kernel_version: String,
     events_read_total: u64,
@@ -807,6 +819,7 @@ fn append_line_to_batch(batch: &mut IngestBatchRequest, line: &str) {
     attrs.insert("kind".to_string(), "line".to_string());
     attrs.insert("raw".to_string(), line.to_string());
     batch.agent_heartbeats.push(AgentHeartbeat {
+        ts_unix_ms: Some(now_unix_ms()),
         agent_version: "olopa".to_string(),
         kernel_version: "unknown".to_string(),
         events_read_total: 0,
@@ -814,6 +827,16 @@ fn append_line_to_batch(batch: &mut IngestBatchRequest, line: &str) {
         queue_depth: 0,
         attrs,
     });
+}
+
+/// Wall-clock event time carried alongside each event, in unix milliseconds.
+///
+/// Probes stamp `bpf_ktime_get_ns()`, which is monotonic since boot, so this
+/// rebases onto realtime through the agent's startup clock anchor. `None` when
+/// no anchor could be captured; the server then falls back to batch arrival
+/// time, which is what pre-schema-3 senders get anyway.
+fn event_ts_unix_ms(ts_ns: u64) -> Option<u64> {
+    crate::runtime_ir::event_realtime_ns(ts_ns).map(|ns| ns / 1_000_000)
 }
 
 fn append_telemetry_event(batch: &mut IngestBatchRequest, event: &TelemetryWireEvent) {
@@ -840,6 +863,7 @@ fn append_telemetry_event(batch: &mut IngestBatchRequest, event: &TelemetryWireE
 
     match event.event_type {
         EVENT_TYPE_FILE => batch.file_events.push(FileEvent {
+            ts_unix_ms: event_ts_unix_ms(event.ts_ns),
             pid: event.pid,
             tgid: event.pid,
             uid: event.uid,
@@ -850,6 +874,7 @@ fn append_telemetry_event(batch: &mut IngestBatchRequest, event: &TelemetryWireE
             attrs,
         }),
         EVENT_TYPE_NET | EVENT_TYPE_TC => batch.net_events.push(NetEvent {
+            ts_unix_ms: event_ts_unix_ms(event.ts_ns),
             pid: event.pid,
             tgid: event.pid,
             uid: event.uid,
@@ -887,6 +912,7 @@ fn append_telemetry_event(batch: &mut IngestBatchRequest, event: &TelemetryWireE
                 );
             }
             batch.db_query_events.push(DbQueryEvent {
+                ts_unix_ms: event_ts_unix_ms(event.ts_ns),
                 pid: event.pid,
                 tgid: event.pid,
                 uid: event.uid,
@@ -917,6 +943,7 @@ fn append_telemetry_event(batch: &mut IngestBatchRequest, event: &TelemetryWireE
                 },
             );
             batch.net_events.push(NetEvent {
+                ts_unix_ms: event_ts_unix_ms(event.ts_ns),
                 pid: event.pid,
                 tgid: event.pid,
                 uid: event.uid,
@@ -940,6 +967,7 @@ fn append_telemetry_event(batch: &mut IngestBatchRequest, event: &TelemetryWireE
                 event.dns_query_hash.to_string(),
             );
             batch.net_events.push(NetEvent {
+                ts_unix_ms: event_ts_unix_ms(event.ts_ns),
                 pid: event.pid,
                 tgid: event.pid,
                 uid: event.uid,
@@ -955,6 +983,7 @@ fn append_telemetry_event(batch: &mut IngestBatchRequest, event: &TelemetryWireE
             });
         }
         _ => batch.process_exec_events.push(ProcessExecEvent {
+            ts_unix_ms: event_ts_unix_ms(event.ts_ns),
             pid: event.pid,
             tgid: event.pid,
             ppid: event.dst_vertex_id,
@@ -984,6 +1013,7 @@ fn append_evt_line(batch: &mut IngestBatchRequest, line: &str) {
     attrs.insert("raw".to_string(), line.to_string());
 
     batch.process_exec_events.push(ProcessExecEvent {
+        ts_unix_ms: parse_u64(fields.get("ts").copied()).and_then(event_ts_unix_ms),
         pid,
         tgid: pid,
         ppid,
@@ -1009,6 +1039,7 @@ fn append_metric_line(batch: &mut IngestBatchRequest, line: &str) {
     }
 
     batch.agent_heartbeats.push(AgentHeartbeat {
+        ts_unix_ms: Some(now_unix_ms()),
         agent_version: "olopa".to_string(),
         kernel_version: "unknown".to_string(),
         events_read_total: count,
@@ -1034,6 +1065,7 @@ fn append_secure_connect_line(batch: &mut IngestBatchRequest, line: &str) {
     }
 
     batch.agent_heartbeats.push(AgentHeartbeat {
+        ts_unix_ms: Some(now_unix_ms()),
         agent_version: fields
             .get("agent_version")
             .map(|value| (*value).to_string())
@@ -1054,6 +1086,7 @@ fn append_unknown_payload_heartbeat(batch: &mut IngestBatchRequest, kind: &str, 
     attrs.insert("kind".to_string(), kind.to_string());
     attrs.insert("payload_len".to_string(), len.to_string());
     batch.agent_heartbeats.push(AgentHeartbeat {
+        ts_unix_ms: Some(now_unix_ms()),
         agent_version: "olopa".to_string(),
         kernel_version: "unknown".to_string(),
         events_read_total: 0,
@@ -1093,6 +1126,7 @@ fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
     match alert.event_type {
         EVENT_TYPE_NET | EVENT_TYPE_TC => {
             batch.net_events.push(NetEvent {
+                ts_unix_ms: event_ts_unix_ms(alert.ts_ns),
                 pid: alert.pid,
                 tgid: alert.pid,
                 uid: alert.uid,
@@ -1113,6 +1147,7 @@ fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
         }
         EVENT_TYPE_FILE => {
             batch.file_events.push(FileEvent {
+                ts_unix_ms: event_ts_unix_ms(alert.ts_ns),
                 pid: alert.pid,
                 tgid: alert.pid,
                 uid: alert.uid,
@@ -1148,6 +1183,7 @@ fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
             }
 
             batch.db_query_events.push(DbQueryEvent {
+                ts_unix_ms: event_ts_unix_ms(alert.ts_ns),
                 pid: alert.pid,
                 tgid: alert.pid,
                 uid: alert.uid,
@@ -1182,6 +1218,7 @@ fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
                 );
             }
             batch.net_events.push(NetEvent {
+                ts_unix_ms: event_ts_unix_ms(alert.ts_ns),
                 pid: alert.pid,
                 tgid: alert.pid,
                 uid: alert.uid,
@@ -1211,6 +1248,7 @@ fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
             // The queried name stays in `attrs`: `dst_ip` is an IP-typed field
             // downstream, and the uprobe fires before resolution completes.
             batch.net_events.push(NetEvent {
+                ts_unix_ms: event_ts_unix_ms(alert.ts_ns),
                 pid: alert.pid,
                 tgid: alert.pid,
                 uid: alert.uid,
@@ -1227,6 +1265,7 @@ fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
         }
         _ => {
             batch.process_exec_events.push(ProcessExecEvent {
+                ts_unix_ms: event_ts_unix_ms(alert.ts_ns),
                 pid: alert.pid,
                 tgid: alert.pid,
                 ppid: alert.dst_vertex_id,
@@ -1660,5 +1699,34 @@ mod tests {
         assert_eq!(out[0].process_exec_events.len(), 1);
         assert_eq!(out[0].process_exec_events[0].pid, 20);
         assert_eq!(out[0].process_exec_events[0].uid, 30);
+    }
+
+    #[test]
+    fn wire_events_carry_agent_stamped_event_time() {
+        let cfg = HttpSenderConfig::for_mapping("t", "h");
+        let mut dec = DictDecompressor::new();
+        let mut seq = 0;
+        let payload = v1_alert_payload(EVENT_TYPE_SSL, 0);
+        let out = payload_to_batches(&payload, &cfg, &mut dec, &mut seq);
+
+        // schema_version 3 is what tells the server these stamps are present.
+        assert_eq!(out[0].schema_version, 3);
+
+        // The fixture carries ktime 123ns. Shipped as-is that is ~0ms, which the
+        // server would read as 1970; it has to be rebased onto wall clock.
+        let ts = out[0].net_events[0]
+            .ts_unix_ms
+            .expect("clock anchor available in test");
+        assert!(ts > 946_684_800_000, "event time {ts} is not epoch-scale");
+
+        // Correlation windows measure distance between events, so the rebase has
+        // to preserve deltas exactly.
+        let earlier = event_ts_unix_ms(1_000_000_000).expect("anchor");
+        let later = event_ts_unix_ms(2_000_000_000).expect("anchor");
+        assert_eq!(later - earlier, 1_000);
+
+        // A probe already emitting epoch nanoseconds passes through untouched.
+        let epoch_ms = now_unix_ms();
+        assert_eq!(event_ts_unix_ms(epoch_ms * 1_000_000), Some(epoch_ms));
     }
 }

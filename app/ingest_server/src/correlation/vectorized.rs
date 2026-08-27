@@ -1,7 +1,7 @@
 //! Vectorized and columnar batch filtering utilities for high-throughput rule dispatch.
 
 use crate::telemetry::IngestBatchRequest;
-use super::event::{EventFamily, UnifiedEventRef, EventDataRef};
+use super::event::{resolve_event_ts, EventDataRef, EventFamily, UnifiedEventRef};
 
 /// Bitset mask representing active/matching rows in a batch.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,10 +126,17 @@ pub struct BatchColumnIndex<'a> {
     pub pids: Vec<u32>,
     pub uids: Vec<u32>,
     pub len: usize,
+    /// Events that fell back to arrival time because the agent sent no usable
+    /// stamp. Surfaced as a stat so a skewed or outdated fleet is visible.
+    pub ts_fallback_count: usize,
 }
 
 impl<'a> BatchColumnIndex<'a> {
-    pub fn build(batch: &'a IngestBatchRequest, now_ms: u64) -> Self {
+    /// Build a columnar view of a batch.
+    ///
+    /// `arrival_ms` is the batch's ingest time, used as the fallback event time
+    /// for senders that do not stamp their own.
+    pub fn build(batch: &'a IngestBatchRequest, arrival_ms: u64) -> Self {
         let total_rows = batch.process_exec_events.len()
             + batch.file_events.len()
             + batch.net_events.len()
@@ -140,17 +147,22 @@ impl<'a> BatchColumnIndex<'a> {
         let mut families = Vec::with_capacity(total_rows);
         let mut pids = Vec::with_capacity(total_rows);
         let mut uids = Vec::with_capacity(total_rows);
+        let mut ts_fallback_count = 0usize;
 
         let tenant_id = &batch.tenant_id;
         let host_id = &batch.host_id;
         let batch_id = batch.batch_id.as_deref();
 
         for p in &batch.process_exec_events {
+            let (ts_unix_ms, ts_fallback) = resolve_event_ts(p.ts_unix_ms, arrival_ms);
+            if ts_fallback {
+                ts_fallback_count += 1;
+            }
             events.push(UnifiedEventRef {
                 tenant_id,
                 host_id,
                 batch_id,
-                ts_unix_ms: now_ms,
+                ts_unix_ms,
                 kind: EventFamily::ProcessExec,
                 data: EventDataRef::Process(p),
             });
@@ -160,11 +172,15 @@ impl<'a> BatchColumnIndex<'a> {
         }
 
         for f in &batch.file_events {
+            let (ts_unix_ms, ts_fallback) = resolve_event_ts(f.ts_unix_ms, arrival_ms);
+            if ts_fallback {
+                ts_fallback_count += 1;
+            }
             events.push(UnifiedEventRef {
                 tenant_id,
                 host_id,
                 batch_id,
-                ts_unix_ms: now_ms,
+                ts_unix_ms,
                 kind: EventFamily::File,
                 data: EventDataRef::File(f),
             });
@@ -174,11 +190,15 @@ impl<'a> BatchColumnIndex<'a> {
         }
 
         for n in &batch.net_events {
+            let (ts_unix_ms, ts_fallback) = resolve_event_ts(n.ts_unix_ms, arrival_ms);
+            if ts_fallback {
+                ts_fallback_count += 1;
+            }
             events.push(UnifiedEventRef {
                 tenant_id,
                 host_id,
                 batch_id,
-                ts_unix_ms: now_ms,
+                ts_unix_ms,
                 kind: EventFamily::Net,
                 data: EventDataRef::Net(n),
             });
@@ -188,11 +208,15 @@ impl<'a> BatchColumnIndex<'a> {
         }
 
         for q in &batch.db_query_events {
+            let (ts_unix_ms, ts_fallback) = resolve_event_ts(q.ts_unix_ms, arrival_ms);
+            if ts_fallback {
+                ts_fallback_count += 1;
+            }
             events.push(UnifiedEventRef {
                 tenant_id,
                 host_id,
                 batch_id,
-                ts_unix_ms: now_ms,
+                ts_unix_ms,
                 kind: EventFamily::DbQuery,
                 data: EventDataRef::DbQuery(q),
             });
@@ -202,11 +226,15 @@ impl<'a> BatchColumnIndex<'a> {
         }
 
         for h in &batch.agent_heartbeats {
+            let (ts_unix_ms, ts_fallback) = resolve_event_ts(h.ts_unix_ms, arrival_ms);
+            if ts_fallback {
+                ts_fallback_count += 1;
+            }
             events.push(UnifiedEventRef {
                 tenant_id,
                 host_id,
                 batch_id,
-                ts_unix_ms: now_ms,
+                ts_unix_ms,
                 kind: EventFamily::AgentHeartbeat,
                 data: EventDataRef::Heartbeat(h),
             });
@@ -221,6 +249,7 @@ impl<'a> BatchColumnIndex<'a> {
             pids,
             uids,
             len: total_rows,
+            ts_fallback_count,
         }
     }
 
