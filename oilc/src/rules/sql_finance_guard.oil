@@ -1,0 +1,24 @@
+// Example synchronous SQL enforcement policy for the preload guard.
+// Start the agent in observe mode before moving the same artifact to enforce.
+
+rule "block_untrusted_finance_reads" {
+  from db.query, endpoint.process
+
+  correlate
+    db.query as q
+    with process.spawn as p on p.pid == q.pid
+
+  where
+    q.query_class == 1
+    and q.database == "finance"
+    and q.tables contains "ledger"
+    and p.name == "untrusted-worker"
+
+  score
+    95
+
+  respond if score >= 90 {
+    alert critical "Untrusted process attempted to read the finance ledger"
+    block query q.tables
+  }
+}

@@ -1,0 +1,12 @@
+[package]
+name = "olopa-sql-guard"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "olopa_sql_guard"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+libc = "0.2"
+olopa-common = { path = "../common" }

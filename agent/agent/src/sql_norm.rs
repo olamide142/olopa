@@ -389,6 +389,26 @@ pub fn normalized_fingerprint(redacted: &str) -> u32 {
     hash
 }
 
+/// Classify a redacted statement into the runtime SQL operation family.
+///
+/// Values match the eBPF `SqlEvent` contract: 0=other, 1=select, 2=dml,
+/// 3=ddl, and 4=admin.
+pub fn classify_statement(redacted: &str) -> u8 {
+    let keyword = redacted
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .trim_matches(|character: char| character == '(' || character == ';')
+        .to_ascii_uppercase();
+    match keyword.as_str() {
+        "SELECT" | "WITH" | "SHOW" | "DESCRIBE" | "EXPLAIN" => 1,
+        "INSERT" | "UPDATE" | "DELETE" | "REPLACE" | "MERGE" => 2,
+        "CREATE" | "DROP" | "ALTER" | "TRUNCATE" | "RENAME" => 3,
+        "GRANT" | "REVOKE" | "SET" | "CALL" | "EXEC" | "EXECUTE" => 4,
+        _ => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -598,6 +618,15 @@ mod tests {
     fn absent_statement_text_has_no_fingerprint() {
         assert_eq!(normalized_fingerprint(""), 0);
         assert_ne!(normalized_fingerprint("SELECT ?"), 0);
+    }
+
+    #[test]
+    fn classifies_guarded_statement_families() {
+        assert_eq!(classify_statement("SELECT * FROM ledger"), 1);
+        assert_eq!(classify_statement("update ledger set value = ?"), 2);
+        assert_eq!(classify_statement("DROP TABLE ledger"), 3);
+        assert_eq!(classify_statement("GRANT SELECT ON ledger TO app"), 4);
+        assert_eq!(classify_statement("VACUUM ledger"), 0);
     }
 
     #[test]

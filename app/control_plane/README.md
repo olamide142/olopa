@@ -24,6 +24,14 @@ pip install -r requirements.txt
 uvicorn control_server.main:app --host 0.0.0.0 --port 8100
 ```
 
+The container image uses the repository root as its Docker build context because
+the React console imports shared tokens from `app/design` and the service loads
+`app/intel_sync`. From the repository root:
+
+```bash
+docker build -f app/control_plane/Dockerfile -t olopa-control-plane .
+```
+
 ## Environment
 
 - `CONTROL_HOST` (default `0.0.0.0`)

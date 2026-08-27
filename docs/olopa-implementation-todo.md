@@ -1,6 +1,7 @@
 # Olopa Implementation TODO
 
-Actionable TODO derived from the current codebase state (agent, oilc, app/server, web).
+Actionable TODO derived from the current codebase state (agent, oilc, ingest server,
+control plane, web, and desktop).
 
 ## P0 - End-to-End Runtime Path (Ship First)
 
@@ -12,7 +13,7 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
   - Mixed compressed-batch regression coverage verifies SQL reaches `db_query_events`, SSL/DNS retain typed network protocols and attributes, and none of these families fall through to `process_exec_events`.
   - Follow-up: replace adapter parsing with a strict shared schema crate.
 - [x] Replace server `persist_placeholder(...)` with real persistence (ClickHouse/Kafka path).
-  - Implemented durable JSONL persistence in `app/server/src/telemetry.rs`.
+  - Implemented durable JSONL persistence in `app/ingest_server/src/telemetry.rs`.
   - Added optional ClickHouse HTTP sink (`INGEST_CLICKHOUSE_URL`) with JSONL fallback on insert failure.
   - Added optional SurrealDB HTTP SQL sink (`INGEST_SURREAL_URL`) with fallback to ClickHouse and then JSONL.
   - Follow-up: add Kafka/queue fanout for decoupled high-throughput ingest.
@@ -126,16 +127,25 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
   - Added hierarchical RBAC and immutable tenant binding across control status, ingest proxies, compiler, intel, rules, deployments, and audit reads.
   - Added real `oilc` diagnostics/runtime-IR persistence, invalid-rule rejection, immutable version numbering, deployment preflight, rollback transitions, and tenant-scoped idempotency.
   - Remaining control-plane work: external OIDC/JWKS, atomic audit coverage for every mutation, async jobs, and real agent-fleet rollout delivery.
-- [ ] Add end-to-end integration tests: `oilc -> runtime-ir artifact -> agent eval -> server ingest`.
-  - Progress: added `agent::tests::e2e_rule_to_runtime_to_sender_to_ingest_runtime` to validate `oilc` compilation, runtime-ir evaluation, alert payload conversion via HTTP sender logic, and ingest API contract (`/api/v1/ingest/batches` + `/api/v1/ingest/recent`).
-  - Note: test is `#[ignore]` by default because it requires local TCP bind + external ingest server process spawn (not available in restricted sandboxes).
-- [x] Add CI workflows for deterministic checks/tests across `oilc`, `agent`, and `app/server`.
+- [x] Add end-to-end integration tests: `oilc -> runtime-ir artifact -> agent eval -> server ingest`.
+  - `agent::tests::e2e_rule_to_runtime_to_sender_to_ingest_runtime` validates `oilc` compilation, runtime-ir evaluation, alert payload conversion via HTTP sender logic, and the ingest API contract (`/api/v1/ingest/batches` + `/api/v1/ingest/recent`).
+  - The test is `#[ignore]` in the normal agent suite because it binds a local port and spawns the ingest server; CI runs it explicitly in the gated `e2e-runtime-to-ingest` job.
+- [x] Add CI workflows for deterministic checks/tests across `oilc`, `agent`, and `app/ingest_server`.
   - `.github/workflows/ci.yml` runs `oilc`, `agent`, and ingest-server suites plus the gated `e2e-runtime-to-ingest` job.
   - Follow-up: add lint/format gates and a load/perf smoke job.
 - [ ] Add observability surface: metrics/traces/log correlation across compiler, agent, server.
 
 ## P4 - Platform Targets (Roadmap Features)
 
+- [ ] Run Olopa agents on Kubernetes with node-level collection and reconciled policy rollout.
+  - Architecture decision: the eBPF sensor runs once per eligible Linux node as
+    a DaemonSet; an optional unprivileged sidecar provides workload context but
+    does not load kernel probes.
+  - Delivery order: Helm/DaemonSet packaging, node-scoped pod enrichment,
+    controller and policy CRDs, workload targeting/enforcement, then opt-in
+    admission-based sidecar injection.
+  - Detailed implementation phases and acceptance criteria:
+    `docs/kubernetes/sidecar-controller-plan.md`.
 - [ ] Integrate Memgraph-trigger execution path where required by graph rules.
 - [x] Add rule package/version lifecycle (load, reload, rollback) with compatibility checks.
   - The agent fingerprints and validates replacement runtime-IR before atomic activation, retains the last good engine on rejection, supports explicit rollback signals, and publishes generation/fingerprint/rule-count/error deployment status.
@@ -168,9 +178,19 @@ Actionable TODO derived from the current codebase state (agent, oilc, app/server
 - [x] Build the Secure Connect gateway plane reconciler (`app/secure_connect_gateway/`).
   - Pulls `GET /gateways/{id}/peers` and converges a WireGuard interface with `wg set`, removals first; peer removal is the revocation path.
   - Never touches interface configuration, never sees private keys, and never revokes on a failed poll — a control-plane outage leaves the peer set untouched.
-  - Dependency-free Python with `--once`/`--dry-run` modes, a hardened systemd unit, and 14 tests.
-- [ ] Add SQL semantic policy support (example: block process X from reading table `finance` on DB Y).
-  - Progress: runtime field model already resolves `sql.query_hash`, `sql.query_class`, and `sql.db_port`, so rules can match uprobe-derived SQL today.
-  - Remaining: extend the field model with table-level entities (`db.query`, `db.table`, `db.operation`, `db.server`) once statement capture lands.
-  - Add policy evaluation mode transitions: observe -> enforce for staged rollout safety.
-  - Define enforcement strategy per engine path (client-library fail-close hook, DB proxy, or native DB plugin) with deterministic rollback.
+  - Dependency-free Python with `--once`/`--dry-run` modes, a hardened systemd unit, and 17 tests.
+- [x] Add SQL semantic policy support (example: block process X from reading table `finance` on DB Y).
+  - Detection is complete: statement capture is redacted before use and runtime fields resolve query class, database, operation, and `db.tables`, so OIL rules can match uprobe-derived table access today.
+  - Enforcement uses `agent/sql_guard`, an `LD_PRELOAD` client-library guard
+    that obtains a synchronous Unix-socket verdict before calling supported
+    libpq/libmysqlclient execution APIs. Detection-only uprobes never claim to
+    cancel a query after the fact.
+  - Added the OIL `block query <target>` action, peer-credential validation,
+    bounded requests/workers/queues, prepared statement execution checks,
+    observe -> enforce transitions, explicit fail-open/fail-closed behavior,
+    and `allowed`/`would_block`/`blocked` telemetry.
+  - `make sql-guard-smoke` verifies nine direct, async, parameterized, and
+    prepared client API paths and proves a denial does not call the real symbol.
+  - Operator guide and supported-client limits: `docs/sql-enforcement.md`.
+  - Production qualification still requires live database validation for each
+    distribution and client-library version added to the support matrix.

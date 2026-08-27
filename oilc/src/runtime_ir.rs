@@ -236,6 +236,9 @@ pub enum RuntimeAction {
     BlockEgress {
         target: String,
     },
+    BlockQuery {
+        target: String,
+    },
     Notify {
         message: String,
     },
@@ -964,6 +967,9 @@ fn lower_raw_action(stmt: &ActionStmt) -> RuntimeAction {
         ActionStmt::BlockEgress { target } => RuntimeAction::BlockEgress {
             target: target.node.clone(),
         },
+        ActionStmt::BlockQuery { target } => RuntimeAction::BlockQuery {
+            target: target.node.clone(),
+        },
         ActionStmt::Notify { message } => RuntimeAction::Notify {
             message: message.clone(),
         },
@@ -1060,6 +1066,33 @@ rule "runtime_ir" {
         assert!(json.contains(r#""path":"process.pid""#));
         assert!(json.contains(r#""path":"process.name""#));
         assert!(!json.contains(r#""path":"p.pid""#));
+    }
+
+    #[test]
+    fn lowers_block_query_action_into_runtime_ir() {
+        let src = r#"
+rule "sql_guard" {
+  from db.query
+  correlate db.query as q
+  where q.tables contains "ledger"
+  respond if true {
+    alert critical
+    block query q.tables
+  }
+}
+"#;
+        let tokens = Lexer::new(src).tokenize().expect("lex");
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().expect("parse");
+        let mir = lower_program(&program);
+        let runtime = lower_runtime_program(&mir);
+
+        assert!(matches!(
+            runtime.rules[0].respond.branches[0].actions[1],
+            RuntimeAction::BlockQuery { ref target } if target == "q.tables"
+        ));
+        let json = serde_json::to_string(&runtime.rules[0]).expect("serialize rule");
+        assert!(json.contains(r#""action":"block_query""#));
     }
 
     #[test]

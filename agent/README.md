@@ -95,6 +95,16 @@ Run these commands from `olopa/agent`.
 - `OLOPA_TC_DENY_RULES` remains the compatible deny-only format.
 - `OLOPA_TC_POLICY_RULES` accepts semicolon-separated `pid`/`cgroup`, `ip`, `port`, `proto`, and `action=allow|deny|rate` entries. Rate rules require `pps` and may set `burst`.
 
+### SQL semantic enforcement
+
+The optional `olopa-sql-guard` preload library asks the local agent for a
+synchronous OIL verdict before calling supported libpq/libmysqlclient query
+functions. Use `OLOPA_SQL_POLICY_ENABLED=1` and start in
+`OLOPA_SQL_POLICY_MODE=observe`; promote the same `block query` policy to
+`enforce` after validating `would_block` telemetry. Build and verify it with
+`make sql-guard-smoke`. Full operating instructions and limits are in
+`docs/sql-enforcement.md`.
+
 ### Secure Connect
 
 Secure Connect is isolated from telemetry and disabled unless `OLOPA_SC_ENABLED=1`.

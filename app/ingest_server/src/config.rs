@@ -133,6 +133,14 @@ pub struct IngestConfig {
     pub surreal_token: Option<String>,
     /// Request timeout for SurrealDB HTTP calls.
     pub surreal_timeout_ms: u64,
+    /// Enable near-real-time stream correlation engine on ingest.
+    pub correlation_enabled: bool,
+    /// Optional file path to initial runtime IR rules JSON.
+    pub correlation_rules_path: Option<String>,
+    /// Maximum multi-source window buckets per shard in the correlation engine.
+    pub correlation_window_max_entries: usize,
+    /// Maximum correlated alerts retained in memory for inspection.
+    pub correlation_alerts_max: usize,
 }
 
 impl Default for IngestConfig {
@@ -173,6 +181,10 @@ impl Default for IngestConfig {
             surreal_password: None,
             surreal_token: None,
             surreal_timeout_ms: 2_000,
+            correlation_enabled: true,
+            correlation_rules_path: None,
+            correlation_window_max_entries: 10_000,
+            correlation_alerts_max: 5_000,
         }
     }
 }
@@ -204,7 +216,7 @@ impl ServerConfig {
             rate_limit_max_keys: env_parse_or("INGEST_RATE_LIMIT_MAX_KEYS", 100_000usize),
             auth: AuthConfig {
                 tokens: auth_tokens,
-            },
+            }, 
             ingest: IngestConfig {
                 queue_maxsize: env_parse_or("INGEST_QUEUE_MAXSIZE", ingest_defaults.queue_maxsize),
                 flush_interval_ms: env_parse_or(
@@ -293,6 +305,16 @@ impl ServerConfig {
                 surreal_timeout_ms: env_parse_or(
                     "INGEST_SURREAL_TIMEOUT_MS",
                     ingest_defaults.surreal_timeout_ms,
+                ),
+                correlation_enabled: env_bool("INGEST_CORRELATION_ENABLED", true),
+                correlation_rules_path: env_opt("INGEST_CORRELATION_RULES_PATH"),
+                correlation_window_max_entries: env_parse_or(
+                    "INGEST_CORRELATION_WINDOW_MAX_ENTRIES",
+                    ingest_defaults.correlation_window_max_entries,
+                ),
+                correlation_alerts_max: env_parse_or(
+                    "INGEST_CORRELATION_ALERTS_MAX",
+                    ingest_defaults.correlation_alerts_max,
                 ),
             },
         }

@@ -68,6 +68,9 @@ pub enum ActionStmt {
     BlockEgress {
         target: Spanned<String>,
     },
+    BlockQuery {
+        target: Spanned<String>,
+    },
     Notify {
         message: String,
     },

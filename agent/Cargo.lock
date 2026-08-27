@@ -966,6 +966,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "olopa-sql-guard"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "olopa-common",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

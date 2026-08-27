@@ -186,6 +186,25 @@ docker compose up -d          # clickhouse, surrealdb, ingest, control plane, ke
 | SurrealDB | 8001 |
 | Keycloak | 8080 (localhost only) |
 
+### The Makefile
+
+The root `Makefile` wraps everything below; `make` on its own prints the annotated target
+list. The useful ones:
+
+```bash
+make up                 # the local stack above
+make test               # oilc, ingest, control plane, gateway, both UI typechecks
+make test-ci            # the same plus the agent suite (needs nightly + bpf-linker)
+make ui-build           # both UI surfaces against the shared design tokens
+make control-plane-dev  # uvicorn on :8100 with reload
+```
+
+`make test` deliberately excludes the agent suite so it runs on a machine without the
+nightly toolchain. It also builds `oilc` in release and exports `OILC_BINARY_PATH` for the
+control-plane compiler tests, which is the manual step described at the end of this section.
+
+The raw commands are below, since it is worth knowing what the targets actually run.
+
 ### Per component
 
 ```bash
@@ -331,6 +350,9 @@ the Secure Connect address allocator commits its lease separately for this reaso
 `.github/workflows/ci.yml` runs five jobs: `oilc-tests`, `control-plane-tests` (which also
 runs the gateway reconciler suite), `agent-tests` (needs nightly + `bpf-linker`),
 `ingest-server-tests`, and the gated `e2e-runtime-to-ingest`.
+
+`make test-ci` runs the first four locally, command for command; `make e2e-test` runs the
+fifth.
 
 The e2e test `agent::tests::e2e_rule_to_runtime_to_sender_to_ingest_runtime` is
 `#[ignore]`d by default because it binds a TCP port and spawns an ingest process. It is the

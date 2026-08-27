@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "generated_at_unix_ms": 1786910812170,
+  "pid": 8121,
+  "running": true,
+  "iface": "eno1",
+  "probes": [
+    "exec",
+    "file",
+    "net",
+    "dns",
+    "sql",
+    "ssl",
+    "tc"
+  ],
+  "backend": {
+    "reachable": true,
+    "rtt_ms": 12
+  },
+  "resources": {
+    "cpu_pct": 1.7,
+    "cpu_budget_pct": 5.0,
+    "mem_mb": 63.4,
+    "mem_ceiling_mb": 256.0,
+    "bw_mb_s": 0.82,
+    "bw_limit_pct": 4.0
+  },
+  "window_5s": {
+    "captured": 71230,
+    "transmitted": 68110,
+    "dropped_budget": 3120
+  },
+  "firewall": {
+    "allow": 184203,
+    "deny": 43,
+    "approve": 7
+  }
+}

@@ -6,16 +6,17 @@ FROM caddy:2.8-alpine AS caddy_runtime
 # Builds the SPA into control_server/webdist (vite base=/ui/, outDir is
 # ../control_server/webdist relative to the web/ dir).
 FROM node:20-bookworm-slim AS web_build
-WORKDIR /build/web
-COPY web/package.json web/package-lock.json ./
-RUN npm ci
-COPY web/ ./
+WORKDIR /build/app/control_plane/web
+COPY app/control_plane/web/package.json app/control_plane/web/package-lock.json ./
+RUN npm ci --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000
+COPY app/control_plane/web/ ./
+COPY app/design/ /build/app/design/
 RUN npm run build
-# Built assets now at /build/control_server/webdist.
+# Built assets now at /build/app/control_plane/control_server/webdist.
 
 FROM rust:1.94-bookworm AS runtime
 
-RUN apt-get update \
+RUN apt-get -o Acquire::Retries=5 update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         python3 \
@@ -28,21 +29,22 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV VENV_PATH=/opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
+ENV PYTHONPATH=/opt/olopa
 
 WORKDIR /opt/olopa
 
-COPY requirements.txt /tmp/requirements.txt
+COPY app/control_plane/requirements.txt /tmp/requirements.txt
 RUN python3 -m venv "${VENV_PATH}" \
-    && "${VENV_PATH}/bin/pip" install --no-cache-dir --upgrade pip \
-    && "${VENV_PATH}/bin/pip" install --no-cache-dir -r /tmp/requirements.txt
+    && "${VENV_PATH}/bin/pip" install --no-cache-dir --retries 10 --timeout 120 -r /tmp/requirements.txt
 
 # Control-plane source.
-COPY . ./app/control_plane
+COPY app/control_plane/ ./app/control_plane
+COPY app/intel_sync/ ./app/intel_sync
 # Built React console (overrides any local webdist; web/ source/node_modules are
 # excluded via .dockerignore).
-COPY --from=web_build /build/control_server/webdist ./app/control_plane/control_server/webdist
+COPY --from=web_build /build/app/control_plane/control_server/webdist ./app/control_plane/control_server/webdist
 COPY --from=caddy_runtime /usr/bin/caddy /usr/bin/caddy
-COPY Caddyfile /etc/caddy/Caddyfile
+COPY app/control_plane/Caddyfile /etc/caddy/Caddyfile
 
 WORKDIR /opt/olopa/app/control_plane
 

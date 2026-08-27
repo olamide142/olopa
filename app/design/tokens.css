@@ -1,0 +1,152 @@
+/*
+  Olopa design tokens — the single source of truth for both surfaces.
+
+  Consumed by:
+    - app/control_plane/web  (the fleet console)
+    - app/command            (the desktop operator workstation)
+
+  Both import this file, so a colour changed here changes in both. Do not
+  redefine these values in either app; add app-specific chrome (scrollbars,
+  window behaviour) in the app's own stylesheet instead.
+
+  Light is the default. Dark is opt-in via the `dark` class on <html>, which
+  both apps toggle from a shared-shape useTheme hook.
+
+  Brand blue comes from the shipped control-plane templates (#2f78e6 / #58a0ff),
+  which predate both apps.
+*/
+
+:root {
+  --radius: 0.5rem;
+
+  /* Chassis */
+  --background: hsl(0 0% 100%);
+  --foreground: hsl(222 24% 12%);
+
+  --card: hsl(0 0% 100%);
+  --card-foreground: hsl(222 24% 12%);
+
+  /* One step above the card: hover rows, inset wells, segmented controls. */
+  --surface-2: hsl(220 16% 95%);
+
+  --popover: hsl(0 0% 100%);
+  --popover-foreground: hsl(222 24% 12%);
+
+  --sidebar: hsl(220 20% 98%);
+  --sidebar-foreground: hsl(222 24% 12%);
+  --sidebar-border: hsl(220 16% 90%);
+
+  /* Type */
+  --muted: hsl(220 16% 96%);
+  --muted-foreground: hsl(220 9% 44%);
+  /* Tertiary text: timestamps, ids, units. Deliberately still AA on --card. */
+  --faint: hsl(220 9% 55%);
+
+  /* Lines */
+  --border: hsl(220 16% 90%);
+  --border-strong: hsl(220 14% 80%);
+  --input: hsl(220 16% 88%);
+  --ring: hsl(214 79% 54%);
+
+  /* Brand */
+  --primary: hsl(214 79% 54%);
+  --primary-foreground: hsl(0 0% 100%);
+
+  /* Subtle interactive surface — NOT the brand colour. */
+  --accent: hsl(220 16% 94%);
+  --accent-foreground: hsl(222 24% 12%);
+
+  /* Semantics */
+  --success: hsl(151 58% 34%);
+  --warning: hsl(35 88% 42%);
+  --danger: hsl(0 68% 48%);
+  --info: hsl(214 79% 54%);
+  --violet: hsl(266 66% 55%);
+}
+
+.dark {
+  --background: hsl(222 24% 7%);
+  --foreground: hsl(210 22% 92%);
+
+  --card: hsl(222 22% 10%);
+  --card-foreground: hsl(210 22% 92%);
+
+  --surface-2: hsl(222 20% 14%);
+
+  --popover: hsl(222 22% 11%);
+  --popover-foreground: hsl(210 22% 92%);
+
+  --sidebar: hsl(222 26% 8%);
+  --sidebar-foreground: hsl(210 22% 92%);
+  --sidebar-border: hsl(220 16% 16%);
+
+  --muted: hsl(220 20% 15%);
+  --muted-foreground: hsl(215 14% 62%);
+  --faint: hsl(215 12% 46%);
+
+  --border: hsl(220 16% 18%);
+  --border-strong: hsl(220 14% 27%);
+  --input: hsl(220 18% 22%);
+  --ring: hsl(213 100% 67%);
+
+  --primary: hsl(213 100% 67%);
+  --primary-foreground: hsl(222 47% 10%);
+
+  --accent: hsl(220 20% 16%);
+  --accent-foreground: hsl(210 22% 92%);
+
+  --success: hsl(151 63% 47%);
+  --warning: hsl(41 92% 58%);
+  --danger: hsl(0 72% 62%);
+  --info: hsl(213 100% 67%);
+  --violet: hsl(266 76% 72%);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-surface-2: var(--surface-2);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-faint: var(--faint);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --color-violet: var(--violet);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+
+  /*
+    Short aliases used by the desktop app's dense instrument styling. They are
+    the same values, not a second palette — `bg-surface` and `bg-card` render
+    identically by construction.
+  */
+  --color-bg: var(--background);
+  --color-fg: var(--foreground);
+  --color-fg-muted: var(--muted-foreground);
+  --color-fg-faint: var(--faint);
+  --color-surface: var(--card);
+  --color-rail: var(--sidebar);
+  --color-ok: var(--success);
+  --color-warn: var(--warning);
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  --font-mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo, monospace;
+}

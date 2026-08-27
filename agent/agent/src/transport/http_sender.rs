@@ -223,6 +223,7 @@ struct AckResponse {
 #[derive(Debug, Clone)]
 struct DecodedAlert {
     event_type: u8,
+    sql_policy_verdict: u8,
     ts_ns: u64,
     pid: u32,
     uid: u32,
@@ -874,6 +875,11 @@ fn append_telemetry_event(batch: &mut IngestBatchRequest, event: &TelemetryWireE
                 event.sql_query_class.to_string(),
             );
             attrs.insert("db_port".to_string(), event.sql_db_port.to_string());
+            append_sql_policy_attrs(
+                &mut attrs,
+                event.sql_policy_verdict,
+                event.sql_policy_prepared,
+            );
             if event.sql_norm_hash != 0 {
                 attrs.insert(
                     "raw_statement_hash".to_string(),
@@ -1133,6 +1139,7 @@ fn append_alert_to_batch(batch: &mut IngestBatchRequest, alert: &DecodedAlert) {
                 ext.sql_query_class.to_string(),
             );
             attrs.insert("db_port".to_string(), db_port.to_string());
+            append_sql_policy_attrs(&mut attrs, alert.sql_policy_verdict, false);
             if ext.sql_norm_hash != 0 {
                 attrs.insert(
                     "raw_statement_hash".to_string(),
@@ -1269,6 +1276,7 @@ fn decode_alert_payload(payload: &[u8]) -> Option<DecodedAlert> {
     }
 
     let event_type = payload[6];
+    let sql_policy_verdict = payload[7];
     let ts_ns = u64::from_le_bytes(payload[8..16].try_into().ok()?);
     let pid = u32::from_le_bytes(payload[16..20].try_into().ok()?);
     let uid = u32::from_le_bytes(payload[20..24].try_into().ok()?);
@@ -1308,6 +1316,7 @@ fn decode_alert_payload(payload: &[u8]) -> Option<DecodedAlert> {
 
     Some(DecodedAlert {
         event_type,
+        sql_policy_verdict,
         ts_ns,
         pid,
         uid,
@@ -1320,6 +1329,21 @@ fn decode_alert_payload(payload: &[u8]) -> Option<DecodedAlert> {
         cgroup_id,
         ext,
     })
+}
+
+fn append_sql_policy_attrs(
+    attrs: &mut HashMap<String, String>,
+    verdict: u8,
+    prepared: bool,
+) {
+    let label = match verdict {
+        olopa_common::SQL_POLICY_EVENT_ALLOWED => "allowed",
+        olopa_common::SQL_POLICY_EVENT_WOULD_BLOCK => "would_block",
+        olopa_common::SQL_POLICY_EVENT_BLOCKED => "blocked",
+        _ => return,
+    };
+    attrs.insert("sql_policy_verdict".to_string(), label.to_string());
+    attrs.insert("sql_policy_prepared".to_string(), prepared.to_string());
 }
 
 /// Parse the v2 extension block starting at `cursor`.

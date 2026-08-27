@@ -58,7 +58,7 @@ pub struct IngestBatchRequest {
 
 impl IngestBatchRequest {
     /// Count all event rows in this batch across all event families.
-    fn row_count(&self) -> usize {
+    pub fn row_count(&self) -> usize {
         self.process_exec_events.len()
             + self.file_events.len()
             + self.net_events.len()
@@ -489,6 +489,8 @@ pub struct IngestRuntime {
     durable: Arc<DurableAcceptance>,
     surreal_breaker: StdMutex<CircuitBreaker>,
     clickhouse_breaker: StdMutex<CircuitBreaker>,
+    /// Near-real-time stream correlation engine.
+    pub correlation: Arc<crate::correlation::CorrelationEngine>,
     /// Serialize multi-write JSONL records across partition workers.
     jsonl_lock: Mutex<()>,
     /// Serialize dead-letter records across partition workers.
@@ -541,6 +543,13 @@ impl IngestRuntime {
                 .ok()
         });
 
+        let correlation = Arc::new(crate::correlation::CorrelationEngine::new());
+        if let Some(rules_path) = &cfg.correlation_rules_path {
+            if let Err(err) = correlation.load_from_file(std::path::Path::new(rules_path)) {
+                tracing::warn!(error = %err, path = %rules_path, "failed to load initial correlation rules");
+            }
+        }
+
         Ok(Self {
             cfg,
             surreal_client,
@@ -568,6 +577,7 @@ impl IngestRuntime {
             durable,
             surreal_breaker: StdMutex::new(CircuitBreaker::default()),
             clickhouse_breaker: StdMutex::new(CircuitBreaker::default()),
+            correlation,
             jsonl_lock: Mutex::new(()),
             dead_letter_lock: Mutex::new(()),
         })
@@ -715,6 +725,12 @@ impl IngestRuntime {
     /// - then try ClickHouse when configured,
     /// - always fall back to local JSONL on sink failures.
     async fn persist_batches(&self, pending_batches: &[QueuedBatch]) -> Result<usize, String> {
+        if self.cfg.correlation_enabled {
+            for queued in pending_batches {
+                self.correlation.evaluate_batch(&queued.payload);
+            }
+        }
+
         let rows = build_persist_rows(pending_batches)
             .map_err(|err| format!("serialize rows failed: {err}"))?;
         if rows.is_empty() {

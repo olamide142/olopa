@@ -15,6 +15,7 @@ mod probe_manager;
 mod runtime_ir;
 mod secure_connect;
 mod sql_norm;
+mod sql_policy;
 mod transport;
 
 use anyhow::{bail, Context, Result};
@@ -263,6 +264,12 @@ async fn main() -> Result<()> {
     };
     let mut metric_aggregator = RealMetricAggregator::default();
     let mut rule_engine = ActiveRuleEngine::from_env()?;
+    let sql_policy = sql_policy::spawn_from_env()?;
+    if sql_policy.is_some() && probe_selections.contains(&ProbeSelection::Sql) {
+        warn!(
+            "SQL policy guard and SQL uprobes are both enabled; guarded queries will be duplicated"
+        );
+    }
     let mut scheduler = RealScheduler::default();
     let mut batcher = RealBatcher::default();
     let mut sender = HttpIngestSender::from_env().context("initialize durable HTTP sender")?;
@@ -284,6 +291,7 @@ async fn main() -> Result<()> {
             &mut batcher,
             &mut sender,
             &mut budget_tracker,
+            sql_policy.as_ref(),
         )
         .await
 }
@@ -305,6 +313,9 @@ struct EffectiveCliConfig {
     secure_connect_enabled: bool,
     secure_connect_control_url: Option<String>,
     secure_connect_interface: String,
+    sql_policy_enabled: bool,
+    sql_policy_mode: String,
+    sql_policy_socket: String,
 }
 
 impl EffectiveCliConfig {
@@ -349,6 +360,11 @@ impl EffectiveCliConfig {
             secure_connect_control_url: env_non_empty("OLOPA_SC_CONTROL_URL"),
             secure_connect_interface: env_non_empty("OLOPA_SC_INTERFACE")
                 .unwrap_or_else(|| "olopa0".to_string()),
+            sql_policy_enabled: env_flag("OLOPA_SQL_POLICY_ENABLED"),
+            sql_policy_mode: env_non_empty("OLOPA_SQL_POLICY_MODE")
+                .unwrap_or_else(|| "observe".to_string()),
+            sql_policy_socket: env_non_empty("OLOPA_SQL_POLICY_SOCKET")
+                .unwrap_or_else(|| "/run/olopa/sql-policy.sock".to_string()),
         }
     }
 }
@@ -1219,6 +1235,7 @@ impl RuleEngineLike for SimpleRuleEngine {
                 rule_id: "simple:fallback".to_string(),
                 rule_name: "simple_fallback_threshold".to_string(),
                 enforce_block_egress: false,
+                enforce_block_query: false,
             }]
         } else {
             Vec::new()

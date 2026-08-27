@@ -1,5 +1,5 @@
 [workspace]
-members = ["common", "ebpf", "agent"]
+members = ["common", "ebpf", "agent", "sql_guard"]
 resolver = "2"
 
 [profile.dev]

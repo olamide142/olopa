@@ -4,6 +4,11 @@ type Theme = "dark" | "light";
 
 const STORAGE_KEY = "olopa_theme";
 
+/**
+ * Light is the default: an unset preference resolves to light rather than
+ * following the OS, so the console and the desktop app open the same way on a
+ * fresh machine. Kept in sync with app/command's copy — see app/design/README.md.
+ */
 function readInitial(): Theme {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
@@ -11,7 +16,7 @@ function readInitial(): Theme {
   } catch {
     /* ignore */
   }
-  return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  return "light";
 }
 
 /** Manage the light/dark theme by toggling the `dark` class on <html>. */
@@ -29,7 +34,7 @@ export function useTheme() {
   }, [theme]);
 
   const toggle = useCallback(() => {
-    setTheme((t) => (t === "dark" ? "light" : "dark"));
+    setTheme((current) => (current === "dark" ? "light" : "dark"));
   }, []);
 
   return { theme, toggle };
