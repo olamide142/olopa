@@ -137,6 +137,15 @@ control plane, web, and desktop).
 
 ## P4 - Platform Targets (Roadmap Features)
 
+- [ ] Run Olopa agents on Kubernetes with node-level collection and reconciled policy rollout.
+  - Architecture decision: the eBPF sensor runs once per eligible Linux node as
+    a DaemonSet; an optional unprivileged sidecar provides workload context but
+    does not load kernel probes.
+  - Delivery order: Helm/DaemonSet packaging, node-scoped pod enrichment,
+    controller and policy CRDs, workload targeting/enforcement, then opt-in
+    admission-based sidecar injection.
+  - Detailed implementation phases and acceptance criteria:
+    `docs/kubernetes/sidecar-controller-plan.md`.
 - [ ] Integrate Memgraph-trigger execution path where required by graph rules.
 - [x] Add rule package/version lifecycle (load, reload, rollback) with compatibility checks.
   - The agent fingerprints and validates replacement runtime-IR before atomic activation, retains the last good engine on rejection, supports explicit rollback signals, and publishes generation/fingerprint/rule-count/error deployment status.
@@ -170,8 +179,18 @@ control plane, web, and desktop).
   - Pulls `GET /gateways/{id}/peers` and converges a WireGuard interface with `wg set`, removals first; peer removal is the revocation path.
   - Never touches interface configuration, never sees private keys, and never revokes on a failed poll — a control-plane outage leaves the peer set untouched.
   - Dependency-free Python with `--once`/`--dry-run` modes, a hardened systemd unit, and 17 tests.
-- [ ] Add SQL semantic policy support (example: block process X from reading table `finance` on DB Y).
+- [x] Add SQL semantic policy support (example: block process X from reading table `finance` on DB Y).
   - Detection is complete: statement capture is redacted before use and runtime fields resolve query class, database, operation, and `db.tables`, so OIL rules can match uprobe-derived table access today.
-  - Remaining: choose and implement the enforcement boundary. Candidate paths are a client-library fail-close hook, a DB proxy, or a native DB plugin; detection alone cannot safely cancel a query that has already entered the client library.
-  - Add policy evaluation mode transitions: observe -> enforce for staged rollout safety.
-  - Require deterministic rollback and live database validation for each supported engine path.
+  - Enforcement uses `agent/sql_guard`, an `LD_PRELOAD` client-library guard
+    that obtains a synchronous Unix-socket verdict before calling supported
+    libpq/libmysqlclient execution APIs. Detection-only uprobes never claim to
+    cancel a query after the fact.
+  - Added the OIL `block query <target>` action, peer-credential validation,
+    bounded requests/workers/queues, prepared statement execution checks,
+    observe -> enforce transitions, explicit fail-open/fail-closed behavior,
+    and `allowed`/`would_block`/`blocked` telemetry.
+  - `make sql-guard-smoke` verifies nine direct, async, parameterized, and
+    prepared client API paths and proves a denial does not call the real symbol.
+  - Operator guide and supported-client limits: `docs/sql-enforcement.md`.
+  - Production qualification still requires live database validation for each
+    distribution and client-library version added to the support matrix.

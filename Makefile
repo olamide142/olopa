@@ -21,6 +21,13 @@ GATEWAY       := app/secure_connect_gateway
 WEB           := app/control_plane/web
 DESKTOP       := app/command
 DESIGN        := app/design
+OLOPA_MVP_DOCKER_CONTEXT ?= default
+MVP_COMPOSE   := docker --context $(OLOPA_MVP_DOCKER_CONTEXT) compose -f docker-compose.yml -f docker-compose.mvp.yml
+
+OLOPA_MVP_CONTROL_URL ?= http://127.0.0.1:8100
+OLOPA_MVP_INGEST_URL  ?= http://127.0.0.1:8000
+OLOPA_MVP_CONTROL_TOKEN ?= olopa-local-admin
+OLOPA_MVP_INGEST_TOKEN  ?= olopa-local-ingest
 
 # The control-plane compiler tests shell out to oilc. Pointing them at the
 # release binary keeps them off the `cargo run` path — same as CI does.
@@ -56,6 +63,33 @@ down: ## Stop the local stack, keeping volumes
 
 logs: ## Follow the local stack logs
 	docker compose logs -f
+
+## ---------------------------------------------------------------- mvp
+
+.PHONY: mvp-up mvp-down mvp-logs mvp-smoke mvp-agent
+mvp-up: oilc-build ## Build and start the authenticated single-host MVP
+	OLOPA_MVP_CONTROL_TOKEN="$(OLOPA_MVP_CONTROL_TOKEN)" \
+	OLOPA_MVP_INGEST_TOKEN="$(OLOPA_MVP_INGEST_TOKEN)" \
+	$(MVP_COMPOSE) up -d --build clickhouse surrealdb olopa-ingest control-plane
+	@printf 'Olopa MVP: %s\n' "$(OLOPA_MVP_CONTROL_URL)"
+	@printf 'Console dev token: %s (tenant: default)\n' "$(OLOPA_MVP_CONTROL_TOKEN)"
+	@printf 'Verify with: make mvp-smoke\n'
+
+mvp-down: ## Stop the MVP while retaining its data volumes
+	$(MVP_COMPOSE) down
+
+mvp-logs: ## Follow MVP service logs
+	$(MVP_COMPOSE) logs -f olopa-ingest control-plane
+
+mvp-smoke: ## Prove compiler -> ingest -> authenticated console API
+	OLOPA_MVP_CONTROL_URL="$(OLOPA_MVP_CONTROL_URL)" \
+	OLOPA_MVP_INGEST_URL="$(OLOPA_MVP_INGEST_URL)" \
+	OLOPA_MVP_CONTROL_TOKEN="$(OLOPA_MVP_CONTROL_TOKEN)" \
+	OLOPA_MVP_INGEST_TOKEN="$(OLOPA_MVP_INGEST_TOKEN)" \
+	python3 scripts/mvp_smoke.py
+
+mvp-agent: oilc-build agent-build ## Run the privileged Linux sensor against the MVP
+	OLOPA_MVP_INGEST_TOKEN="$(OLOPA_MVP_INGEST_TOKEN)" ./agent/run.sh "$(or $(IFACE),lo)"
 
 ## ---------------------------------------------------------------- build
 
@@ -111,7 +145,7 @@ $(DESKTOP)/node_modules: $(DESKTOP)/package-lock.json
 
 ## ---------------------------------------------------------------- test
 
-.PHONY: test test-ci oilc-test agent-test ingest-test control-plane-test gateway-test e2e-test
+.PHONY: test test-ci oilc-test agent-test sql-guard-smoke ingest-test control-plane-test gateway-test e2e-test
 test: oilc-test ingest-test control-plane-test gateway-test ui-lint ## Everything that needs no nightly toolchain or BPF-capable host
 
 test-ci: test agent-test ## The five CI jobs (adds the agent suite: nightly + bpf-linker)
@@ -121,6 +155,9 @@ oilc-test: ## Run the oilc suite
 
 agent-test: ## Run the agent suite (userspace only, but the eBPF crate still builds)
 	cargo test --manifest-path $(AGENT_MANIFEST) -p olopa
+
+sql-guard-smoke: ## Prove blocked SQL never reaches the real client function
+	python3 scripts/sql_guard_smoke.py
 
 ingest-test: ## Run the ingest server suite
 	cargo test --manifest-path $(INGEST_MANIFEST)

@@ -2,22 +2,26 @@
 
 FROM rust:1.94-bookworm AS builder
 
+ENV CARGO_NET_RETRY=10
+ENV CARGO_HTTP_TIMEOUT=600
+ENV CARGO_HTTP_LOW_SPEED_LIMIT=1
+
 WORKDIR /build
 
 # Prime dependency cache.
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src \
     && printf 'fn main() {}\n' > src/main.rs \
-    && cargo build --release \
+    && cargo build --locked --release \
     && rm -rf src
 
 # Build real binary.
 COPY src ./src
-RUN cargo build --release
+RUN cargo build --locked --release
 
 FROM debian:bookworm-slim AS runtime
 
-RUN apt-get update \
+RUN apt-get -o Acquire::Retries=5 update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --create-home --uid 10001 olopa

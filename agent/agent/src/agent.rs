@@ -16,13 +16,15 @@ use log::{debug, info, warn};
 use olopa_common::{
     DnsEvent, ExecEvent, FileEvent, NetEvent, SqlEvent, SslEvent, TcEvent, EVENT_KIND_DNS,
     EVENT_KIND_EXEC, EVENT_KIND_FILE, EVENT_KIND_NET, EVENT_KIND_SQL, EVENT_KIND_SSL,
-    EVENT_KIND_TC,
+    EVENT_KIND_TC, SQL_POLICY_EVENT_ALLOWED, SQL_POLICY_EVENT_BLOCKED,
+    SQL_POLICY_EVENT_WOULD_BLOCK, SQL_POLICY_VERDICT_ALLOW, SQL_POLICY_VERDICT_BLOCK,
 };
 use serde::{Deserialize, Serialize};
 use tokio::signal;
 
 use crate::budget_tracker::{BudgetTracker, BW, CPU, MEM};
 use crate::sql_norm::{self, SQL_TABLES_LEN};
+use crate::sql_policy::{self, SqlPolicyMode, SqlPolicyService};
 
 const DEFAULT_STATUS_PATH: &str = "/tmp/olopa/agent/status.json";
 const DEFAULT_CPU_BUDGET_PCT: f32 = 5.0;
@@ -129,6 +131,10 @@ pub(crate) struct TelemetryWireEvent {
     pub dns_query: String,
     #[serde(default)]
     pub tc_verdict: u8,
+    #[serde(default)]
+    pub sql_policy_verdict: u8,
+    #[serde(default)]
+    pub sql_policy_prepared: bool,
 }
 
 impl From<&IngestEvent> for TelemetryWireEvent {
@@ -157,6 +163,8 @@ impl From<&IngestEvent> for TelemetryWireEvent {
             dns_query_hash: event.dns_query_hash,
             dns_query: cstr_to_str(&event.dns_query).to_string(),
             tc_verdict: event.tc_verdict,
+            sql_policy_verdict: event._pad_aux[0],
+            sql_policy_prepared: event._pad_aux[1] != 0,
         }
     }
 }
@@ -192,6 +200,8 @@ pub struct RuleMatch {
     pub rule_name: String,
     // Rule contains an explicit `block egress ...` response action.
     pub enforce_block_egress: bool,
+    // Selected response branch contains an explicit `block query ...` action.
+    pub enforce_block_query: bool,
 }
 
 // Scorer contract used by ingest loop.
@@ -530,6 +540,7 @@ impl OlopaAgent {
         batcher: &mut BA,
         sender: &mut SN,
         budget_tracker: &mut BudgetTracker,
+        sql_policy: Option<&SqlPolicyService>,
     ) -> Result<()>
     where
         R: RelevanceScorerLike,
@@ -609,6 +620,36 @@ impl OlopaAgent {
             lifetime_firewall_deny = lifetime_firewall_deny.saturating_add(ingested.firewall_deny);
             lifetime_firewall_approve =
                 lifetime_firewall_approve.saturating_add(ingested.firewall_approve);
+
+            if let Some(service) = sql_policy {
+                for _ in 0..64 {
+                    let request = match service.requests.try_recv() {
+                        Ok(request) => request,
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    };
+                    let event = sql_policy::event_from_request(&request);
+                    let block = Self::process_sql_policy_event(
+                        event,
+                        service.mode,
+                        relevance_scorer,
+                        event_store,
+                        graph,
+                        metric_aggregator,
+                        rule_engine,
+                        sender,
+                    );
+                    window_captured = window_captured.saturating_add(1);
+                    request.reply(
+                        if block {
+                            SQL_POLICY_VERDICT_BLOCK
+                        } else {
+                            SQL_POLICY_VERDICT_ALLOW
+                        },
+                        service.mode,
+                    );
+                }
+            }
 
             let now = Instant::now();
 
@@ -1027,6 +1068,65 @@ impl OlopaAgent {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn process_sql_policy_event<R, ES, G, MA, RE, SN>(
+        mut event: IngestEvent,
+        mode: SqlPolicyMode,
+        relevance_scorer: &mut R,
+        event_store: &mut ES,
+        graph: &mut G,
+        metric_aggregator: &mut MA,
+        rule_engine: &mut RE,
+        sender: &mut SN,
+    ) -> bool
+    where
+        R: RelevanceScorerLike,
+        ES: EventStoreLike,
+        G: GraphLike,
+        MA: MetricAggregatorLike,
+        RE: RuleEngineLike,
+        SN: SenderLike,
+    {
+        relevance_scorer.score(&mut event);
+        let matches = rule_engine.evaluate(&event);
+        let block_requested = matches.iter().any(|matched| matched.enforce_block_query);
+        let block = block_requested && mode.enforces();
+        event._pad_aux[0] = if block {
+            SQL_POLICY_EVENT_BLOCKED
+        } else if block_requested {
+            SQL_POLICY_EVENT_WOULD_BLOCK
+        } else {
+            SQL_POLICY_EVENT_ALLOWED
+        };
+
+        let _ = event_store.push(event);
+        graph.write_edge(&event);
+        metric_aggregator.record(&event);
+        for matched_rule in &matches {
+            if let Err(error) = sender.send_or_spool(encode_alert_payload(&event, matched_rule)) {
+                warn!(
+                    "SQL policy alert delivery failed rule={} pid={}: {}",
+                    matched_rule.rule_name, event.pid, error
+                );
+            }
+        }
+
+        info!(
+            "SQL policy verdict pid={} mode={:?} decision={} matches={}",
+            event.pid,
+            mode,
+            if block {
+                "block"
+            } else if block_requested {
+                "would_block"
+            } else {
+                "allow"
+            },
+            matches.len()
+        );
+        block
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn scheduler_tick<ES, SCH, BA, SN>(
         budget_tracker: &BudgetTracker,
         event_store: &ES,
@@ -1285,7 +1385,9 @@ fn encode_alert_payload(event: &IngestEvent, matched_rule: &RuleMatch) -> Vec<u8
     out.extend_from_slice(&ALERT_MAGIC);
     out.extend_from_slice(&ALERT_WIRE_VERSION.to_le_bytes());
     out.push(event.event_type);
-    out.push(0); // reserved for alignment/future flags
+    // The reserved byte carries the guarded-SQL verdict. Existing decoders
+    // already ignore it, so this remains wire-compatible with alert v3.
+    out.push(event._pad_aux[0]);
     out.extend_from_slice(&event.ts_ns.to_le_bytes());
     out.extend_from_slice(&event.pid.to_le_bytes());
     out.extend_from_slice(&event.uid.to_le_bytes());
@@ -1876,11 +1978,13 @@ mod tests {
                     rule_id: "rule:one".to_string(),
                     rule_name: "rule_one".to_string(),
                     enforce_block_egress: false,
+                    enforce_block_query: false,
                 },
                 RuleMatch {
                     rule_id: "rule:two".to_string(),
                     rule_name: "rule_two".to_string(),
                     enforce_block_egress: false,
+                    enforce_block_query: false,
                 },
             ]
         }
@@ -1967,6 +2071,63 @@ mod tests {
         assert_eq!(payload0.rule_name, "rule_one");
         assert_eq!(payload1.rule_id, "rule:two");
         assert_eq!(payload1.rule_name, "rule_two");
+    }
+
+    struct BlockQueryRuleEngine;
+
+    impl RuleEngineLike for BlockQueryRuleEngine {
+        fn evaluate(&mut self, _event: &IngestEvent) -> Vec<RuleMatch> {
+            vec![RuleMatch {
+                rule_id: "rule:block-query".to_string(),
+                rule_name: "block_query".to_string(),
+                enforce_block_egress: false,
+                enforce_block_query: true,
+            }]
+        }
+    }
+
+    #[test]
+    fn sql_policy_observe_and_enforce_modes_emit_distinct_verdicts() {
+        for (mode, expected_block, expected_verdict) in [
+            (SqlPolicyMode::Observe, false, SQL_POLICY_EVENT_WOULD_BLOCK),
+            (SqlPolicyMode::Enforce, true, SQL_POLICY_EVENT_BLOCKED),
+        ] {
+            let mut scorer = NoopScorer;
+            let mut store = NoopStore;
+            let mut graph = NoopGraph;
+            let mut metrics = NoopMetrics;
+            let mut rules = BlockQueryRuleEngine;
+            let mut sender = CaptureSender::default();
+            let event = IngestEvent {
+                pid: 42,
+                event_type: 4,
+                sql_query_class: 1,
+                ..Default::default()
+            };
+
+            let blocked = OlopaAgent::process_sql_policy_event(
+                event,
+                mode,
+                &mut scorer,
+                &mut store,
+                &mut graph,
+                &mut metrics,
+                &mut rules,
+                &mut sender,
+            );
+            assert_eq!(blocked, expected_block);
+            assert_eq!(sender.payloads.len(), 1);
+            assert_eq!(sender.payloads[0][7], expected_verdict);
+            let batches = payload_to_batches_for_tests(&sender.payloads[0], "tenant", "host");
+            assert_eq!(
+                batches[0]["db_query_events"][0]["attrs"]["sql_policy_verdict"],
+                if expected_block {
+                    "blocked"
+                } else {
+                    "would_block"
+                }
+            );
+        }
     }
 
     #[test]

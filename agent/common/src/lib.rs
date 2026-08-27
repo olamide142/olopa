@@ -38,6 +38,37 @@ pub const EVENT_KIND_DNS: u32 = 6;
 /// TC egress enforcement verdict event (`TcEvent`).
 pub const EVENT_KIND_TC: u32 = 7;
 
+/// Local SQL policy protocol request magic (`OLOPASQ1`).
+pub const SQL_POLICY_REQUEST_MAGIC: [u8; 8] = *b"OLOPASQ1";
+/// Local SQL policy protocol response magic (`OLOPASR1`).
+pub const SQL_POLICY_RESPONSE_MAGIC: [u8; 8] = *b"OLOPASR1";
+/// Fixed request header: magic, engine, flags, reserved, query length.
+pub const SQL_POLICY_REQUEST_HEADER_LEN: usize = 16;
+/// Fixed response: magic, verdict, policy mode, reserved.
+pub const SQL_POLICY_RESPONSE_LEN: usize = 12;
+/// Maximum raw statement bytes accepted over the local policy socket.
+pub const SQL_POLICY_MAX_QUERY_LEN: usize = 8 * 1024;
+
+pub const SQL_POLICY_ENGINE_POSTGRES: u8 = 1;
+pub const SQL_POLICY_ENGINE_MYSQL: u8 = 2;
+pub const SQL_POLICY_FLAG_PREPARED: u8 = 1;
+
+pub const SQL_POLICY_VERDICT_ALLOW: u8 = 0;
+pub const SQL_POLICY_VERDICT_BLOCK: u8 = 1;
+pub const SQL_POLICY_VERDICT_ERROR: u8 = 2;
+
+pub const SQL_POLICY_MODE_OBSERVE: u8 = 0;
+pub const SQL_POLICY_MODE_ENFORCE: u8 = 1;
+
+/// SQL telemetry did not originate from the synchronous guard.
+pub const SQL_POLICY_EVENT_UNGUARDED: u8 = 0;
+/// The synchronous guard allowed the statement.
+pub const SQL_POLICY_EVENT_ALLOWED: u8 = 1;
+/// Observe mode matched a block action but allowed the statement.
+pub const SQL_POLICY_EVENT_WOULD_BLOCK: u8 = 2;
+/// Enforce mode blocked the statement before the real client call.
+pub const SQL_POLICY_EVENT_BLOCKED: u8 = 3;
+
 /// Process execution event (execve / execveat syscall)
 #[repr(C)]
 #[derive(Clone, Copy)]

@@ -53,8 +53,8 @@ services:
 
   control-plane:
     build:
-      context: ./app/control_plane
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: app/control_plane/Dockerfile
     container_name: olopa-control-plane
     depends_on:
       - olopa-ingest

@@ -1276,7 +1276,7 @@ impl Parser {
             return self.parse_quarantine_action();
         }
         if self.peek_keyword(Keyword::Block) {
-            return self.parse_block_egress_action();
+            return self.parse_block_action();
         }
         if self.peek_keyword(Keyword::Notify) {
             return self.parse_notify_action();
@@ -1515,18 +1515,25 @@ impl Parser {
         Some(Spanned::new(ActionStmt::Quarantine { path }, start..end))
     }
 
-    fn parse_block_egress_action(&mut self) -> Option<Spanned<ActionStmt>> {
+    fn parse_block_action(&mut self) -> Option<Spanned<ActionStmt>> {
         let start = self.advance().span.start; // block
 
-        // Current supported form: `block egress <target>`
-        if !self.match_ident_text("egress") {
-            self.error_here("expected 'egress' after 'block'");
-            return None;
-        }
+        let action_kind = self
+            .expect_ident("expected 'egress' or 'query' after 'block'")?
+            .clone();
+        let action_kind = self.ident_text(&action_kind)?;
 
-        let target = self.parse_dotted_name("expected block egress target")?;
+        let target = self.parse_dotted_name("expected block action target")?;
         let end = target.span.end;
-        Some(Spanned::new(ActionStmt::BlockEgress { target }, start..end))
+        let action = match action_kind.as_str() {
+            "egress" => ActionStmt::BlockEgress { target },
+            "query" => ActionStmt::BlockQuery { target },
+            _ => {
+                self.error_here("expected 'egress' or 'query' after 'block'");
+                return None;
+            }
+        };
+        Some(Spanned::new(action, start..end))
     }
 
     fn parse_notify_action(&mut self) -> Option<Spanned<ActionStmt>> {

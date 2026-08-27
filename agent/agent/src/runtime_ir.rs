@@ -1332,39 +1332,37 @@ impl RuntimeIrRuleEngine {
         let mut out = Vec::new();
         for rule in &self.program.rules {
             let uses_time_context = rule_uses_time_context(rule, &self.field_specs);
-            let (matched, enforce_block_egress) = with_rule_eval_scope(&rule.id, || {
-                let predicates_match = rule
-                    .predicates
-                    .iter()
-                    .all(|pred| eval_bool(pred, event, &self.field_specs, &self.callable_state));
-                if !predicates_match {
-                    return (false, false);
-                }
-
-                if let Some(execution) = self.rule_execution.get(&rule.id) {
-                    evaluate_rule_derivations(
-                        execution,
-                        event,
-                        &self.field_specs,
-                        &self.callable_state,
-                    );
-                    if !execution.require.iter().all(|requirement| {
-                        eval_bool(requirement, event, &self.field_specs, &self.callable_state)
-                    }) {
-                        return (false, false);
+            let (matched, enforce_block_egress, enforce_block_query) =
+                with_rule_eval_scope(&rule.id, || {
+                    let predicates_match = rule.predicates.iter().all(|pred| {
+                        eval_bool(pred, event, &self.field_specs, &self.callable_state)
+                    });
+                    if !predicates_match {
+                        return (false, false, false);
                     }
-                }
 
-                (
-                    true,
-                    selected_branch_has_block_egress(
+                    if let Some(execution) = self.rule_execution.get(&rule.id) {
+                        evaluate_rule_derivations(
+                            execution,
+                            event,
+                            &self.field_specs,
+                            &self.callable_state,
+                        );
+                        if !execution.require.iter().all(|requirement| {
+                            eval_bool(requirement, event, &self.field_specs, &self.callable_state)
+                        }) {
+                            return (false, false, false);
+                        }
+                    }
+
+                    let (block_egress, block_query) = selected_branch_enforcement(
                         rule,
                         event,
                         &self.field_specs,
                         &self.callable_state,
-                    ),
-                )
-            });
+                    );
+                    (true, block_egress, block_query)
+                });
             if should_debug_time_ir() && uses_time_context {
                 debug_time_ir_eval(rule, event, matched);
             }
@@ -1373,6 +1371,7 @@ impl RuntimeIrRuleEngine {
                     rule_id: rule.id.clone(),
                     rule_name: rule.name.clone(),
                     enforce_block_egress,
+                    enforce_block_query,
                 });
             }
         }
@@ -1544,12 +1543,12 @@ fn lookup_eval_binding(path: &str) -> Option<Value> {
 }
 
 /// Select the first matching response branch and inspect only its actions.
-fn selected_branch_has_block_egress(
+fn selected_branch_enforcement(
     rule: &RuntimeRule,
     event: &IngestEvent,
     field_specs: &[FieldSpec],
     callable_state: &Mutex<CallableEvalState>,
-) -> bool {
+) -> (bool, bool) {
     rule.respond
         .branches
         .iter()
@@ -1559,12 +1558,11 @@ fn selected_branch_has_block_egress(
                 .as_ref()
                 .is_none_or(|condition| eval_bool(condition, event, field_specs, callable_state))
         })
-        .is_some_and(|branch| {
-            branch
-                .actions
-                .iter()
-                .any(|action| action.action == "block_egress")
+        .map(|branch| {
+            let has = |name: &str| branch.actions.iter().any(|action| action.action == name);
+            (has("block_egress"), has("block_query"))
         })
+        .unwrap_or_default()
 }
 
 /// Determine whether verbose time-context debug logs are enabled.
@@ -5310,6 +5308,52 @@ rule "uid_7" {
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].rule_name, "block_egress");
         assert!(matches[0].enforce_block_egress);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn marks_block_query_rules_for_synchronous_enforcement() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "rules": [
+    {
+      "id": "rule:0:block_query",
+      "name": "block_query",
+      "predicates": [
+        {
+          "op": "eq",
+          "lhs": { "op": "field", "path": "pid" },
+          "rhs": { "op": "int", "value": 42 }
+        }
+      ],
+      "respond": {
+        "branches": [
+          {
+            "condition": null,
+            "actions": [
+              { "action": "alert", "severity": "critical" },
+              { "action": "block_query", "target": "db.tables" }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+        let event = IngestEvent {
+            pid: 42,
+            event_type: 4,
+            ..Default::default()
+        };
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].enforce_block_query);
+        assert!(!matches[0].enforce_block_egress);
 
         let _ = fs::remove_file(path);
     }

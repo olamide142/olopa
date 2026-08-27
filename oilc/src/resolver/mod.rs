@@ -409,6 +409,7 @@ impl<'a> Resolver<'a> {
             ActionStmt::RequireAuth { for_: target, .. }
             | ActionStmt::Quarantine { path: target }
             | ActionStmt::BlockEgress { target }
+            | ActionStmt::BlockQuery { target }
             | ActionStmt::Throttle { target } => {
                 self.resolve_action_target(target, scope, alias_entity);
             }

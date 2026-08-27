@@ -1,9 +1,14 @@
 .git
 .github
 **/target
+**/node_modules
+**/dist
+**/webdist
 **/.venv
+**/.pytest_cache
 **/__pycache__
 **/*.pyc
 **/*.pyo
 **/*.swp
 **/.DS_Store
+tmp
