@@ -1,3 +1,3 @@
-from . import dashboard, docs, landing
+from . import dashboard, downloads
 
-__all__ = ["dashboard", "docs", "landing"]
+__all__ = ["dashboard", "downloads"]

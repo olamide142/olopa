@@ -1,0 +1,18 @@
+// Process & shell — bare exec, single source. Simplest possible manual test:
+// proves the compile -> load -> ingest -> alert pipeline end to end before
+// trying anything with joins.
+//
+// Manual test:
+//   cargo run --manifest-path oilc/Cargo.toml -- \
+//     --source oilc/src/rules/testable/mvp_exec_seen.oil --mode check
+//
+// To fire it: load the compiled runtime IR into the ingest server
+// (POST /api/v1/correlate/rules) and post any process_exec_events row with
+// pid > 0 to /api/v1/ingest/batches, then GET /api/v1/correlate/alerts.
+
+rule "mvp_exec_seen" {
+  from endpoint.process
+  correlate process.exec as p
+  where p.pid > 0
+  respond alert medium
+}

@@ -45,6 +45,8 @@ COPY app/intel_sync/ ./app/intel_sync
 COPY --from=web_build /build/app/control_plane/control_server/webdist ./app/control_plane/control_server/webdist
 COPY --from=caddy_runtime /usr/bin/caddy /usr/bin/caddy
 COPY app/control_plane/Caddyfile /etc/caddy/Caddyfile
+# Static landing + docs site — Caddy serves this directly, FastAPI never sees it.
+COPY app/control_plane/site /srv/site
 
 WORKDIR /opt/olopa/app/control_plane
 

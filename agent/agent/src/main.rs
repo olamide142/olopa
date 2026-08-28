@@ -223,6 +223,11 @@ async fn main() -> Result<()> {
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_INTEL_PATH.to_string());
     intel_store::init(std::path::Path::new(&intel_path));
+    if let Ok(redis_url) = std::env::var("OLOPA_INTEL_REDIS_URL") {
+        if !redis_url.trim().is_empty() {
+            intel_store::spawn_redis_refresh(redis_url);
+        }
+    }
     cgroup::init();
 
     // 1) Load eBPF object and attach selected probes.

@@ -17,6 +17,7 @@ use crate::telemetry::IngestBatchRequest;
 use super::alerts::{AlertRingBuffer, CorrelatedAlert, CorrelatedEventSnippet};
 use super::event::{EventFamily, OwnedEvent, UnifiedEventRef};
 use super::intel::CentralIntelStore;
+use super::threat_intel::ThreatIntelStore;
 use super::ir::{
     parse_runtime_program, RuntimeAction, RuntimeExpr, RuntimeJoin, RuntimeProgram, RuntimeRule,
     RuntimeScore, RuntimeSource,
@@ -56,6 +57,8 @@ impl CompiledRule {
                 ("database", _) | ("db", _) | ("", "db_query") | ("", "query") | ("", "sql") => {
                     EventFamily::DbQuery
                 }
+                ("dns", _) | ("", "dns_query") => EventFamily::Net,
+                ("ssl", _) | ("", "ssl_event") => EventFamily::Net,
                 ("agent", _) | ("heartbeat", _) | ("", "agent_heartbeat") => {
                     EventFamily::AgentHeartbeat
                 }
@@ -107,6 +110,7 @@ pub struct CorrelationEngine {
     rules: Arc<RwLock<Vec<CompiledRule>>>,
     pub state: CentralCallableState,
     pub intel: CentralIntelStore,
+    pub threat_intel: ThreatIntelStore,
     pub window: SlidingWindowIndex,
     pub alerts: AlertRingBuffer,
     events_evaluated: Arc<AtomicU64>,
@@ -127,6 +131,7 @@ impl CorrelationEngine {
             rules: Arc::new(RwLock::new(Vec::new())),
             state: CentralCallableState::default(),
             intel: CentralIntelStore::new(),
+            threat_intel: ThreatIntelStore::new(),
             window: SlidingWindowIndex::default(),
             alerts: AlertRingBuffer::default(),
             events_evaluated: Arc::new(AtomicU64::new(0)),
@@ -778,11 +783,43 @@ impl CorrelationEngine {
                 l.op_div(&r)
             }
             RuntimeExpr::In { lhs, rhs } => {
+                // `x in org.threat_intel.<feed>` / `x in org.allowlist.<feed>`
+                // compiles to a bare field-path reference to the external set
+                // name (oilc/src/resolver), not a literal or an event field -
+                // see oilc/src/rules/testable/dns_c2_domain_lookup.oil, whose
+                // compiled IR has `rhs: [{"op":"field","path":"org.threat_intel.c2_domains"}]`.
+                // Evaluating that path as a normal event field resolves to
+                // Null and the rule silently never matches, so it's resolved
+                // against the threat-intel store instead.
+                if let [RuntimeExpr::Field { path: set_name }] = rhs.as_slice() {
+                    if set_name.starts_with("org.") {
+                        let target = self.eval_expr(lhs, env, lets, tenant_id, host_id, now_ms);
+                        let is_member = match &target {
+                            Value::Str(s) => {
+                                self.threat_intel.contains_str(set_name, &s.to_lowercase())
+                            }
+                            Value::Ip(std::net::IpAddr::V4(ip)) => {
+                                self.threat_intel.contains_ip(set_name, u32::from(*ip))
+                            }
+                            _ => false,
+                        };
+                        return Value::Bool(is_member);
+                    }
+                }
+
                 let target = self.eval_expr(lhs, env, lets, tenant_id, host_id, now_ms);
                 let evaluated_list: Vec<Value> = rhs
                     .iter()
                     .map(|item| self.eval_expr(item, env, lets, tenant_id, host_id, now_ms))
                     .collect();
+                // A single rhs term that evaluates to a collection (e.g.
+                // `x in intel.domains("feed")`, a call returning Set<Str>) is
+                // the candidate list itself, not one candidate that happens
+                // to be a list — `op_in` only compares scalars, so without
+                // this the membership check could never be true.
+                if let [Value::List(items)] = evaluated_list.as_slice() {
+                    return Value::Bool(target.op_in(items));
+                }
                 Value::Bool(target.op_in(&evaluated_list))
             }
             RuntimeExpr::Contains { lhs, rhs } => {
@@ -859,6 +896,21 @@ impl CorrelationEngine {
                 let now_ns = now_ms.saturating_mul(1_000_000);
                 let count = self.state.eval_rate(tenant_id, "default", &val, window_ns, now_ns);
                 Value::Int(count as i64)
+            }
+            // `x in org.threat_intel.<feed>` compiles to `intel.domains(feed)`
+            // (oilc/src/oil_stdlib/src/callables.oil). Feed name only, not the
+            // full `org.threat_intel.` prefix - the store keys sets by their
+            // full dotted name, so it's reattached here.
+            "intel.domains" => {
+                let feed = eval_arg(0).to_string_lossy();
+                let set_name = format!("org.threat_intel.{feed}");
+                Value::List(
+                    self.threat_intel
+                        .string_set_items(&set_name)
+                        .into_iter()
+                        .map(Value::Str)
+                        .collect(),
+                )
             }
             "has_fact" | "fact" => {
                 let fact_name = eval_arg(0).to_string_lossy();

@@ -579,6 +579,11 @@ impl IngestRuntime {
                 tracing::warn!(error = %err, path = %rules_path, "failed to load initial correlation rules");
             }
         }
+        if let Ok(redis_url) = std::env::var("OLOPA_INTEL_REDIS_URL") {
+            if !redis_url.trim().is_empty() {
+                correlation.threat_intel.spawn_redis_refresh(redis_url);
+            }
+        }
 
         Ok(Self {
             cfg,

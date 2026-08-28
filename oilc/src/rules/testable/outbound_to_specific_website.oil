@@ -1,0 +1,26 @@
+// Network — process+network join, egress blocklist by domain.
+//
+// Manual test:
+//   cargo run --manifest-path oilc/Cargo.toml -- \
+//     --source oilc/src/rules/testable/outbound_to_specific_website.oil --mode check
+//
+// To fire it: process_exec_events row joined by pid to a net_events row with
+// direction "outbound" and attrs["dest.domain"] == "apple.com".
+
+rule "outbound_to_specific_website" {
+  from endpoint.process, network.flow
+
+  correlate
+    process.spawn as p
+    with network.connect as n on n.process_id == p.id
+
+  where
+    n.direction == "outbound"
+    and n.dest.domain in ["apple.com"]
+
+  respond
+    alert critical
+    block egress n.dest.domain
+    snapshot p, n
+    open case "Blocked outbound to protected website"
+}

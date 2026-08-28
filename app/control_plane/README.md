@@ -73,11 +73,13 @@ docker build -f app/control_plane/Dockerfile -t olopa-control-plane .
 
 ## Endpoints
 
-- `GET /` (render `template/app.html`)
-- `GET /landing` (render `template/index.html`)
+This process only serves the dashboard SPA and JSON APIs — landing, docs, and
+`install.sh` are static files under `site/`, served directly by Caddy (see
+[Caddy Routing](#caddy-routing) below).
+
+- `GET /`, `/fleet`, `/incidents`, `/graph`, `/oil`, `/compiler`, `/rules`,
+  `/deployments`, `/install` (dashboard SPA shell — client-side router takes over)
 - `GET /app` (legacy redirect to `/`)
-- `GET /install` (redirect to `/#install`)
-- `GET /install.sh` (bootstrap install script)
 - `GET /downloads/agent/latest` (agent binary download/redirect)
 - `GET /health`
 - `GET /api/v1/control/status`
@@ -142,11 +144,22 @@ Operator procedures, measured capacity limits, and game-day exercises:
 
 ## Caddy Routing
 
-Deployment uses a single [`Caddyfile`](./Caddyfile) with host-based rules:
-- `console.olopa.io` proxies to the app (`/` serves `app.html`)
-- `olopa.io` / `www.olopa.io` proxies landing (`/` serves `index.html` via `/landing`)
-- `olopa.io/install.sh` proxies the installer script from control-plane backend
+Deployment uses a single [`Caddyfile`](./Caddyfile) with host-based rules. Landing and
+docs are fully static — Caddy serves them straight from [`site/`](./site) and this
+process never sees the request:
+- `console.olopa.io` proxies everything to the FastAPI process — the dashboard SPA
+  (built from `web/` into `control_server/webdist`) and all `/api/**` routes
+- `docs.olopa.io` is served entirely from `site/{quickstart,agent/config,oil,secure-connect}/`
+  by Caddy's `file_server`; `/` redirects to `/quickstart/`
+- `olopa.io` / `www.olopa.io` serves `site/index.html` at `/` plus `site/install.sh`
+  and `site/assets/`, also via `file_server`. Two routes still hit the backend:
+  `/downloads/agent/latest` (resolves `AGENT_BINARY_PATH`/`AGENT_DOWNLOAD_URL` at
+  runtime) and `/health`
+- `olopa.io/app*` and `olopa.io/api*` redirect to `console.olopa.io`
 - `releases.olopa.io` is expected to be served directly by object storage/CDN (not by control-plane Caddy)
+
+To add or edit a landing/docs page, edit the file under `site/` directly — there's no
+build step and FastAPI has no route for it.
 
 ### Compile endpoint body
 

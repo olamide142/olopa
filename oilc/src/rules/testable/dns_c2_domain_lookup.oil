@@ -1,0 +1,48 @@
+// Network/DNS — extracted from dns_detection.oil. A process resolving a
+// known C2/malware callback domain is a high-confidence compromise
+// indicator. The domain set is managed via the threat-intel feed
+// (org.threat_intel.c2_domains — see app/intel_sync/), not hardcoded here.
+//
+// Manual test:
+//   cargo run --manifest-path oilc/Cargo.toml -- \
+//     --source oilc/src/rules/testable/dns_c2_domain_lookup.oil --mode check
+//
+// This rule can only be FIRED via the agent's local RuntimeIrRuleEngine
+// (agent/agent/src/runtime_ir.rs) — the ingest server's correlation engine
+// has no org.threat_intel.* set-membership support even after the dns/ssl
+// domain-routing fix. To fire it manually you need a populated IntelStore
+// (run `python -m app.intel_sync.sync` to build intel.json, or point
+// OLOPA_INTEL_PATH at a fixture file containing a c2_domains set) plus a
+// dns.query event whose domain is in that set, joined by pid to a
+// process.spawn event. See the Rust unit test in agent/agent/src/agent.rs
+// for a manual-equivalent fixture you can run with `cargo test -p olopa-agent`.
+
+rule "dns_c2_domain_lookup" {
+  from dns.query, endpoint.process
+
+  correlate
+    dns.query as q
+    with process.spawn as p on p.pid == q.pid
+
+  where
+    q.domain.value in org.threat_intel.c2_domains
+
+  let
+    root_proc    = p.uid == 0
+    unusual_proc = p.name not in host(p.host_id).baseline.processes
+
+  score
+    85
+    +10 if root_proc
+    +5  if unusual_proc
+
+  respond
+    if score >= 90 {
+      alert critical
+      snapshot p, q
+      open case "Process resolved known C2 domain"
+    } else {
+      alert high
+      snapshot p, q
+    }
+}

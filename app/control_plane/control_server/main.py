@@ -4,11 +4,13 @@ Design intent:
 - Rust server stays on the ingest hot path (agent -> ingest).
 - Python server orchestrates control workflows and dashboard aggregation.
 - Dashboard read endpoints proxy to Rust ingest APIs for now.
+- Landing page and docs are static files served directly by Caddy (see
+  ``app/control_plane/site/`` and ``Caddyfile``) — this process only serves the
+  dashboard SPA and JSON APIs.
 
 Route organisation:
-- routers.dashboard    /           app shell
-- routers.landing      /landing    public marketing page, /install, /downloads
-- routers.docs         /quickstart /agent/config /oil
+- routers.dashboard    /           dashboard SPA shell
+- routers.downloads    /downloads/agent/latest
 - routers.auth         /api/v1/auth/**
 - routers.audit        /api/v1/audit/**
 - routers.rules        /api/v1/rules/**
@@ -39,9 +41,9 @@ from pydantic import BaseModel, Field
 
 from .db import init_db
 from .auth import RequestContext
-from .deps import settings, template_root
+from .deps import settings, webdist_root
 from .rbac import require_analyst, require_operator, require_viewer
-from .routers import dashboard, docs, landing, auth, audit, rules, deployments
+from .routers import dashboard, downloads, auth, audit, rules, deployments
 from .secure_connect.router import router as secure_connect_router
 from .secure_connect.worker import run_maintenance_loop as run_secure_connect_maintenance
 
@@ -61,8 +63,22 @@ _intel_sync_thread: threading.Thread | None = None
 
 
 def _start_intel_sync_daemon() -> None:
-    """Start the intel feed sync daemon in a background thread."""
+    """Start the intel feed sync daemon in a background thread.
+
+    Opt-in via CONTROL_INTEL_SYNC_DAEMON_ENABLED, default disabled: scheduling
+    now runs as its own `olopa-intel-sync` compose service (decoupled from
+    this process's lifetime), so this in-process thread only exists for
+    standalone/dev runs of control-plane outside docker-compose.
+    """
     global _intel_sync_thread
+    import os
+
+    if os.environ.get("CONTROL_INTEL_SYNC_DAEMON_ENABLED", "false").strip().lower() not in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return
     if run_loop is None:
         logger.warning(
             "intel-sync package is unavailable; background synchronization is disabled"
@@ -158,15 +174,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 # -- Static assets and Router inclusion ---------------------------------------
 
-app.mount("/assets", StaticFiles(directory=str(template_root / "assets")), name="assets")
-
-_webdist = template_root.parent / "webdist"
-if _webdist.is_dir():
-    app.mount("/ui", StaticFiles(directory=str(_webdist)), name="ui")
+if webdist_root.is_dir():
+    app.mount("/ui", StaticFiles(directory=str(webdist_root)), name="ui")
 
 app.include_router(dashboard.router)
-app.include_router(landing.router)
-app.include_router(docs.router)
+app.include_router(downloads.router)
 app.include_router(auth.router)
 app.include_router(audit.router)
 app.include_router(rules.router)

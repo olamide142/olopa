@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Secure Connect — Olopa Docs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:        #081427;
+      --bg2:       #0e1d35;
+      --bg3:       #132744;
+      --border:    #253a5c;
+      --border2:   #34507c;
+      --text:      #d7e3f7;
+      --text-dim:  #a8bad8;
+      --text-hi:   #f4f8ff;
+      --accent:    #58a0ff;
+      --accent2:   #2f78e6;
+      --warn:      #d5a43b;
+      --ok:        #39c975;
+      --red:       #ff6b73;
+      --code-bg:   #050d1e;
+      --pill-bg:   #0d1e3d;
+      --pill-text: #58a0ff;
+      --stripe-y:  #d0a13a;
+      --stripe-b:  #0f2c55;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'IBM Plex Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      font-size: 15px;
+    }
+
+    /* ── Layout ─────────────────────────────────────────── */
+
+    .layout {
+      display: grid;
+      grid-template-columns: 248px 1fr;
+      min-height: 100vh;
+    }
+
+    /* ── Sidebar ────────────────────────────────────────── */
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      border-right: 1px solid var(--border);
+      background: var(--bg2);
+      padding: 0 0 48px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border2) transparent;
+    }
+
+    .sidebar-logo {
+      padding: 24px 22px 0;
+    }
+
+    .sidebar-logo .brand {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+      font-size: 1rem;
+      letter-spacing: 0.03em;
+      color: var(--text-hi);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .sidebar-logo .brand span { color: var(--accent); }
+
+    .brand-mascot {
+      width: 26px;
+      height: 26px;
+      object-fit: contain;
+      display: block;
+      opacity: 0.95;
+      filter: drop-shadow(0 1px 3px rgba(0,0,0,0.4));
+    }
+
+    .sidebar-logo .sub {
+      font-size: 0.67rem;
+      color: var(--border2);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-top: 3px;
+    }
+
+    .police-stripe {
+      height: 4px;
+      margin: 16px 0 0;
+      background: repeating-linear-gradient(90deg,
+        var(--stripe-y) 0 18px,
+        var(--stripe-b) 18px 30px);
+    }
+
+    .nav-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 14px 0;
+    }
+
+    .nav-group { margin-top: 18px; }
+
+    .nav-label {
+      font-size: 0.64rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--border2);
+      padding: 0 22px 5px;
+    }
+
+    .nav-item {
+      display: block;
+      padding: 5px 22px;
+      font-size: 0.83rem;
+      color: var(--text-dim);
+      text-decoration: none;
+      border-left: 2px solid transparent;
+      transition: color 0.12s, border-color 0.12s, background 0.12s;
+    }
+
+    .nav-item:hover {
+      color: var(--text);
+      background: rgba(88,160,255,0.05);
+    }
+
+    .nav-item.active {
+      color: var(--accent);
+      border-left-color: var(--accent);
+      background: rgba(88,160,255,0.07);
+    }
+
+    .nav-item.global-active {
+      color: var(--warn);
+      border-left-color: var(--warn);
+      background: rgba(213,164,59,0.06);
+    }
+
+    /* ── Main ───────────────────────────────────────────── */
+
+    .main {
+      padding: 52px 64px 96px;
+      max-width: 940px;
+    }
+
+    .page-header {
+      margin-bottom: 44px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .page-label {
+      font-size: 0.67rem;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--warn);
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+      font-size: clamp(1.6rem, 2.8vw, 2.2rem);
+      line-height: 1.18;
+      letter-spacing: -0.01em;
+      color: var(--text-hi);
+      margin-bottom: 12px;
+    }
+
+    .lead {
+      font-size: 1rem;
+      color: var(--text-dim);
+      max-width: 70ch;
+      line-height: 1.65;
+    }
+
+    /* ── Sections ───────────────────────────────────────── */
+
+    .section { margin-bottom: 44px; }
+
+    h2 {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+      font-size: 1.15rem;
+      color: var(--text-hi);
+      margin-bottom: 14px;
+      scroll-margin-top: 24px;
+    }
+
+    h3 {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-weight: 600;
+      font-size: 0.93rem;
+      color: var(--ok);
+      margin: 22px 0 10px;
+    }
+
+    p {
+      color: var(--text-dim);
+      margin-bottom: 10px;
+      max-width: 72ch;
+    }
+
+    /* ── Cards ──────────────────────────────────────────── */
+
+    .card {
+      border: 1px solid var(--border);
+      background: var(--bg2);
+      border-radius: 10px;
+      padding: 20px 22px;
+      margin-bottom: 14px;
+    }
+
+    .card h2 { margin-top: 0; }
+
+    /* ── Code blocks ────────────────────────────────────── */
+
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      margin: 10px 0 0;
+    }
+
+    pre code {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.82rem;
+      line-height: 1.75;
+      color: #c4d4f0;
+      background: none;
+      white-space: pre;
+    }
+
+    code {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.82em;
+      background: var(--pill-bg);
+      color: var(--pill-text);
+      padding: 2px 7px;
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+
+    /* ── Tables ─────────────────────────────────────────── */
+
+    .table-wrap { overflow-x: auto; margin: 10px 0 0; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      min-width: 600px;
+    }
+
+    th {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 500;
+      font-size: 0.7rem;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: var(--border2);
+      text-align: left;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-dim);
+      vertical-align: top;
+    }
+
+    td code { font-size: 0.8em; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,0.013); }
+
+    /* ── Callouts ───────────────────────────────────────── */
+
+    .callout {
+      border-radius: 8px;
+      padding: 11px 15px;
+      margin: 12px 0 0;
+      font-size: 0.875rem;
+      border-left: 3px solid;
+    }
+
+    .callout.tip {
+      background: rgba(57,201,117,0.06);
+      border-color: var(--ok);
+      color: #7de0ae;
+    }
+
+    .callout.note {
+      background: rgba(213,164,59,0.07);
+      border-color: var(--warn);
+      color: #d5a43b;
+    }
+
+    .callout.danger {
+      background: rgba(255,107,115,0.07);
+      border-color: var(--red);
+      color: #ff9097;
+    }
+
+    .callout strong { font-weight: 600; margin-right: 4px; }
+
+    /* ── Footer nav ─────────────────────────────────────── */
+
+    .footer-nav {
+      margin-top: 40px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    .footer-nav a {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .footer-nav a:hover { color: var(--text-hi); }
+
+    .footer-nav .dir {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    @media (max-width: 780px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .main { padding: 28px 20px 64px; }
+    }
+  </style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ── Sidebar ─────────────────────────────────────── -->
+  <nav class="sidebar" aria-label="Docs navigation">
+    <div class="sidebar-logo">
+      <div class="brand">
+        <img src="/assets/mascot.png" alt="Olopa" class="brand-mascot" />
+        <span>OLOPA</span>
+      </div>
+      <div class="sub">Documentation</div>
+    </div>
+    <div class="police-stripe"></div>
+
+    <div class="nav-group">
+      <div class="nav-label">Docs</div>
+      <a class="nav-item" href="/quickstart/">Quickstart</a>
+      <a class="nav-item" href="/agent/config/">Agent Config</a>
+      <a class="nav-item" href="/oil/">OIL Reference</a>
+      <a class="nav-item global-active" href="/secure-connect/">Secure Connect</a>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-group">
+      <div class="nav-label">On this page</div>
+      <a class="nav-item active" href="#overview">Overview</a>
+      <a class="nav-item" href="#session-states">Session states</a>
+      <a class="nav-item" href="#endpoint-config">Endpoint config</a>
+      <a class="nav-item" href="#gateway-register">Register a gateway</a>
+      <a class="nav-item" href="#gateway-reconciler">Gateway reconciler</a>
+      <a class="nav-item" href="#revocation">Revocation model</a>
+      <a class="nav-item" href="#risk-response">Risk-driven response</a>
+      <a class="nav-item" href="#capacity">Capacity notes</a>
+    </div>
+  </nav>
+
+  <!-- ── Main content ────────────────────────────────── -->
+  <main class="main">
+
+    <div class="page-header">
+      <div class="page-label">Managed WireGuard</div>
+      <h1>Secure Connect</h1>
+      <p class="lead">Olopa's zero-trust access plane: the control plane authorizes every WireGuard peer and can restrict, quarantine, or terminate a session in response to risk — without touching gateway interface state directly.</p>
+    </div>
+
+    <!-- OVERVIEW -->
+    <section class="section" id="overview">
+      <div class="card">
+        <h2>Overview</h2>
+        <p>Secure Connect splits into three independently-failing planes:</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Plane</th><th>Location</th><th>Responsibility</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Endpoint runtime</td>
+                <td><code>agent/agent/src/secure_connect/</code></td>
+                <td>Enrolls, holds the session state machine, applies WireGuard config locally, and owns the kill switch</td>
+              </tr>
+              <tr>
+                <td>Orchestrator</td>
+                <td><code>app/control_plane/control_server/secure_connect/</code></td>
+                <td>Issues sessions, allocates tunnel addresses, assigns gateways, and reacts to risk signals from correlated alerts</td>
+              </tr>
+              <tr>
+                <td>Gateway plane</td>
+                <td><code>app/secure_connect_gateway/</code></td>
+                <td>Plain WireGuard hosts running a reconciler that mirrors the peer set the orchestrator authorizes</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout note">
+          <strong>Note:</strong> Secure Connect is deliberately isolated from the sensor and ingest loops on the endpoint — a control-plane or network failure is reported through its own health snapshot and never stops telemetry collection.
+        </div>
+      </div>
+    </section>
+
+    <!-- SESSION STATES -->
+    <section class="section" id="session-states">
+      <div class="card">
+        <h2>Session states</h2>
+        <p>The endpoint session state machine has increasing severity tiers. Higher tiers apply a more restrictive network policy.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Tier</th><th>States</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>0</td>
+                <td><code>disabled</code> · <code>idle</code> · <code>enrolling</code> · <code>connecting</code> · <code>healthy</code></td>
+                <td>Normal lifecycle — full profile access once <code>healthy</code></td>
+              </tr>
+              <tr>
+                <td>1</td>
+                <td><code>elevated</code> · <code>degraded</code></td>
+                <td>Heightened monitoring; still connected under the assigned profile</td>
+              </tr>
+              <tr>
+                <td>2</td>
+                <td><code>restricted</code></td>
+                <td>Traffic confined to the profile's <code>safe_cidrs</code> only</td>
+              </tr>
+              <tr>
+                <td>3</td>
+                <td><code>quarantined</code> / <code>terminated</code></td>
+                <td>Session keys revoked; the device must re-enroll a fresh session</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout note">
+          <strong>Note:</strong> Relaxation is one-way outside of a full reconnect — the endpoint only ever accepts an operator-confirmed <code>elevated → healthy</code> downgrade on a live session. Recovering a <code>restricted</code> or <code>quarantined</code> device means terminating that session and starting a new one under the relaxed profile.
+        </div>
+      </div>
+    </section>
+
+    <!-- ENDPOINT CONFIG -->
+    <section class="section" id="endpoint-config">
+      <div class="card">
+        <h2>Endpoint config</h2>
+        <p>Set on the <code>olopa</code> agent process to enable its Secure Connect client alongside normal sensor/ingest operation.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Env var</th><th>Default</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>OLOPA_SC_ENABLED</code></td>
+                <td>disabled</td>
+                <td>Set truthy to start the Secure Connect client</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_SC_CONTROL_URL</code></td>
+                <td>—</td>
+                <td>Control-plane base URL; must be <code>https://</code> (set <code>OLOPA_SC_ALLOW_INSECURE_HTTP=1</code> only for local dev)</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_SC_ENROLLMENT_TOKEN</code></td>
+                <td>—</td>
+                <td>One-time token redeemed at <code>/api/v1/secure-connect/enroll</code></td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_SC_MTLS_IDENTITY_PEM</code></td>
+                <td>—</td>
+                <td>Client identity cert used to bind the enrollment (required unless <code>OLOPA_SC_ALLOW_UNBOUND_ENROLLMENT=1</code>, local dev only)</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_SC_INTERFACE</code></td>
+                <td><code>olopa0</code></td>
+                <td>Local WireGuard interface name (max 15 chars)</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_SC_TENANT_ID</code> / <code>OLOPA_SC_HOST_ID</code></td>
+                <td>falls back to <code>OLOPA_INGEST_TENANT_ID</code> / <code>OLOPA_INGEST_HOST_ID</code></td>
+                <td>Tenant and host identity used for enrollment and sessions</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_SC_HEARTBEAT_MS</code></td>
+                <td><code>15000</code></td>
+                <td>Session heartbeat interval (floor 1000ms)</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_SC_POLICY_TTL_SECS</code></td>
+                <td><code>300</code></td>
+                <td>How long a fetched policy/profile is cached before refresh</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_SC_KILL_SWITCH</code></td>
+                <td>on</td>
+                <td>Blocks non-tunnel egress whenever the session isn't healthy. Set to <code>0</code>/<code>false</code>/<code>off</code> to disable — not recommended outside local dev</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_SC_MTU</code></td>
+                <td><code>1420</code></td>
+                <td>WireGuard interface MTU (576–9000)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <pre><code>export OLOPA_SC_ENABLED=1
+export OLOPA_SC_CONTROL_URL=https://control.example.com
+export OLOPA_SC_ENROLLMENT_TOKEN=eyJhbGciOi...
+export OLOPA_SC_MTLS_IDENTITY_PEM=/etc/olopa/identity.pem</code></pre>
+      </div>
+    </section>
+
+    <!-- REGISTER GATEWAY -->
+    <section class="section" id="gateway-register">
+      <div class="card">
+        <h2>Register a gateway</h2>
+        <p>Gateways are plain WireGuard hosts — the control plane never touches their interface config, only peer entries. Register one with admin credentials before deploying the reconciler:</p>
+        <pre><code>curl -sS -X POST "$CONTROL_URL/api/v1/secure-connect/gateways" \
+  -H "authorization: Bearer $ADMIN_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{
+        "name": "eu-west-1a",
+        "region": "eu-west",
+        "public_key": "'"$(wg show olopa-gw0 public-key)"'",
+        "public_endpoint": "198.51.100.7:51820",
+        "client_cidr": "10.90.0.0/16",
+        "dns_servers": ["10.90.0.53"],
+        "capacity": 5000
+      }'</code></pre>
+        <div class="callout tip">
+          <strong>Tip:</strong> <code>client_cidr</code> is the pool the orchestrator allocates endpoint tunnel addresses from. The gateway keeps the first host address (<code>10.90.0.1</code>) for its own interface — provision that with <code>wg-quick</code> or cloud-init, the reconciler never sets it.
+        </div>
+      </div>
+    </section>
+
+    <!-- GATEWAY RECONCILER -->
+    <section class="section" id="gateway-reconciler">
+      <div class="card">
+        <h2>Gateway reconciler</h2>
+        <p>Runs on the gateway host. Every tick it pulls the authorized peer set from the control plane, diffs it against <code>wg show &lt;iface&gt; dump</code>, applies the difference with <code>wg set</code> (removals first), and reports liveness with a heartbeat.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Env var</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>OLOPA_GW_CONTROL_URL</code></td><td>—</td><td>Control-plane base URL (https required)</td></tr>
+              <tr><td><code>OLOPA_GW_GATEWAY_ID</code></td><td>—</td><td>Gateway id returned by registration</td></tr>
+              <tr><td><code>OLOPA_GW_TENANT_ID</code></td><td>—</td><td>Tenant scope for the peer query</td></tr>
+              <tr><td><code>OLOPA_GW_API_TOKEN</code></td><td>—</td><td>Bearer token with the operator role</td></tr>
+              <tr><td><code>OLOPA_GW_INTERFACE</code></td><td><code>olopa-gw0</code></td><td>WireGuard interface to manage</td></tr>
+              <tr><td><code>OLOPA_GW_INTERVAL_SECS</code></td><td><code>15</code></td><td>Poll interval — also the bound on revocation latency</td></tr>
+              <tr><td><code>OLOPA_GW_DRY_RUN</code></td><td><code>0</code></td><td>Log the plan instead of applying it</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <pre><code># Install and run under systemd
+install -D -m 0755 reconciler.py /opt/olopa/secure_connect_gateway/reconciler.py
+install -D -m 0644 olopa-sc-gateway.service /etc/systemd/system/olopa-sc-gateway.service
+systemctl enable --now olopa-sc-gateway
+
+# Or one-shot, e.g. from a deploy pipeline
+python3 reconciler.py --once --dry-run --verbose</code></pre>
+      </div>
+    </section>
+
+    <!-- REVOCATION MODEL -->
+    <section class="section" id="revocation">
+      <div class="card">
+        <h2>Revocation model</h2>
+        <p>Peer removal <em>is</em> the revocation path — when the control plane quarantines, terminates, or rekeys a session, the old public key disappears from the peer list and the reconciler drops it from the interface on its next poll. There is no separate revocation API to call.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Failure</th><th>Behavior</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Control plane unreachable from the gateway</td>
+                <td><strong>Fails open on the gateway.</strong> The current peer set stays exactly as it is — cutting access requires a successful poll that says the peer is gone, so a control-plane outage never blacks out a fleet</td>
+              </tr>
+              <tr>
+                <td>Control plane unreachable from the endpoint</td>
+                <td><strong>Fails closed on the endpoint</strong> via the kill switch (<code>OLOPA_SC_KILL_SWITCH</code>, on by default) — non-tunnel egress is blocked whenever the session isn't <code>healthy</code></td>
+              </tr>
+              <tr>
+                <td>Gateway stops heartbeating</td>
+                <td>After <code>CONTROL_SC_GATEWAY_GRACE_SECS</code> (default 120s) it drops out of rotation and the orchestrator migrates its live sessions to a healthy gateway</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout note">
+          <strong>Note:</strong> Revocation latency is bounded by <code>OLOPA_GW_INTERVAL_SECS</code>. The endpoint's own kill switch engages within seconds of a control-plane command; the gateway poll interval governs how fast the server-side peer entry actually disappears — set it at or below your revocation SLO.
+        </div>
+      </div>
+    </section>
+
+    <!-- RISK-DRIVEN RESPONSE -->
+    <section class="section" id="risk-response">
+      <div class="card">
+        <h2>Risk-driven response</h2>
+        <p>The orchestrator subscribes to the correlation engine's alert stream (<a href="/oil/#respond" style="color:var(--accent)">OIL <code>respond</code></a> actions) and can move a session down the severity ladder automatically. Operators can also drive the same transitions directly:</p>
+        <pre><code># Quarantine every session held by a device
+curl -sS -X POST "$SC/devices/$DEVICE_ID/quarantine" \
+  -H "authorization: Bearer $OPERATOR_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"reason": "correlated alert: credential exfil chain"}'
+
+# Restrict a single session to its profile's safe_cidrs
+curl -sS -X POST "$SC/sessions/$SESSION_ID/state" \
+  -H "authorization: Bearer $OPERATOR_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"desired_state": "restricted", "reason": "elevated risk score"}'</code></pre>
+        <div class="callout note">
+          <strong>Note:</strong> Restricting a session requires the session's profile to define <code>safe_cidrs</code> — there's nothing to fall back to otherwise. Relaxing a <code>restricted</code> or <code>quarantined</code> session isn't accepted in place; terminate it and let the device reconnect.
+        </div>
+      </div>
+    </section>
+
+    <!-- CAPACITY -->
+    <section class="section" id="capacity">
+      <div class="card">
+        <h2>Capacity notes</h2>
+        <p>Measured with <code>app/control_plane/tools/sc_loadtest.py</code> against a single uvicorn worker on SQLite: session establishment collapses past roughly 8 concurrent starts (SQLite serializes writers and establishment holds the write lock across several statements). Enrollment and heartbeat traffic scale fine at every level tested.</p>
+        <div class="callout danger">
+          <strong>Production:</strong> any deployment beyond a pilot must run PostgreSQL (<code>DATABASE_URL=postgresql+psycopg://...</code>) — the ORM layer is portable, only the SQLite-specific PRAGMAs in <code>control_server/db.py</code> are conditional on the URL.
+        </div>
+        <pre><code>python app/control_plane/tools/sc_loadtest.py \
+  --control-url "$CONTROL_URL" --dev-token "$CONTROL_DEV_TOKEN" \
+  --devices 500 --concurrency 8 --duration 120</code></pre>
+        <p>The load test exits non-zero when an SLO target is missed, so it can gate a release.</p>
+      </div>
+    </section>
+
+    <!-- Footer nav -->
+    <div class="footer-nav">
+      <a href="/oil/">
+        <span class="dir">Reference</span>
+        ← OIL Language Reference
+      </a>
+      <a href="/quickstart/">
+        <span class="dir">Start over</span>
+        Quickstart →
+      </a>
+    </div>
+
+  </main>
+</div>
+
+<script>
+  const sections = Array.from(document.querySelectorAll('section[id]'));
+  const sectionLinks = Array.from(document.querySelectorAll('.nav-item[href^="#"]'));
+  const visible = new Set();
+
+  function setActive() {
+    const active = sections.find(s => visible.has(s.id));
+    sectionLinks.forEach(link => {
+      link.classList.toggle('active', !!active && link.getAttribute('href') === '#' + active.id);
+    });
+  }
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      entry.isIntersecting ? visible.add(entry.target.id) : visible.delete(entry.target.id);
+    });
+    setActive();
+  }, { rootMargin: '-5% 0px -55% 0px' });
+
+  sections.forEach(s => observer.observe(s));
+</script>
+</body>
+</html>

@@ -26,6 +26,12 @@ services:
     volumes:
       - surreal_data:/data
 
+  redis:
+    image: redis:7-alpine
+    container_name: olopa-redis
+    volumes:
+      - redis_data:/data
+
   olopa-ingest:
     build:
       context: ./app/ingest_server
@@ -34,6 +40,7 @@ services:
     depends_on:
       - clickhouse
       - surrealdb
+      - redis
     environment:
       SERVER_HOST: 0.0.0.0
       SERVER_PORT: "8000"
@@ -46,12 +53,14 @@ services:
       INGEST_SURREAL_TABLE: events_raw
       INGEST_SURREAL_USER: root
       INGEST_SURREAL_PASSWORD: root
+      OLOPA_INTEL_REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
     volumes:
       - ingest_data:/var/lib/olopa/ingest
 
   control-plane:
+    image: olopa-control-plane:local
     build:
       context: .
       dockerfile: app/control_plane/Dockerfile
@@ -68,6 +77,24 @@ services:
     volumes:
       - ./oilc:/opt/olopa/oilc:ro
 
+  # Threat-intel feed sync, decoupled from the control-plane process
+  # lifetime (previously an in-process background thread started on
+  # control-plane boot). Reuses the control-plane image, which already has
+  # app/intel_sync copied in and its dependencies installed — run
+  # `docker compose build control-plane` first if this image doesn't exist
+  # yet locally.
+  olopa-intel-sync:
+    image: olopa-control-plane:local
+    container_name: olopa-intel-sync
+    depends_on:
+      - redis
+    environment:
+      OLOPA_INTEL_REDIS_URL: redis://redis:6379/0
+      OLOPA_INTEL_PATH: /var/lib/olopa/intel/intel.json
+    volumes:
+      - intel_data:/var/lib/olopa/intel
+    command: ["/opt/venv/bin/python", "-m", "app.intel_sync.sync", "--loop"]
+
   keycloak:
     image: quay.io/keycloak/keycloak:26.6.0
     container_name: olopa-keycloak
@@ -81,16 +108,20 @@ services:
   caddy:
     image: caddy:2.8-alpine
     container_name: olopa-caddy
+    network_mode: host
     depends_on:
       - control-plane
       - olopa-ingest
       - keycloak
-    ports:
-      - "80:80"
+    environment:
+      PORT: "80"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./app/control_plane/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./app/control_plane/site:/srv/site:ro
 
 volumes:
   clickhouse_data:
   surreal_data:
   ingest_data:
+  redis_data:
+  intel_data:

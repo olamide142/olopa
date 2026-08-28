@@ -1,0 +1,797 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Configuration — Olopa Docs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:        #081427;
+      --bg2:       #0e1d35;
+      --bg3:       #132744;
+      --border:    #253a5c;
+      --border2:   #34507c;
+      --text:      #d7e3f7;
+      --text-dim:  #a8bad8;
+      --text-hi:   #f4f8ff;
+      --accent:    #58a0ff;
+      --accent2:   #2f78e6;
+      --warn:      #d5a43b;
+      --ok:        #39c975;
+      --red:       #ff6b73;
+      --code-bg:   #050d1e;
+      --pill-bg:   #0d1e3d;
+      --pill-text: #58a0ff;
+      --stripe-y:  #d0a13a;
+      --stripe-b:  #0f2c55;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'IBM Plex Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      font-size: 15px;
+    }
+
+    /* ── Layout ─────────────────────────────────────────── */
+
+    .layout {
+      display: grid;
+      grid-template-columns: 248px 1fr;
+      min-height: 100vh;
+    }
+
+    /* ── Sidebar ────────────────────────────────────────── */
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      border-right: 1px solid var(--border);
+      background: var(--bg2);
+      padding: 0 0 48px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border2) transparent;
+    }
+
+    .sidebar-logo {
+      padding: 24px 22px 0;
+    }
+
+    .sidebar-logo .brand {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+      font-size: 1rem;
+      letter-spacing: 0.03em;
+      color: var(--text-hi);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .sidebar-logo .brand span { color: var(--accent); }
+
+    .brand-mascot {
+      width: 26px;
+      height: 26px;
+      object-fit: contain;
+      display: block;
+      opacity: 0.95;
+      filter: drop-shadow(0 1px 3px rgba(0,0,0,0.4));
+    }
+
+    .sidebar-logo .sub {
+      font-size: 0.67rem;
+      color: var(--border2);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-top: 3px;
+    }
+
+    .police-stripe {
+      height: 4px;
+      margin: 16px 0 0;
+      background: repeating-linear-gradient(90deg,
+        var(--stripe-y) 0 18px,
+        var(--stripe-b) 18px 30px);
+    }
+
+    .nav-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 14px 0;
+    }
+
+    .nav-group { margin-top: 18px; }
+
+    .nav-label {
+      font-size: 0.64rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--border2);
+      padding: 0 22px 5px;
+    }
+
+    .nav-item {
+      display: block;
+      padding: 5px 22px;
+      font-size: 0.83rem;
+      color: var(--text-dim);
+      text-decoration: none;
+      border-left: 2px solid transparent;
+      transition: color 0.12s, border-color 0.12s, background 0.12s;
+    }
+
+    .nav-item:hover {
+      color: var(--text);
+      background: rgba(88,160,255,0.05);
+    }
+
+    .nav-item.active {
+      color: var(--accent);
+      border-left-color: var(--accent);
+      background: rgba(88,160,255,0.07);
+    }
+
+    .nav-item.global-active {
+      color: var(--warn);
+      border-left-color: var(--warn);
+      background: rgba(213,164,59,0.06);
+    }
+
+    /* ── Main ───────────────────────────────────────────── */
+
+    .main {
+      padding: 52px 64px 96px;
+      max-width: 940px;
+    }
+
+    .page-header {
+      margin-bottom: 44px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .page-label {
+      font-size: 0.67rem;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--warn);
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+      font-size: clamp(1.6rem, 2.8vw, 2.2rem);
+      line-height: 1.18;
+      letter-spacing: -0.01em;
+      color: var(--text-hi);
+      margin-bottom: 12px;
+    }
+
+    .lead {
+      font-size: 1rem;
+      color: var(--text-dim);
+      max-width: 70ch;
+      line-height: 1.65;
+    }
+
+    /* ── Sections ───────────────────────────────────────── */
+
+    .section { margin-bottom: 44px; }
+
+    h2 {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 600;
+      font-size: 1.15rem;
+      color: var(--text-hi);
+      margin-bottom: 14px;
+      scroll-margin-top: 24px;
+    }
+
+    h3 {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-weight: 600;
+      font-size: 0.93rem;
+      color: var(--ok);
+      margin: 22px 0 10px;
+    }
+
+    p {
+      color: var(--text-dim);
+      margin-bottom: 10px;
+      max-width: 72ch;
+    }
+
+    /* ── Cards ──────────────────────────────────────────── */
+
+    .card {
+      border: 1px solid var(--border);
+      background: var(--bg2);
+      border-radius: 10px;
+      padding: 20px 22px;
+      margin-bottom: 14px;
+    }
+
+    .card h2 { margin-top: 0; }
+
+    /* ── Code blocks ────────────────────────────────────── */
+
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      margin: 10px 0 0;
+    }
+
+    pre code {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.82rem;
+      line-height: 1.75;
+      color: #c4d4f0;
+      background: none;
+      white-space: pre;
+    }
+
+    code {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.82em;
+      background: var(--pill-bg);
+      color: var(--pill-text);
+      padding: 2px 7px;
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+
+    /* ── Tables ─────────────────────────────────────────── */
+
+    .table-wrap { overflow-x: auto; margin: 10px 0 0; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      min-width: 600px;
+    }
+
+    th {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 500;
+      font-size: 0.7rem;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: var(--border2);
+      text-align: left;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-dim);
+      vertical-align: top;
+    }
+
+    td code { font-size: 0.8em; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,0.013); }
+
+    /* ── Callouts ───────────────────────────────────────── */
+
+    .callout {
+      border-radius: 8px;
+      padding: 11px 15px;
+      margin: 12px 0 0;
+      font-size: 0.875rem;
+      border-left: 3px solid;
+    }
+
+    .callout.tip {
+      background: rgba(57,201,117,0.06);
+      border-color: var(--ok);
+      color: #7de0ae;
+    }
+
+    .callout.note {
+      background: rgba(213,164,59,0.07);
+      border-color: var(--warn);
+      color: #d5a43b;
+    }
+
+    .callout.danger {
+      background: rgba(255,107,115,0.07);
+      border-color: var(--red);
+      color: #ff9097;
+    }
+
+    .callout strong { font-weight: 600; margin-right: 4px; }
+
+    /* ── Footer nav ─────────────────────────────────────── */
+
+    .footer-nav {
+      margin-top: 40px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    .footer-nav a {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .footer-nav a:hover { color: var(--text-hi); }
+
+    .footer-nav .dir {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    @media (max-width: 780px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .main { padding: 28px 20px 64px; }
+    }
+  </style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ── Sidebar ─────────────────────────────────────── -->
+  <nav class="sidebar" aria-label="Docs navigation">
+    <div class="sidebar-logo">
+      <div class="brand">
+        <img src="/assets/mascot.png" alt="Olopa" class="brand-mascot" />
+        <span>OLOPA</span>
+      </div>
+      <div class="sub">Documentation</div>
+    </div>
+    <div class="police-stripe"></div>
+
+    <div class="nav-group">
+      <div class="nav-label">Docs</div>
+      <a class="nav-item" href="/quickstart/">Quickstart</a>
+      <a class="nav-item global-active" href="/agent/config/">Agent Config</a>
+      <a class="nav-item" href="/oil/">OIL Reference</a>
+      <a class="nav-item" href="/secure-connect/">Secure Connect</a>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-group">
+      <div class="nav-label">On this page</div>
+      <a class="nav-item active" href="#core-config">Core config</a>
+      <a class="nav-item" href="#auth">Auth options</a>
+      <a class="nav-item" href="#probes">Probe events</a>
+      <a class="nav-item" href="#enforcement">TC enforcement</a>
+      <a class="nav-item" href="#sql-enforcement">SQL enforcement</a>
+      <a class="nav-item" href="#graph-dump">Graph dump</a>
+      <a class="nav-item" href="#env-block">Env block</a>
+      <a class="nav-item" href="#cli-override">CLI override</a>
+      <a class="nav-item" href="#status">Status command</a>
+      <a class="nav-item" href="#fallback">Fallback</a>
+    </div>
+  </nav>
+
+  <!-- ── Main content ────────────────────────────────── -->
+  <main class="main">
+
+    <div class="page-header">
+      <div class="page-label">Configuration</div>
+      <h1>Agent Configuration</h1>
+      <p class="lead">Runtime IR, ingest endpoint, tenant identity, auth, probe events, and enforcement configuration for the <code>olopa</code> agent.</p>
+    </div>
+
+    <!-- CORE CONFIG -->
+    <section class="" id="core-config">
+      <div class="card">
+        <h2>Core config</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Env var</th><th>CLI flag</th><th>Default</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>OLOPA_RUNTIME_IR</code></td>
+                <td><code>--runtime-ir</code></td>
+                <td><code>/etc/olopa/runtime-ir.json</code></td>
+                <td>Path to the <code>oilc</code>-emitted runtime IR artifact loaded at startup</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_INGEST_URL</code></td>
+                <td><code>--ingest-url</code></td>
+                <td><code>http://ingest.olopa.io/api/v1/ingest/batches</code></td>
+                <td>HTTP endpoint for ingest batch POSTs</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_INGEST_TENANT_ID</code></td>
+                <td><code>--ingest-tenant-id</code></td>
+                <td><code>default</code></td>
+                <td>Tenant ID included in outgoing ingest payloads</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_INGEST_HOST_ID</code> / <code>HOSTNAME</code></td>
+                <td><code>--ingest-host-id</code></td>
+                <td><code>agent-local</code> (or hostname)</td>
+                <td>Host identity included in ingest payloads</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_IFACE</code></td>
+                <td><code>--iface</code></td>
+                <td>—</td>
+                <td>Network interface for BPF attach helpers (e.g. <code>eth0</code>, <code>lo</code>)</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_STATUS_PATH</code></td>
+                <td><code>--status-path</code></td>
+                <td><code>/tmp/olopa/agent/status.json</code></td>
+                <td>Location of runtime status snapshot used by <code>olopa status</code></td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_AGENT_ID</code></td>
+                <td>—</td>
+                <td><code>1</code></td>
+                <td>Numeric agent ID used in ingest payloads to distinguish multiple agents on one host</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- AUTH -->
+    <section class="section" id="auth">
+      <div class="card">
+        <h2>Auth options</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Env var / Flag</th><th>Header sent to ingest</th><th>Notes</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>OLOPA_INGEST_API_TOKEN</code> / <code>--ingest-api-token</code></td>
+                <td><code>Authorization: Bearer &lt;token&gt;</code></td>
+                <td>Preferred option when ingest is configured with API tokens</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_INGEST_API_KEY</code> / <code>--ingest-api-key</code></td>
+                <td><code>x-api-key: &lt;key&gt;</code></td>
+                <td>Alternative auth header supported by ingest server</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- PROBES -->
+    <section class="section" id="probes">
+      <div class="card">
+        <h2>Probe events</h2>
+        <p>Controls which kernel-level event sources the agent attaches to. Set via <code>OLOPA_PROBE_EVENTS</code> (comma-separated) or <code>--probe-events</code>.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Probe</th><th>Events captured</th><th>OIL source</th><th>Active by default</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>fork</code></td>
+                <td>Process fork events</td>
+                <td><code>endpoint.process</code></td>
+                <td>Yes</td>
+              </tr>
+              <tr>
+                <td><code>exec</code></td>
+                <td>Process exec events</td>
+                <td><code>endpoint.process</code></td>
+                <td>Yes</td>
+              </tr>
+              <tr>
+                <td><code>file</code></td>
+                <td>File open / write events</td>
+                <td><code>endpoint.file</code></td>
+                <td>Yes</td>
+              </tr>
+              <tr>
+                <td><code>net</code></td>
+                <td>Network connection events</td>
+                <td><code>network.flow</code></td>
+                <td>Yes</td>
+              </tr>
+              <tr>
+                <td><code>xdp</code></td>
+                <td>XDP-layer packet events (lower-level)</td>
+                <td>—</td>
+                <td>No</td>
+              </tr>
+              <tr>
+                <td><code>tc</code></td>
+                <td>TC firewall — enforces <code>block egress</code> OIL actions</td>
+                <td><code>respond block egress</code></td>
+                <td>No</td>
+              </tr>
+              <tr>
+                <td><code>sql</code></td>
+                <td>Activates the SQL policy socket that <code>PQexec</code>/<code>mysql_real_query</code> guards call into</td>
+                <td><code>db.query</code></td>
+                <td>No</td>
+              </tr>
+              <tr>
+                <td><code>ssl</code></td>
+                <td>TLS payload visibility via <code>EVP_EncryptUpdate</code>/<code>EVP_DecryptUpdate</code> uprobes</td>
+                <td>—</td>
+                <td>No</td>
+              </tr>
+              <tr>
+                <td><code>dns</code></td>
+                <td><code>getaddrinfo</code> resolution events</td>
+                <td>—</td>
+                <td>No</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout note">
+          <strong>Note:</strong> The default probe set is <code>fork,exec,file,net</code>. Enable additional probes as needed — for example, add <code>tc</code> to enforce <code>block egress</code> rules from OIL, or <code>sql</code> to turn on client-library SQL enforcement (see <a href="#sql-enforcement" style="color:var(--accent)">SQL enforcement</a> below).
+        </div>
+
+        <pre><code># Enable all probes including TC enforcement
+OLOPA_PROBE_EVENTS=fork,exec,file,net,tc cargo run ... -- --iface eth0
+
+# Or via CLI flag
+cargo run ... -- --iface eth0 --probe-events fork,exec,file,net,tc</code></pre>
+      </div>
+    </section>
+
+    <!-- TC ENFORCEMENT -->
+    <section class="section" id="enforcement">
+      <div class="card">
+        <h2>TC enforcement</h2>
+        <p>The <code>tc</code> probe implements network-level enforcement for OIL <code>block egress</code> actions. Deny rules are injected as TC classifier entries.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Env var</th><th>Format</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>OLOPA_TC_DENY_RULES</code></td>
+                <td><code>pid=X,ip=Y,port=Z,proto=tcp|udp</code></td>
+                <td>Comma-separated TC deny policy entries. All fields are optional — omitted fields match any value.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <pre><code># Block process 1234 from reaching 10.0.0.1:443 over TCP
+export OLOPA_TC_DENY_RULES="pid=1234,ip=10.0.0.1,port=443,proto=tcp"
+
+# Multiple rules (semicolon-separated)
+export OLOPA_TC_DENY_RULES="pid=1234,ip=10.0.0.1,port=443,proto=tcp;ip=192.168.1.0,port=80"</code></pre>
+
+        <div class="callout danger">
+          <strong>Requires:</strong> The <code>tc</code> probe must be active (<code>--probe-events tc</code> or <code>OLOPA_PROBE_EVENTS=...,tc</code>) and the agent must be running with sufficient kernel privileges for TC attachment.
+        </div>
+      </div>
+    </section>
+
+    <!-- SQL ENFORCEMENT -->
+    <section class="section" id="sql-enforcement">
+      <div class="card">
+        <h2>SQL enforcement</h2>
+        <p>The <code>olopa-sql-guard</code> preload library intercepts PostgreSQL (<code>PQexec</code>, <code>PQexecParams</code>, <code>PQsendQuery</code>, <code>PQsendQueryParams</code>, <code>PQexecPrepared</code>, <code>PQsendQueryPrepared</code>) and MySQL (<code>mysql_query</code>, <code>mysql_real_query</code>, <code>mysql_stmt_execute</code>) client calls at the library boundary and sends a bounded, redacted request to a Unix socket the agent listens on. The agent evaluates the same runtime OIL program used for kernel events and returns an allow or block verdict before the real driver function runs — the query never reaches the database when blocked. Raw statement text is never logged or persisted.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Env var</th><th>Default</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>OLOPA_SQL_POLICY_ENABLED</code></td>
+                <td>disabled</td>
+                <td>Set truthy to start the SQL policy socket</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_SQL_POLICY_MODE</code></td>
+                <td><code>observe</code></td>
+                <td><code>observe</code> records telemetry only; <code>enforce</code> blocks denied statements</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_SQL_POLICY_SOCKET</code></td>
+                <td><code>/run/olopa/sql-policy.sock</code></td>
+                <td>Unix socket path guarded processes connect to</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_SQL_POLICY_TIMEOUT_MS</code></td>
+                <td><code>250</code></td>
+                <td>Per-request evaluation timeout</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_SQL_POLICY_WORKERS</code></td>
+                <td><code>4</code></td>
+                <td>Worker threads servicing the socket (clamped 1–64)</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_SQL_POLICY_QUEUE_CAPACITY</code></td>
+                <td><code>256</code></td>
+                <td>Pending-request queue depth (clamped to workers–65536)</td>
+              </tr>
+              <tr>
+                <td><code>OLOPA_SQL_POLICY_GID</code></td>
+                <td>—</td>
+                <td>Group ownership applied to the socket (<code>0660</code>) so a non-root DB process can connect</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <pre><code># Build the guard and preload it into a guarded process
+cargo build --manifest-path agent/Cargo.toml -p olopa-sql-guard
+
+export OLOPA_SQL_POLICY_ENABLED=1
+export OLOPA_SQL_POLICY_MODE=observe   # flip to enforce once verdicts look right
+LD_PRELOAD=agent/target/debug/libolopa_sql_guard.so your-app</code></pre>
+
+        <div class="callout tip">
+          <strong>Tip:</strong> Start in <code>observe</code> mode and confirm verdicts against real traffic before switching to <code>enforce</code> — see <a href="/quickstart/" style="color:var(--accent)">Quickstart</a> for the full compile → run → verify loop.
+        </div>
+      </div>
+    </section>
+
+    <!-- GRAPH DUMP -->
+    <section class="section" id="graph-dump">
+      <div class="card">
+        <h2>Graph dump</h2>
+        <p>The agent can periodically write a JSON snapshot of the observed process/network graph for debugging and inspection.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Flag</th><th>Default</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>--graph-dump-path &lt;path&gt;</code></td>
+                <td><code>/tmp/olopa_graph.json</code></td>
+                <td>Output file for the graph JSON snapshot</td>
+              </tr>
+              <tr>
+                <td><code>--graph-dump-interval-ms &lt;ms&gt;</code></td>
+                <td><code>1000</code></td>
+                <td>Minimum interval between graph dump writes (rate limit)</td>
+              </tr>
+              <tr>
+                <td><code>--no-graph-dump</code></td>
+                <td>—</td>
+                <td>Disable graph JSON dumps entirely</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ENV BLOCK -->
+    <section class="section" id="env-block">
+      <div class="card">
+        <h2>Recommended environment block</h2>
+        <pre><code>export OLOPA_RUNTIME_IR=/etc/olopa/runtime-ir.json
+export OLOPA_INGEST_URL=http://127.0.0.1:8000/api/v1/ingest/batches
+export OLOPA_INGEST_TENANT_ID=acme
+export OLOPA_INGEST_HOST_ID=host-01
+export OLOPA_INGEST_API_TOKEN=agent-acme-token
+export OLOPA_STATUS_PATH=/tmp/olopa/agent/status.json
+export OLOPA_PROBE_EVENTS=fork,exec,file,net</code></pre>
+      </div>
+    </section>
+
+    <!-- CLI OVERRIDE -->
+    <section class="section" id="cli-override">
+      <div class="card">
+        <h2>CLI override example</h2>
+        <pre><code>cargo run --manifest-path agent/Cargo.toml -p olopa -- \
+  --iface eth0 \
+  --runtime-ir /etc/olopa/runtime-ir.json \
+  --ingest-url http://127.0.0.1:8000/api/v1/ingest/batches \
+  --ingest-tenant-id acme \
+  --ingest-host-id host-01 \
+  --ingest-api-token agent-acme-token \
+  --probe-events fork,exec,file,net,tc</code></pre>
+        <div class="callout tip">
+          <strong>Tip:</strong> Pass <code>--print-effective-config</code> to print the resolved startup configuration and exit without running — useful for verifying env vars are applied correctly.
+        </div>
+      </div>
+    </section>
+
+    <!-- STATUS COMMAND -->
+    <section class="section" id="status">
+      <div class="card">
+        <h2>Status command</h2>
+        <p>The <code>status</code> subcommand reads the runtime status snapshot and displays agent health, active probes, and ingest stats.</p>
+
+        <pre><code># Basic status
+cargo run --manifest-path agent/Cargo.toml -p olopa -- status
+
+# Verbose output with full event counters
+cargo run --manifest-path agent/Cargo.toml -p olopa -- status --verbose
+
+# Machine-readable (no color, no mascot)
+cargo run --manifest-path agent/Cargo.toml -p olopa -- status --no-color --no-mascot</code></pre>
+      </div>
+    </section>
+
+    <!-- FALLBACK -->
+    <section class="section" id="fallback">
+      <div class="card">
+        <h2>Fallback behavior</h2>
+        <p>If runtime IR fails to load, agent startup fails by default. Enable the simple-rule fallback only for temporary recovery scenarios — it provides minimal detection capability without the full OIL rule set.</p>
+        <pre><code># Via environment variable
+export OLOPA_ALLOW_SIMPLE_RULE_FALLBACK=1
+
+# Via CLI flag
+cargo run ... -- --allow-simple-rule-fallback</code></pre>
+        <div class="callout danger">
+          <strong>Warning:</strong> The fallback matcher does not evaluate OIL rules. Use this only as a last resort while recovering a broken IR artifact — not in production.
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer nav -->
+    <div class="footer-nav">
+      <a href="/quickstart/">
+        <span class="dir">Previous</span>
+        ← Quickstart
+      </a>
+      <a href="/oil/">
+        <span class="dir">Reference</span>
+        OIL Language Reference →
+      </a>
+    </div>
+
+  </main>
+</div>
+
+<script>
+  const sections = Array.from(document.querySelectorAll('section[id]'));
+  const sectionLinks = Array.from(document.querySelectorAll('.nav-item[href^="#"]'));
+  const visible = new Set();
+
+  function setActive() {
+    const active = sections.find(s => visible.has(s.id));
+    sectionLinks.forEach(link => {
+      link.classList.toggle('active', !!active && link.getAttribute('href') === '#' + active.id);
+    });
+  }
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      entry.isIntersecting ? visible.add(entry.target.id) : visible.delete(entry.target.id);
+    });
+    setActive();
+  }, { rootMargin: '-5% 0px -55% 0px' });
+
+  sections.forEach(s => observer.observe(s));
+</script>
+</body>
+</html>

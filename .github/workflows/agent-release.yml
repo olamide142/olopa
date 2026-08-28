@@ -116,7 +116,7 @@ jobs:
             "${RELEASE_DIR}/olopa-agent-${VERSION}-aarch64-linux-musl"
 
           (cd "${RELEASE_DIR}" && sha256sum olopa-agent-* > checksums.txt)
-          cp "app/control_plane/control_server/template/install.sh" "${RELEASE_DIR}/install.sh"
+          cp "app/control_plane/site/install.sh" "${RELEASE_DIR}/install.sh"
           if [ -f "app/control_plane/releases/latest/index.html" ]; then
             cp "app/control_plane/releases/latest/index.html" "${RELEASE_DIR}/index.html"
           fi

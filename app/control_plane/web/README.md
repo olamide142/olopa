@@ -30,11 +30,11 @@ npm run build        # type-checks, then emits to ../control_server/webdist
 The FastAPI control plane serves the build:
 
 - `/ui/*` — hashed JS/CSS assets (`StaticFiles` mount, only when `webdist/` exists)
-- `/`, `/fleet`, `/incidents`, `/graph`, `/oil`, `/compiler`, `/install` — return the
-  SPA shell so the in-app router takes over
-- `/legacy` — escape hatch to the previous vanilla-JS console during migration
+- `/`, `/fleet`, `/incidents`, `/graph`, `/oil`, `/compiler`, `/rules`, `/deployments`,
+  `/install` — return the SPA shell so the in-app router takes over
 
-If `webdist/` is absent, the dashboard route falls back to the legacy `app.html`.
+If `webdist/` is absent, the dashboard route returns a 503 telling you to run the build
+— there's no legacy fallback console anymore.
 
 ## Layout
 

@@ -1,0 +1,34 @@
+// SQL guard — extracted from sql_suspicious_ops.oil. GRANT/REVOKE/SET issued
+// by a non-root, non-DBA process — privilege escalation via direct DB API
+// calls rather than an interactive psql/mysql session.
+// query_class constants: 1 = SELECT, 2 = DML, 3 = DDL, 4 = ADMIN.
+//
+// Manual test:
+//   cargo run --manifest-path oilc/Cargo.toml -- \
+//     --source oilc/src/rules/testable/sql_privilege_grant_from_unprivileged_proc.oil --mode check
+//
+// To fire it: db_query_events row with attrs["query_class"] = "4", joined by
+// pid to a process_exec_events row with uid != 0 and comm not in
+// ["psql", "mysql", "mysqladmin", "pgadmin"].
+
+rule "sql_privilege_grant_from_unprivileged_proc" {
+  from db.query, endpoint.process
+
+  correlate
+    db.query as q
+    with process.spawn as p on p.pid == q.pid
+
+  where
+    q.query_class == 4
+    and p.uid != 0
+    and p.name not in ["psql", "mysql", "mysqladmin", "pgadmin"]
+
+  score
+    75
+
+  emit
+    fact host.sql_priv_escalation(host.id) expires 1h
+
+  respond
+    alert high
+}

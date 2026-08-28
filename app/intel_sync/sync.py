@@ -30,8 +30,16 @@ import time
 from typing import Iterator
 
 import httpx
+import redis
 
-from .config import INTEL_SETS, FeedSource, IntelSetConfig, default_output_path, refresh_interval_s
+from .config import (
+    INTEL_SETS,
+    FeedSource,
+    IntelSetConfig,
+    default_output_path,
+    redis_url,
+    refresh_interval_s,
+)
 
 logger = logging.getLogger("intel_sync")
 
@@ -127,6 +135,67 @@ def _write_intel_json(sets: dict[str, dict], output_path: str) -> None:
     )
 
 
+# ── Redis distribution ─────────────────────────────────────────────────────────
+#
+# Redis is the shared source of truth once configured: the agent's IntelStore
+# and the ingest server's ThreatIntelStore each poll it independently and
+# keep their own in-memory snapshot, so intel.json stays the fallback used
+# only when no OLOPA_INTEL_REDIS_URL is set (or Redis is briefly unreachable
+# at consumer startup) rather than the only distribution path.
+#
+# Key schema (must stay in sync with agent/agent/src/intel_store.rs and
+# app/ingest_server/src/correlation/threat_intel.rs):
+#   intel:sets            - SET of published set names
+#   intel:meta:{name}      - HASH {type, description, count, generated_at_unix_s}
+#   intel:members:{name}   - SET of the set's raw entries
+#   intel:generation       - INCR'd once per successful sync run
+
+_REDIS_MEMBER_CHUNK = 5000
+
+
+def _write_redis(sets: dict[str, dict], url: str) -> None:
+    """Publish sets to Redis, swapping each set's members in atomically via
+    RENAME so consumers polling mid-sync never see a partially-populated set.
+    """
+    client = redis.Redis.from_url(url, decode_responses=True, socket_timeout=10.0)
+    now_s = int(time.time())
+    published_names: list[str] = []
+
+    for name, payload in sets.items():
+        next_key = f"intel:members:{name}:next"
+        final_key = f"intel:members:{name}"
+        items = payload["items"]
+
+        client.delete(next_key)
+        for i in range(0, len(items), _REDIS_MEMBER_CHUNK):
+            chunk = items[i : i + _REDIS_MEMBER_CHUNK]
+            if chunk:
+                client.sadd(next_key, *chunk)
+
+        if items:
+            client.rename(next_key, final_key)
+        else:
+            # Redis has no concept of a persisted empty set; a feed that
+            # shrank to zero entries just means the final key stops existing.
+            client.delete(final_key)
+
+        client.hset(
+            f"intel:meta:{name}",
+            mapping={
+                "type": payload["type"],
+                "description": payload["description"],
+                "count": payload["count"],
+                "generated_at_unix_s": now_s,
+            },
+        )
+        published_names.append(name)
+
+    if published_names:
+        client.delete("intel:sets")
+        client.sadd("intel:sets", *published_names)
+    client.incr("intel:generation")
+
+
 # ── Checksum helpers ───────────────────────────────────────────────────────────
 
 def _file_sha256(path: str) -> str | None:
@@ -178,6 +247,15 @@ def run_sync(output_path: str | None = None) -> SyncResult:
         _write_intel_json(sets, output_path)
         sha_after = _file_sha256(output_path)
         changed = sha_before != sha_after
+
+        url = redis_url()
+        if url is not None:
+            try:
+                _write_redis(sets, url)
+            except Exception as exc:  # noqa: BLE001
+                msg = f"redis publish failed: {exc}"
+                logger.error("sync error: %s", msg)
+                errors.append(msg)
     else:
         changed = False
 

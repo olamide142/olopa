@@ -31,7 +31,9 @@ OLOPA_MVP_INGEST_TOKEN  ?= olopa-local-ingest
 
 # The control-plane compiler tests shell out to oilc. Pointing them at the
 # release binary keeps them off the `cargo run` path — same as CI does.
-OILC_BINARY := $(ROOT)/oilc/target/release/oilc
+OILC_BINARY   := $(ROOT)/oilc/target/release/oilc
+AGENT_BINARY  := $(ROOT)/agent/target/debug/olopa
+INGEST_BINARY := $(ROOT)/app/ingest_server/target/release/olopa-ingest
 
 # Every Python target depends on $(VENV), so this is always populated by the
 # time a recipe expands it — do not make it conditional on the venv existing
@@ -104,6 +106,28 @@ agent-build: ## Build the agent (needs Rust nightly + bpf-linker for the eBPF cr
 
 ingest-build: ## Build the ingest server
 	cargo build --release --manifest-path $(INGEST_MANIFEST)
+
+## ---------------------------------------------------------------- run
+
+# Every target below builds first, then execs the binary with whatever you
+# pass in ARGS — e.g. `make oilc ARGS="--source oilc/src/rules --mode ast"`.
+
+.PHONY: agent oilc ingest-server control-plane
+agent: agent-build ## Build and run the agent; pass flags with ARGS="--iface eth0 --probe-events exec,net" (sudo'd automatically unless already root)
+	@if [ "$$(id -u)" = 0 ]; then \
+		$(AGENT_BINARY) $(ARGS); \
+	else \
+		sudo $(AGENT_BINARY) $(ARGS); \
+	fi
+
+oilc: oilc-build ## Build and run oilc; pass flags with ARGS="--source oilc/src/rules --mode runtime-ir"
+	$(OILC_BINARY) $(ARGS)
+
+ingest-server: ingest-build ## Build and run the ingest server; pass flags with ARGS="--host 0.0.0.0 --port 8000"
+	$(INGEST_BINARY) $(ARGS)
+
+control-plane: $(VENV) ## Run the control plane from its .venv; pass uvicorn flags with ARGS (default: --port 8100 --reload)
+	cd $(CONTROL_PLANE) && $(PYTHON) -m uvicorn control_server.main:app $(if $(ARGS),$(ARGS),--port 8100 --reload)
 
 ## ---------------------------------------------------------------- ui
 

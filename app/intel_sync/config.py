@@ -133,3 +133,14 @@ def refresh_interval_s() -> int:
         return max(60, int(raw))
     except ValueError:
         return 3600
+
+
+def redis_url() -> str | None:
+    """Redis target for IOC set distribution, or None to skip Redis entirely.
+
+    Unset by default so a plain `python -m app.intel_sync.sync` run (e.g. in
+    a dev shell with no Redis running) keeps working with just the intel.json
+    file output.
+    """
+    raw = _os.environ.get("OLOPA_INTEL_REDIS_URL", "").strip()
+    return raw or None

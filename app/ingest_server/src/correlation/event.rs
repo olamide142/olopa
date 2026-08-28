@@ -328,6 +328,24 @@ fn get_net_field(n: &NetEvent, path: &str) -> Value {
                 .or_else(|| get_attr_str(&n.attrs, "reputation"))
                 .unwrap_or(Value::Null)
         }
+        // DNS telemetry (getaddrinfo uprobe) rides the wire as a NetEvent with
+        // protocol "dns" - see agent/agent/src/transport/http_sender.rs.
+        "domain.value" | "dns.domain.value" => {
+            get_attr_str(&n.attrs, "dns_query").unwrap_or(Value::Null)
+        }
+        // SSL telemetry (EVP_En/DecryptUpdate uprobes) rides the wire as a
+        // NetEvent with protocol "tls". `ssl_operation` is stamped as the
+        // label "encrypt"/"decrypt", but OIL rules compare against the
+        // integer constants documented in ssl_ransomware_detection.oil
+        // (0 = encrypt, 1 = decrypt), so translate rather than pass through.
+        "operation" | "ssl.operation" => match get_attr_str(&n.attrs, "ssl_operation") {
+            Some(Value::Str(op)) if op == "encrypt" => Value::Int(0),
+            Some(Value::Str(op)) if op == "decrypt" => Value::Int(1),
+            _ => Value::Null,
+        },
+        "data_len" | "ssl.data_len" => {
+            get_attr_number(&n.attrs, "ssl_data_len").unwrap_or(Value::Null)
+        }
         _ => get_attr_or_nested(&n.attrs, path),
     }
 }

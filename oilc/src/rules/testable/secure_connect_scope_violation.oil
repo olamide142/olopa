@@ -1,0 +1,61 @@
+// Secure Connect gateway — a session scoped to one destination set
+// (prod-db-read, corp-internal-web) observed connecting outside that scope.
+//
+// Manual test:
+//   cargo run --manifest-path oilc/Cargo.toml -- \
+//     --source oilc/src/rules/testable/secure_connect_scope_violation.oil --mode check
+//
+// This rule can only be FIRED via the agent's local RuntimeIrRuleEngine
+// (agent/agent/src/runtime_ir.rs) — the ingest server's correlation engine
+// has no secure_connect.* event source or field support. See the Rust unit
+// test in agent/agent/src/agent.rs for a manual-equivalent fixture you can
+// run with `cargo test -p olopa-agent`.
+//
+// Note: the rule text below uses `n.dest_domain`/`n.process_name` (no dot)
+// exactly as authored in oilc/src/rules/secure_connect/secure_connect_scope_violation.oil.
+// The agent's canonical field table only recognizes the dotted forms
+// (network.dest.domain, aliases "domain"/"dest.domain"); confirm during
+// manual testing which form your fixture actually needs to resolve — this
+// may be a real bug in the original rule text, not just a test-fixture
+// detail.
+
+set prod_db_read_domains = ["db.internal.prod"]
+set corp_internal_domains = ["corp.internal", "api.corp.internal"]
+
+rule "secure_connect_scope_violation" {
+    from secure_connect.session as sc, network.connect as n
+
+    correlate secure_connect.session as sc with network.connect as n on sc.session_id == n.session_id
+
+    where
+        (
+            sc.scope == "prod-db-read"
+            and n.dest_domain not in prod_db_read_domains
+        )
+        or
+        (
+            sc.scope == "corp-internal-web"
+            and n.dest_domain not in corp_internal_domains
+        )
+
+    let outbound = n.direction == "outbound"
+    let suspicious_tool = n.process_name in ["curl", "wget", "python", "bash"]
+
+    score 70
+        +10 if outbound
+        +20 if suspicious_tool
+
+    emit fact secure_connect.scope_violation(sc.session_id, n.dest_domain) expires 24h
+
+    respond
+        if suspicious_tool {
+            alert high "Secure Connect scope violation with suspicious process"
+            block egress n.dest_domain
+            open_case "Scope violation with suspicious tool"
+            notify "Secure Connect scope violation blocked"
+        }
+        else {
+            alert medium "Secure Connect scope violation"
+            notify "Secure Connect scope violation detected"
+        }
+}

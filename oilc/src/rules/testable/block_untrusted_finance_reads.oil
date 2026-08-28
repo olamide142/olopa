@@ -1,0 +1,32 @@
+// SQL guard — blocks an untrusted process reading the finance ledger table.
+//
+// Manual test:
+//   cargo run --manifest-path oilc/Cargo.toml -- \
+//     --source oilc/src/rules/testable/block_untrusted_finance_reads.oil --mode check
+//
+// To fire it: db_query_events row joined by pid to a process_exec_events row
+// with comm "untrusted-worker", database "finance", tables containing
+// "ledger", and attrs["query_class"] = "1" (query_class isn't derived from
+// the wire's `operation` string field — it must be set directly in attrs).
+
+rule "block_untrusted_finance_reads" {
+  from db.query, endpoint.process
+
+  correlate
+    db.query as q
+    with process.spawn as p on p.pid == q.pid
+
+  where
+    q.query_class == 1
+    and q.database == "finance"
+    and q.tables contains "ledger"
+    and p.name == "untrusted-worker"
+
+  score
+    95
+
+  respond if score >= 90 {
+    alert critical "Untrusted process attempted to read the finance ledger"
+    block query q.tables
+  }
+}

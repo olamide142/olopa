@@ -160,3 +160,103 @@ In this repository today, these capabilities are not yet implemented end-to-end:
 - versioned rollout/rollback orchestration across agent fleet.
 
 Use this document as the baseline workflow until those control-plane deployment features are added.
+
+## 8) Testable Rule Collection
+
+`oilc/src/rules/testable/` holds one rule per file, each self-contained and
+individually runnable:
+
+```bash
+cargo run --manifest-path oilc/Cargo.toml -- \
+  --source oilc/src/rules/testable/<rule>.oil --mode check
+```
+
+`scripts/rule_smoke.py` runs the subset of these rules that the ingest
+server's central correlation engine can evaluate end to end — compile, load
+into the engine, post a positive fixture and confirm a matching alert, post
+a negative fixture and confirm no alert:
+
+```bash
+python scripts/rule_smoke.py                 # all rules
+python scripts/rule_smoke.py --rule <name>    # one rule
+```
+
+Two real evaluator gaps were found and fixed while building this collection:
+
+- `dns.*` and `ssl.*` rule sources fell through a silent catch-all in
+  `CompiledRule::compile` (`app/ingest_server/src/correlation/engine.rs`) and
+  were miscategorized as process events — routed to `EventFamily::Net` now,
+  since that's genuinely where SSL/DNS telemetry lands on the wire.
+- `x in org.threat_intel.*` had no backing store in the ingest server at
+  all — `intel.domains`/external-set membership always evaluated to
+  nothing. Fixed via `app/ingest_server/src/correlation/threat_intel.rs`,
+  a Redis-backed cache mirroring the agent's `IntelStore` (see
+  `docs/mvp.md` or the intel_sync section of this repo for the Redis
+  distribution model).
+
+The 9 rules this covers, and how each is tested:
+
+| Rule | Feature area | Test path |
+|---|---|---|
+| `mvp_exec_seen` | Process & shell | HTTP smoke (`rule_smoke.py`) |
+| `root_ssh_write_by_non_root_process` | Process & shell | HTTP smoke |
+| `outbound_to_specific_website` | Network | HTTP smoke |
+| `ssl_large_single_encrypt_call` | Network/SSL | HTTP smoke + `correlation::tests::ssl_domain_routes_to_net_family_and_resolves_operation_and_data_len` |
+| `dns_c2_domain_lookup` | Network/DNS | agent-layer only (`agent::tests::dns_c2_domain_lookup_resolves_threat_intel_membership_and_fires`) — see below |
+| `credential_access_followed_by_egress` | Credential access | HTTP smoke |
+| `lateral_movement_after_credential_harvest` | Lateral movement | HTTP smoke |
+| `block_untrusted_finance_reads` | SQL guard | HTTP smoke |
+| `sql_privilege_grant_from_unprivileged_proc` | SQL guard | HTTP smoke |
+| `unexpected_secure_connect_gateway_access` | Secure Connect | agent-layer only (`agent::tests::matches_unexpected_secure_connect_gateway_access`) |
+
+`dns_c2_domain_lookup` is technically reachable through the ingest server too
+after the threat-intel fix above (see
+`correlation::tests::threat_intel_domain_membership_resolves_through_eval_call`),
+but `rule_smoke.py` doesn't exercise it there — doing so would mean seeding
+Redis with a throwaway IOC via a real `intel_sync` run or a direct write,
+which adds a live dependency to a fixture-driven smoke script for coverage
+the agent-layer test already gives deterministically.
+
+### Excluded from the collection — real gaps, not oversights
+
+**Container/Kubernetes rules** (`shell_spawn_in_container.oil`,
+`launch_of_priviledge_container.oil`, `unexpected_process_in_container.oil`):
+reference `container.runtime`, `k8s.admission`, `identity.session`, and
+`k8s.workload` domains that have no event source, wire schema field, or
+runtime field extractor in *either* evaluator (checked
+`app/ingest_server/src/correlation/engine.rs`'s domain routing and
+`agent/agent/src/runtime_ir.rs`'s canonical field table). This isn't a
+routing bug like DNS/SSL — there's no container/k8s telemetry capture
+subsystem to route to. Building one (container runtime metadata collection,
+a Kubernetes admission integration, an identity/session provider) is a
+separate, larger feature, not a rule-testing gap.
+
+**Most `secure_connect/` rules** (`prod_access_requires_clean_device.oil`,
+`revoke_session_on_critical_host_signal.oil`,
+`secure_connect_graph_risk_chain.oil`): use OIL language constructs
+(`match ... then`, `verify require`, `graph { ... }` traversal blocks) or a
+domain (`endpoint.alert`) that no runtime evaluator implements — confirmed
+by `grep`ing both engines for `graph`/`match...then`/`verify`/`endpoint.alert`
+handling, which found none. `prod_access_requires_clean_device.oil` at least
+parses and resolves (it would compile to IR that no evaluator can act on);
+`revoke_session_on_critical_host_signal.oil` and
+`secure_connect_graph_risk_chain.oil` don't even parse today —
+`cargo run --manifest-path oilc/Cargo.toml -- --source oilc/src/rules --mode check`
+fails both with `unknown/unsupported clause` and `expected graph entity type`
+errors respectively. Also currently broken the same way, unrelated to this
+work: `duration_expression_examples.oil`, `launch_of_priviledge_container.oil`
+(also a container/k8s rule, see below), and
+`stress_test/mir_expr_score_branching.oil`.
+
+`secure_connect_scope_violation.oil` is a narrower case: running
+`oilc --mode check` on it (see `oilc/src/rules/testable/secure_connect_scope_violation.oil`'s
+header comment) surfaces compiler warnings that `n.dest_domain`,
+`n.process_name`, `sc.session_id`, and `sc.scope` are unresolved fields on
+their respective entities — likely typos in the original rule text
+(`dest_domain` vs. the real `dest.domain`, `sc.session_id` vs. the real
+`sc.id`) mixed with at least one genuinely missing field (`scope` has no
+extractor anywhere). Kept in `testable/` with its warnings intact as
+documentation of the bug, but excluded from both the HTTP smoke collection
+and the agent-layer Rust tests since it cannot be made to fire without
+either fixing the rule text or extending the field table — a decision for
+whoever owns that rule, not something to silently work around here.

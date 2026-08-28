@@ -1,14 +1,13 @@
-"""Shared dependencies — settings, template root, and Jinja2 templates.
+"""Shared dependencies — settings and the built dashboard SPA location.
 
 Imported by routers so they don't re-initialise these objects independently.
+Landing/docs are static files served by Caddy now; this process only needs to
+know where the built React console lives.
 """
 
 from pathlib import Path
 
-from fastapi.templating import Jinja2Templates
-
 from .config import Settings
 
 settings: Settings = Settings.from_env()
-template_root: Path = Path(__file__).resolve().parent / "template"
-templates: Jinja2Templates = Jinja2Templates(directory=str(template_root))
+webdist_root: Path = Path(__file__).resolve().parent / "webdist"

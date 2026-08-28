@@ -1,0 +1,49 @@
+// Network/SSL — extracted from ssl_ransomware_detection.oil. A single
+// EVP_EncryptUpdate call processing > 4 MiB is unusual for TLS (which chunks
+// at ~16 KB); consistent with in-place file encryption used by ransomware.
+// operation constants: 0 = encrypt (EVP_EncryptUpdate), 1 = decrypt.
+//
+// Manual test:
+//   cargo run --manifest-path oilc/Cargo.toml -- \
+//     --source oilc/src/rules/testable/ssl_large_single_encrypt_call.oil --mode check
+//
+// To fire it via the ingest server: real SSL telemetry rides the wire as a
+// net_events row with protocol "tls" (see
+// agent/agent/src/transport/http_sender.rs). Post one with
+// attrs = {"ssl_operation": "encrypt", "ssl_data_len": "5000000"}, joined by
+// pid to a process_exec_events row — this requires the ingest server's
+// dns/ssl domain-routing fix (app/ingest_server/src/correlation/engine.rs)
+// to be in place, otherwise ssl.event silently miscategorizes as a process
+// event and this rule can never match.
+
+rule "ssl_large_single_encrypt_call" {
+  from ssl.event, endpoint.process
+
+  correlate
+    ssl.event as s
+    with process.spawn as p on p.pid == s.pid
+
+  where
+    s.operation == 0
+    and s.data_len > 4194304
+
+  let
+    root_proc    = p.uid == 0
+    unusual_proc = p.name not in host(p.host_id).baseline.processes
+    interactive  = p.tty == true
+
+  score
+    70
+    +10 if root_proc
+    +15 if unusual_proc
+    +5  if interactive
+
+  respond
+    if score >= 85 {
+      alert critical
+      snapshot p, s
+      open case "Unusually large single encryption call — possible ransomware"
+    } else {
+      alert high
+    }
+}

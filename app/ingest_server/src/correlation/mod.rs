@@ -9,6 +9,7 @@ pub mod event;
 pub mod intel;
 pub mod ir;
 pub mod state;
+pub mod threat_intel;
 pub mod value;
 pub mod vectorized;
 pub mod window;
@@ -24,6 +25,7 @@ pub use ir::{
     RuntimeScoreModifier, RuntimeSource,
 };
 pub use state::{CentralCallableState, HostBaseline, UserBaseline};
+pub use threat_intel::ThreatIntelStore;
 pub use value::{glob_match, Value};
 pub use vectorized::{BatchColumnIndex, FilterMask};
 pub use window::SlidingWindowIndex;
@@ -335,6 +337,201 @@ mod tests {
         assert_eq!(alert.score, 85);
         assert_eq!(alert.matched_events.len(), 2);
         assert!(engine.intel.has_fact("tenant-prod", "host.credential_exfil", Some("host-alpha")));
+    }
+
+    #[test]
+    fn ssl_domain_routes_to_net_family_and_resolves_operation_and_data_len() {
+        let engine = CorrelationEngine::new();
+
+        // OIL Rule: ssl_large_single_encrypt_call (oilc/src/rules/ssl_ransomware_detection.oil).
+        // `ssl.event` has no dedicated wire event type - real telemetry lands as a
+        // NetEvent{protocol:"tls"} row (agent/agent/src/transport/http_sender.rs).
+        // This proves the domain routing fix sends it to EventFamily::Net instead of
+        // silently falling into the ProcessExec catch-all, and that ssl_operation's
+        // "encrypt"/"decrypt" label translates to the 0/1 constants the rule checks.
+        let rule = RuntimeRule {
+            id: "ssl_large_single_encrypt_call".to_string(),
+            name: "Large single SSL encrypt call".to_string(),
+            class: RuntimeRuleClass::Temporal,
+            sources: vec![
+                RuntimeSource {
+                    domain: "ssl".to_string(),
+                    event: "event".to_string(),
+                    alias: Some("s".to_string()),
+                },
+                RuntimeSource {
+                    domain: "endpoint".to_string(),
+                    event: "process".to_string(),
+                    alias: Some("p".to_string()),
+                },
+            ],
+            predicates: vec![
+                RuntimeExpr::Eq {
+                    lhs: Box::new(RuntimeExpr::Field { path: "s.operation".to_string() }),
+                    rhs: Box::new(RuntimeExpr::Int { value: 0 }),
+                },
+                RuntimeExpr::Gt {
+                    lhs: Box::new(RuntimeExpr::Field { path: "s.data_len".to_string() }),
+                    rhs: Box::new(RuntimeExpr::Int { value: 4_194_304 }),
+                },
+            ],
+            joins: vec![RuntimeJoin {
+                left_alias: "p".to_string(),
+                right_alias: "s".to_string(),
+                on: Some(RuntimeExpr::Eq {
+                    lhs: Box::new(RuntimeExpr::Field { path: "p.pid".to_string() }),
+                    rhs: Box::new(RuntimeExpr::Field { path: "s.pid".to_string() }),
+                }),
+            }],
+            window: Some(RuntimeDuration { value: 10, unit: RuntimeDurationUnit::M }),
+            require: Vec::new(),
+            lets: vec![RuntimeLet {
+                name: "root_proc".to_string(),
+                value: RuntimeExpr::Eq {
+                    lhs: Box::new(RuntimeExpr::Field { path: "p.uid".to_string() }),
+                    rhs: Box::new(RuntimeExpr::Int { value: 0 }),
+                },
+            }],
+            score: RuntimeScore {
+                base: 70,
+                modifiers: vec![RuntimeScoreModifier {
+                    delta: 10,
+                    condition: Some(RuntimeExpr::Field { path: "root_proc".to_string() }),
+                }],
+            },
+            verify: Vec::new(),
+            emit: Vec::new(),
+            respond: RuntimeRespondPlan {
+                branches: vec![RuntimeRespondBranch {
+                    condition: None,
+                    actions: vec![RuntimeAction::Alert {
+                        severity: "high".to_string(),
+                        message: Some("Large single SSL encrypt call".to_string()),
+                    }],
+                }],
+            },
+        };
+
+        engine.load_program(RuntimeProgram {
+            version: 1,
+            fields: Vec::new(),
+            callables: Vec::new(),
+            rules: vec![rule],
+        });
+
+        let base_ts = now_unix_ms() - 60_000;
+        let batch = IngestBatchRequest {
+            tenant_id: "tenant-prod".to_string(),
+            host_id: "host-alpha".to_string(),
+            schema_version: 2,
+            batch_id: Some("batch-ssl-001".to_string()),
+            process_exec_events: vec![ProcessExecEvent {
+                ts_unix_ms: Some(base_ts),
+                pid: 4004,
+                tgid: 4004,
+                ppid: 1,
+                uid: 0,
+                gid: 0,
+                comm: "openssl".to_string(),
+                filename: "/usr/bin/openssl".to_string(),
+                attrs: HashMap::new(),
+            }],
+            file_events: Vec::new(),
+            net_events: vec![NetEvent {
+                ts_unix_ms: Some(base_ts + 1_000),
+                pid: 4004,
+                tgid: 4004,
+                uid: 0,
+                gid: 0,
+                comm: "openssl".to_string(),
+                direction: "outbound".to_string(),
+                protocol: "tls".to_string(),
+                src_ip: None,
+                dst_ip: None,
+                src_port: None,
+                dst_port: None,
+                attrs: {
+                    let mut m = HashMap::new();
+                    m.insert("ssl_operation".to_string(), "encrypt".to_string());
+                    m.insert("ssl_data_len".to_string(), "5000000".to_string());
+                    m
+                },
+            }],
+            db_query_events: Vec::new(),
+            agent_heartbeats: Vec::new(),
+        };
+
+        let alerts = engine.evaluate_batch(&batch);
+
+        let alert = alerts
+            .iter()
+            .find(|a| a.rule_id == "ssl_large_single_encrypt_call")
+            .expect("ssl rule should have matched once domain routing sends ssl.event to Net family");
+        assert_eq!(alert.score, 80);
+        assert_eq!(alert.severity, "high");
+    }
+
+    #[test]
+    fn threat_intel_domain_membership_resolves_through_eval_call() {
+        let engine = CorrelationEngine::new();
+        threat_intel::install_test_string_set(
+            &engine.threat_intel,
+            "org.threat_intel.c2_domains",
+            &["malicious-c2.example.com"],
+        );
+
+        // `q.domain.value in org.threat_intel.c2_domains` compiles to a bare
+        // field-path reference to the set name (confirmed by running the
+        // real compiler on oilc/src/rules/testable/dns_c2_domain_lookup.oil
+        // with --mode runtime-ir), not a call to the `intel.domains` stdlib
+        // callable.
+        let rule = RuntimeRule {
+            id: "dns_c2_domain_lookup".to_string(),
+            name: "dns_c2_domain_lookup".to_string(),
+            class: RuntimeRuleClass::HotPath,
+            sources: vec![RuntimeSource {
+                domain: "network".to_string(),
+                event: "flow".to_string(),
+                alias: Some("n".to_string()),
+            }],
+            predicates: vec![RuntimeExpr::In {
+                lhs: Box::new(RuntimeExpr::Field { path: "n.dest.domain".to_string() }),
+                rhs: vec![RuntimeExpr::Field {
+                    path: "org.threat_intel.c2_domains".to_string(),
+                }],
+            }],
+            joins: Vec::new(),
+            window: None,
+            require: Vec::new(),
+            lets: Vec::new(),
+            score: RuntimeScore { base: 85, modifiers: Vec::new() },
+            verify: Vec::new(),
+            emit: Vec::new(),
+            respond: RuntimeRespondPlan {
+                branches: vec![RuntimeRespondBranch {
+                    condition: None,
+                    actions: vec![RuntimeAction::Alert {
+                        severity: "critical".to_string(),
+                        message: Some("Process resolved known C2 domain".to_string()),
+                    }],
+                }],
+            },
+        };
+
+        engine.load_program(RuntimeProgram {
+            version: 1,
+            fields: Vec::new(),
+            callables: Vec::new(),
+            rules: vec![rule],
+        });
+
+        let alerts = engine.evaluate_batch(&make_test_batch());
+
+        let alert = alerts
+            .iter()
+            .find(|a| a.rule_id == "dns_c2_domain_lookup")
+            .expect("threat-intel membership should have matched malicious-c2.example.com");
+        assert_eq!(alert.severity, "critical");
     }
 
     #[test]

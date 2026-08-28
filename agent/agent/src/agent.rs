@@ -1441,7 +1441,7 @@ mod tests {
     use crate::transport::http_sender::payload_to_batches_for_tests;
     use serde::Deserialize;
     use std::fs;
-    use std::net::TcpListener;
+    use std::net::{Ipv4Addr, TcpListener};
     use std::path::PathBuf;
     use std::process::{Child, Command, Stdio};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1930,6 +1930,160 @@ mod tests {
         assert_eq!(net_events[0]["comm"], "curl");
 
         let _ = fs::remove_file(path);
+    }
+
+    /// Manual-equivalent fixture for
+    /// oilc/src/rules/testable/unexpected_secure_connect_gateway_access.oil.
+    /// Secure Connect fields (`sc.active`) resolve from the process-wide
+    /// `secure_connect::current_health()` singleton rather than from the
+    /// event itself - see runtime_ir.rs's `field_secure_connect_active`, whose
+    /// `_event` parameter is unused for exactly that reason. Nothing in this
+    /// test process ever calls `secure_connect::spawn_from_env`, so the
+    /// health singleton stays at its default `SessionState::Disabled`, which
+    /// `secure_connect_is_active` treats as inactive - matching the rule's
+    /// `sc.active == false` condition with no extra setup required.
+    #[test]
+    fn matches_unexpected_secure_connect_gateway_access() {
+        let path = temp_runtime_ir_path();
+        let json = r#"{
+  "version": 1,
+  "rules": [
+    {
+      "id": "rule:0:unexpected_secure_connect_gateway_access",
+      "name": "unexpected_secure_connect_gateway_access",
+      "predicates": [
+        {
+          "op": "and",
+          "lhs": {
+            "op": "in",
+            "lhs": { "op": "field", "path": "n.dest.ip" },
+            "rhs": [
+              { "op": "str", "value": "10.10.0.1" },
+              { "op": "str", "value": "10.10.0.2" }
+            ]
+          },
+          "rhs": {
+            "op": "eq",
+            "lhs": { "op": "field", "path": "sc.active" },
+            "rhs": { "op": "bool", "value": false }
+          }
+        }
+      ]
+    }
+  ]
+}"#;
+        fs::write(&path, json).expect("write runtime ir json");
+
+        let engine = RuntimeIrRuleEngine::from_file(&path).expect("load runtime ir");
+        let event = IngestEvent {
+            ts_ns: 0,
+            pid: 9101,
+            uid: 0,
+            event_type: 3,
+            vertex_id: 9101,
+            dst_vertex_id: 0,
+            net_dst_ip: u32::from(Ipv4Addr::new(10, 10, 0, 1)),
+            net_dst_port: 51820,
+            comm_id: 0,
+            risk_score: 0.2,
+            ..Default::default()
+        };
+
+        let matches = engine.evaluate_matches(&event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].rule_name,
+            "unexpected_secure_connect_gateway_access"
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    /// Manual-equivalent fixture for
+    /// oilc/src/rules/testable/dns_c2_domain_lookup.oil, compiled through the
+    /// real `oilc` CLI (not hand-written IR - `org.threat_intel.c2_domains`
+    /// membership only lowers correctly through the actual compiler's
+    /// `intel.domains` callable, see runtime_ir.rs's
+    /// `intel_domains_extension_returns_collection_for_membership`). This
+    /// rule can never fire through the ingest server's correlation engine -
+    /// see docs/oilc/rules-authoring-and-rollout.md - because that engine has
+    /// no `org.threat_intel.*` set-membership support; the agent's local
+    /// `IntelStore` is the only real evaluator for it today.
+    #[test]
+    fn dns_c2_domain_lookup_resolves_threat_intel_membership_and_fires() {
+        crate::intel_store::install_test_string_set(
+            "org.threat_intel.c2_domains",
+            &["evil.example"],
+        );
+
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let repo_root = manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("repo root");
+        let source_path = repo_root
+            .join("oilc")
+            .join("src")
+            .join("rules")
+            .join("testable")
+            .join("dns_c2_domain_lookup.oil");
+        let runtime_ir_path = temp_runtime_ir_path();
+
+        let output = Command::new("cargo")
+            .arg("run")
+            .arg("--manifest-path")
+            .arg(repo_root.join("oilc").join("Cargo.toml"))
+            .arg("--")
+            .arg("--source")
+            .arg(&source_path)
+            .arg("--emit-runtime-ir")
+            .arg(&runtime_ir_path)
+            .arg("--mode")
+            .arg("check")
+            .current_dir(repo_root)
+            .output()
+            .expect("run oilc cli");
+        assert!(
+            output.status.success(),
+            "oilc cli failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let engine = RuntimeIrRuleEngine::from_file(&runtime_ir_path).expect("load runtime ir");
+
+        let mut malicious_query = [0u8; 64];
+        malicious_query[..12].copy_from_slice(b"evil.example");
+        let hit = IngestEvent {
+            pid: 1234,
+            uid: 0,
+            event_type: 6,
+            dns_query: malicious_query,
+            ..Default::default()
+        };
+        let matches = engine.evaluate_matches(&hit);
+        assert_eq!(
+            matches.len(),
+            1,
+            "dns_c2_domain_lookup did not fire against a domain in the intel set"
+        );
+        assert_eq!(matches[0].rule_name, "dns_c2_domain_lookup");
+
+        let mut benign_query = [0u8; 64];
+        benign_query[..12].copy_from_slice(b"safe.example");
+        let miss = IngestEvent {
+            pid: 1234,
+            uid: 0,
+            event_type: 6,
+            dns_query: benign_query,
+            ..Default::default()
+        };
+        assert!(
+            engine.evaluate_matches(&miss).is_empty(),
+            "dns_c2_domain_lookup fired against a domain not in the intel set"
+        );
+
+        let _ = fs::remove_file(runtime_ir_path);
     }
 
     struct NoopScorer;
